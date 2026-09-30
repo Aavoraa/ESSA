@@ -11,6 +11,11 @@ anthropic==0.40.0
 python-barcode==0.15.1
 segno==1.6.1
 
+# Postgres driver, for ESSA_DATABASE_URL=postgresql://… (the same pin the
+# deployment requirements.txt at the project root already uses). SQLite needs
+# nothing extra; without this a Postgres URL fails at the first connection.
+psycopg2-binary==2.9.12
+
 # The retail shop (POS) served at /pos — the Flask app in "Textile Retail Shop",
 # mounted into this server so it shares the origin (see app/pos_mount.py).
 Flask==3.0.3
@@ -19,3 +24,5 @@ Flask-Login==0.6.3
 Flask-WTF==1.2.1
 WTForms==3.1.2
 email-validator==2.2.0
+# optional — the Elasticsearch read index (app/search); ESSA runs without it
+elasticsearch==9.5.1

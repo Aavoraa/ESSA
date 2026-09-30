@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
+{% from "_pager.html" import pager with context %}
+<div class="d-print-none">{{ pager(page) }}</div>
 <div class="page-head">
   <h4><i class="bi bi-people"></i> Customers</h4>
   <div class="d-flex gap-2 flex-wrap">
@@ -35,4 +37,5 @@
     </table>
   </div>
 </div>
+<div class="d-print-none">{{ pager(page) }}</div>
 {% endblock %}

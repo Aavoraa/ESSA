@@ -7,6 +7,7 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from ..database import get_db
+from ..fastjson import returns_json
 from ..services import reports as svc
 from ..services import nlq as nlq_svc
 from ..services import dates as date_svc
@@ -30,6 +31,27 @@ def groups():
 
 class Question(BaseModel):
     q: str
+
+
+@router.get("/store-catalogue")
+def store_catalogue():
+    """The Store (shop) reports — Sales, Settlement, Tax, Customer and the rest —
+    so the company's Reports screen lists them beside the warehouse's. They are
+    run and drawn by the shop itself (/pos/reports/r/<key>), with its own filters
+    and export; this only says which exist. Registered above "/{key}"."""
+    from .. import pos_mount
+    if pos_mount.store_report_catalogue() is None:
+        from .. import main                     # the shop is loaded on first use
+        main._pos_asgi()
+    reports = pos_mount.store_report_catalogue()
+    if reports is None:
+        return {"available": False, "groups": [], "reports": []}
+    groups = []
+    for r in reports:
+        if not groups or groups[-1]["key"] != r["group"]:
+            if r["group"] not in [g["key"] for g in groups]:
+                groups.append({"key": r["group"], "name": r["group_label"]})
+    return {"available": True, "groups": groups, "reports": reports}
 
 
 #: Registered above "/{key}", or a GET to /api/reports/ask-examples is read as a
@@ -70,7 +92,7 @@ def _filters(date_from, date_to, as_on, kind, product_id, supplier_id,
             "warehouse_id": warehouse_id, "store_id": store_id}
 
 
-@router.get("/{key}")
+@returns_json(router.get("/{key}"))
 def run_report(key: str, date_from: str = None, date_to: str = None,
                as_on: str = None, kind: str = None, product_id: int = None,
                supplier_id: int = None, store_id: int = None,

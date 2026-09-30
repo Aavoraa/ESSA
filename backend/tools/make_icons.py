@@ -1,4 +1,4 @@
-"""Draw the ESSA AI app icon at every size it is used.
+"""Draw the Warexx app icon at every size it is used.
 
     python backend/tools/make_icons.py
 
@@ -7,17 +7,16 @@ icon is used in four places — the PWA manifest at two sizes, the favicon-ish
 icon.png, and the Android launcher — and hand-editing them separately is how they
 end up disagreeing.
 
-The mark is "ESSA" over "AI" inside a ring. Stacked rather than set on one line:
-a home-screen icon is about 48px on a real phone, and "ESSA AI" across that width
-is unreadable. AI stays the larger of the two so the thing is still recognisable
-at a glance, which is what an icon is for.
+The mark is "WAREXX" inside a ring, on one line and as large as the ring
+allows — six capitals is the most a home-screen icon (about 48px on a real
+phone) can carry and still be read at a glance, which is what an icon is for.
 """
 import pathlib
 
 from PIL import Image, ImageDraw, ImageFont
 
 BG = (11, 61, 46)          # #0B3D2E — the app's own dark forest-green chrome
-FG = (255, 255, 255)       # #FFFFFF — text on chrome, as in its "E" logo chip
+FG = (255, 255, 255)       # #FFFFFF — text on chrome, as in its "W" logo chip
 
 HERE = pathlib.Path(__file__).resolve().parent
 MOBILE = HERE.parent / "app" / "mobile"
@@ -57,10 +56,7 @@ def render(size):
     d.ellipse([pad, pad, size - pad, size - pad],
               outline=FG, width=max(2, round(size * 0.018)))
 
-    small = _font(round(size * 0.155))
-    big = _font(round(size * 0.30))
-    _centred(d, "ESSA", small, size / 2, size * 0.395)
-    _centred(d, "AI", big, size / 2, size * 0.605)
+    _centred(d, "WAREXX", _font(round(size * 0.145)), size / 2, size / 2)
     return img
 
 

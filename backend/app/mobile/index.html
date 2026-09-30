@@ -6,10 +6,10 @@
 <meta name="theme-color" content="#0B3D2E" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-<meta name="apple-mobile-web-app-title" content="ESSA AI" />
+<meta name="apple-mobile-web-app-title" content="Warexx" />
 <link rel="manifest" href="/m/manifest.webmanifest" />
 <link rel="apple-touch-icon" href="/m/icon.png" />
-<title>ESSA AI</title>
+<title>Warexx</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <!-- Inter + JetBrains Mono, fetched without holding up the first paint: a
@@ -193,6 +193,35 @@ button.link[data-drop],button.link[data-del],button.link[data-shdel]{min-width:4
 .actionbar{padding:12px 14px calc(14px + env(safe-area-inset-bottom));border-top:1px solid var(--line);background:var(--panel);box-shadow:0 -4px 12px rgba(0,0,0,.04)}
 .actionbar .m{color:var(--muted);font-size:12px;line-height:1.45}
 @keyframes sp{to{transform:rotate(360deg)}}
+
+/* ---------- every device: small phones, notches, tablets, landscape ---------- */
+/* Six screens do not fit across a 360px phone. The switcher scrolled sideways,
+   with nothing to say Audit and the bell were off the edge — so on a small phone
+   two tabs simply did not exist. It wraps to a second row now, and on a wide
+   screen the tabs stretch into one even bar. */
+.row:has(>.chip[data-tab]){flex-wrap:wrap;overflow:visible!important}
+.row:has(>.chip[data-tab])>.chip{flex:1 1 auto}
+/* The side gutters: 14px, or the notch when a phone is turned on its side (it
+   moves to the left or right edge), or — on a tablet — whatever centres the
+   content in a 760px column. A form or a list stretched across a 1,200px tablet
+   puts a label a whole arm's reach from its value. */
+:root{--gx:14px}
+@media (min-width:820px){:root{--gx:calc((100vw - 760px) / 2)}}
+.topbar,.controls,.list,.actionbar,.alertbar{
+  padding-left:max(var(--gx),env(safe-area-inset-left));
+  padding-right:max(var(--gx),env(safe-area-inset-right))}
+/* bottom sheets: a column on a tablet rather than a strip the width of the room,
+   and sized to the VISIBLE height — iOS counts its collapsing toolbar in vh, so a
+   80vh sheet ran under it */
+.sheet{justify-content:center}
+.sheetcard{max-width:640px;max-height:80dvh}
+/* the scanner: the frame fits a phone held sideways too (68vw of a landscape
+   phone is taller than the screen), and its buttons clear the iPhone home bar */
+.scanframe{width:min(68vw,60vh,320px);height:min(68vw,60vh,320px)}
+.scanx{bottom:calc(40px + env(safe-area-inset-bottom))}
+.shutter{bottom:calc(34px + env(safe-area-inset-bottom))}
+.scanhint{bottom:calc(120px + env(safe-area-inset-bottom))}
+@media (orientation:landscape) and (max-height:500px){.scanhint{bottom:auto;top:calc(16px + env(safe-area-inset-top))}}
 </style>
 </head>
 <body>
@@ -243,7 +272,24 @@ const atLeast = (need) => (ROLE_RANK[S.role]||0) >= (ROLE_RANK[need]||0);
 // Every call goes through here, and every call carries the token. The server
 // refuses anything that does not — the phone is on the warehouse wifi, which is
 // not a trusted network just because it is indoors.
+// Recent answers, kept for a minute (the desktop's rule — frontend/src/api.js):
+// going back to a list or a receipt within CACHE_MS is answered from memory.
+// Only GETs; any write from this phone empties it, so what you saved is what you
+// see; keyed by account and warehouse; never sign-in, status, notifications or
+// anything printed. Kept as text and parsed on every use, so a screen changing
+// what it was given can never change what is remembered. ↻ empties it too.
+const CACHE_MS=60*1000, CACHE_MAX=40;
+const MCACHE=new Map();
+const NO_CACHE=[/^\/api\/auth\//,/^\/api\/status$/,/^\/api\/notifications/,/print|label|qr\.|barcode|\.csv|download|export/];
+function cacheClear(){ MCACHE.clear(); }
 async function api(path, opts){
+  const method=String((opts||{}).method||'GET').toUpperCase();
+  const cacheable = method==='GET' && path.startsWith('/api/') && !NO_CACHE.some(rx=>rx.test(path));
+  const key = (S.token||'')+'|'+((S.warehouse&&S.warehouse.id)||'')+'|'+path;
+  if(cacheable){
+    const hit=MCACHE.get(key);
+    if(hit && Date.now()-hit.at<CACHE_MS){ MCACHE.delete(key); MCACHE.set(key,hit); return JSON.parse(hit.text); }
+  } else if(method!=='GET'){ cacheClear(); }
   const h = Object.assign({'Content-Type':'application/json'}, (opts||{}).headers||{});
   if(S.token) h['X-Essa-Token'] = S.token;
   // …and WHICH BUILDING it is being made inside. Set here, in the one funnel
@@ -261,9 +307,15 @@ async function api(path, opts){
     if(r.status===401 && !path.startsWith('/api/auth/')) signedOut();
     throw new Error(j.detail || ('HTTP '+r.status));
   }
+  if(method!=='GET') cacheClear();                 // and again once the write has landed
+  else if(cacheable){
+    MCACHE.set(key,{at:Date.now(),text:JSON.stringify(j)});
+    while(MCACHE.size>CACHE_MAX) MCACHE.delete(MCACHE.keys().next().value);
+  }
   return j;
 }
 function signedOut(){
+  cacheClear();
   localStorage.removeItem('essa_token');
   S.token=''; S.role=''; S.screen='login'; render();
   toast('Signed out — please sign in again');
@@ -284,6 +336,7 @@ async function upload(path, file, name){
   const h = {};
   if(S.token) h['X-Essa-Token'] = S.token;
   if(S.warehouse && S.warehouse.id) h['X-Essa-Warehouse'] = String(S.warehouse.id);
+  cacheClear();                                     // an upload is a write too
   const r=await fetch(path,{method:'POST',body:fd,headers:h});
   const j=await r.json().catch(()=>({}));
   if(!r.ok){
@@ -431,7 +484,7 @@ function alertNew(added, counts){
   try{ if(navigator.vibrate) navigator.vibrate(counts.critical ? [130, 80, 130] : 130); }catch(e){}
   if(window.Notification && Notification.permission === 'granted'){
     try{
-      new Notification(`ESSA · ${added} new alert${added===1?'':'s'}`, {
+      new Notification(`Warexx · ${added} new alert${added===1?'':'s'}`, {
         body: `${counts.unread||0} unread — open the app to see them`,
         icon: '/m/icon-192.png', tag: 'essa-alerts',
       });
@@ -752,7 +805,7 @@ function wireTabs(){
 function renderLogin(){
   app.innerHTML = `<div class="center">
     <div class="logo">AI</div>
-    <div class="brand">ESSA <span>·</span> Warehouse</div>
+    <div class="brand">Warexx <span>·</span> Warehouse</div>
     <div class="card">
       <div class="field"><label>Username</label><input id="u" autocapitalize="none" value="${esc(S.user)}" placeholder="your username"></div>
       <div class="field"><label>Password</label><input id="p" type="password" placeholder="••••••••"></div>
@@ -771,9 +824,17 @@ function renderLogin(){
   };
 }
 
-async function fetchProducts(){
-  try{ S.products = await api(`/api/inventory/products?status=${S.status}&q=${encodeURIComponent(S.q)}`); }
-  catch(e){ S.products=[]; toast('Could not load products'); }
+// A page at a time: the warehouse's pending list alone is hundreds of thousands
+// of products, and fetching all of them took most of a minute. One more than the
+// page is asked for, which says whether a "Load more" is needed.
+const PAGE=100;
+async function fetchProducts(more){
+  const off = more ? S.products.length : 0;
+  try{ const r = await api(`/api/inventory/products?status=${S.status}&q=${encodeURIComponent(S.q)}&limit=${PAGE+1}&offset=${off}`);
+    S.more = r.length > PAGE;
+    const got = r.slice(0, PAGE);
+    S.products = more ? S.products.concat(got) : got; }
+  catch(e){ if(!more) S.products=[]; toast('Could not load products'); }
 }
 
 async function renderList(){
@@ -794,7 +855,7 @@ async function renderList(){
   document.getElementById('bcscan').onclick=()=>openScanner();
   document.getElementById('bc').addEventListener('keydown',e=>{if(e.key==='Enter')doBarcode();});
   document.getElementById('q').addEventListener('keydown',e=>{if(e.key==='Enter'){S.q=e.target.value;paint();}});
-  document.getElementById('refresh').onclick=()=>{S.q=document.getElementById('q').value;paint();};
+  document.getElementById('refresh').onclick=()=>{cacheClear();S.q=document.getElementById('q').value;paint();};
   app.querySelectorAll('.chip[data-st]').forEach(c=>c.onclick=()=>{S.status=c.dataset.st;paint();});
   paint();
 }
@@ -1026,18 +1087,21 @@ async function renderAudit(){
   app.querySelectorAll('[data-drop]').forEach(b=>b.onclick=()=>auditDrop(+b.dataset.drop));
 }
 
-async function paint(){
-  const el=document.getElementById('list'); if(el) el.innerHTML='<div class="spin"></div>';
-  await fetchProducts();
+async function paint(more){
+  const el=document.getElementById('list'); if(el && !more) el.innerHTML='<div class="spin"></div>';
+  await fetchProducts(more);
   const cnt=document.getElementById('cnt');
-  if(cnt) cnt.textContent = S.products.length+' shown';
+  if(cnt) cnt.textContent = S.products.length+(S.more?'+':'')+' shown';
   const list=document.getElementById('list'); if(!list) return;
   if(!S.products.length){ list.innerHTML='<p style="color:var(--muted);text-align:center;margin-top:30px">No products.</p>'; return; }
   list.innerHTML = S.products.map((p,i)=>`<div class="prow" data-i="${i}">
       <div style="flex:1;min-width:0"><div class="t">${esc(p.name||p.description)}</div>
       <div class="m">${esc(p.sku)} · stock ${p.stock_qty} ${esc(p.uom||'')}</div></div>
-      <div class="badge ${p.detailed?'bdone':'bpend'}">${p.detailed?'detailed':'pending'}</div></div>`).join('');
+      <div class="badge ${p.detailed?'bdone':'bpend'}">${p.detailed?'detailed':'pending'}</div></div>`).join('')
+    + (S.more ? `<button class="btn" id="more" style="margin:12px 0">Load more</button>` : '');
   list.querySelectorAll('.prow').forEach(r=>r.onclick=()=>{ S.selected=S.products[+r.dataset.i]; S.detailBack='list'; S.screen='detail'; render(); });
+  const mb=document.getElementById('more');
+  if(mb) mb.onclick=()=>{ mb.disabled=true; mb.textContent='Loading…'; paint(true); };
 }
 
 // ---------- receive: the bundle a supplier billed, broken into what arrived ----------
@@ -1099,6 +1163,7 @@ const blankRow=(rate,cat)=>Object.assign(
 // four times a day. It is re-validated against the next person's allotment on
 // sign-in (afterSignIn), so an account that may not enter it is not left in it.
 const logout=()=>{
+  cacheClear();
   api('/api/auth/logout',{method:'POST'}).catch(()=>{});
   localStorage.removeItem('essa_token'); localStorage.removeItem('essa_role');
   S.token=''; S.role=''; S.warehouses=[]; S.screen='login'; render();
@@ -1118,18 +1183,23 @@ async function renderGrnList(){
     </div>
     <div class="list" id="glist"><div class="spin"></div></div>`;
   document.getElementById('lo3').onclick=logout;
-  document.getElementById('grefresh').onclick=paintGrns;
+  document.getElementById('grefresh').onclick=()=>{cacheClear();paintGrns();};
   app.querySelectorAll('.chip[data-gf]').forEach(c=>c.onclick=()=>{ S.grnFilter=c.dataset.gf; paintGrns(); });
   wireTabs();
   if(!S.cats.length) loadCats();
   paintGrns();
 }
 
-async function paintGrns(){
-  const el=document.getElementById('glist'); if(el) el.innerHTML='<div class="spin"></div>';
-  try{ S.grns=await api('/api/purchases'); }catch(e){ S.grns=[]; toast('Could not load goods receipts'); }
-  const rows=S.grns.filter(g=>S.grnFilter==='all'||g.status===S.grnFilter);
-  const cnt=document.getElementById('gcnt'); if(cnt) cnt.textContent=rows.length+' shown';
+// A page of receipts at a time, filtered by the server (/api/purchases/page) —
+// the whole list is tens of thousands of receipts.
+async function paintGrns(more){
+  const el=document.getElementById('glist'); if(el && !more) el.innerHTML='<div class="spin"></div>';
+  const pg = more ? (S.grnPage||1)+1 : 1;
+  try{ const r=await api(`/api/purchases/page?filter=${S.grnFilter}&size=${PAGE}&page=${pg}`);
+    S.grns = more ? S.grns.concat(r.rows) : r.rows; S.grnPage = r.page; S.grnMore = r.page < r.pages; S.grnTotal = r.total; }
+  catch(e){ if(!more) S.grns=[]; S.grnMore=false; toast('Could not load goods receipts'); }
+  const rows=S.grns;
+  const cnt=document.getElementById('gcnt'); if(cnt) cnt.textContent=rows.length+(S.grnMore?` of ${S.grnTotal}`:'')+' shown';
   const list=document.getElementById('glist'); if(!list) return;
   if(!rows.length){
     list.innerHTML=`<p style="color:var(--muted);text-align:center;margin-top:30px;line-height:1.5">${
@@ -1143,8 +1213,11 @@ async function paintGrns(){
         <div class="m">${g.line_count} line${g.line_count===1?'':'s'}${g.new_products?` · ${g.new_products} new product${g.new_products===1?'':'s'}`:''}${g.grn_no?' · GRN '+esc(g.grn_no):''}</div>
         ${g.short_qty?`<div class="m" style="color:var(--warn)">⚠ ${qtyOf(g.short_qty)} short — ₹${money(g.short_value)} to claim</div>`:''}
       </div>
-      <div class="badge ${g.status==='posted'?'bdone':'bpend'}">${esc(g.status)}</div></div>`).join('');
+      <div class="badge ${g.status==='posted'?'bdone':'bpend'}">${esc(g.status)}</div></div>`).join('')
+    + (S.grnMore ? `<button class="btn" id="gmore" style="margin:12px 0">Load more</button>` : '');
   list.querySelectorAll('.prow').forEach(r=>r.onclick=()=>openGrn(rows[+r.dataset.i].id));
+  const gm=document.getElementById('gmore');
+  if(gm) gm.onclick=()=>{ gm.disabled=true; gm.textContent='Loading…'; paintGrns(true); };
 }
 
 async function openGrn(id){
@@ -1915,18 +1988,22 @@ async function renderLR(){
     <div class="list" id="lrlist"><div class="spin"></div></div>`;
   document.getElementById('lo2').onclick=logout;
   document.getElementById('lrscanbtn').onclick=startLRScan;
-  document.getElementById('lrrefresh').onclick=paintLR;
+  document.getElementById('lrrefresh').onclick=()=>{ cacheClear(); paintLR(); };
   app.querySelectorAll('.chip[data-lf]').forEach(c=>c.onclick=()=>{ S.lrFilter=c.dataset.lf; paintLR(); });
   wireTabs();
   loadReceivers();
   paintLR();
 }
 
-async function paintLR(){
-  const el=document.getElementById('lrlist'); if(el) el.innerHTML='<div class="spin"></div>';
-  try{ S.lr = await api(`/api/lr?received=${S.lrFilter}&limit=300`); }
-  catch(e){ S.lr=[]; toast('Could not load consignments'); }
-  const cnt=document.getElementById('lrcnt'); if(cnt) cnt.textContent=S.lr.length+' shown';
+// 100 consignments at a time, newest first (/api/lr/page), with Load more —
+// the register runs to tens of thousands and this read the newest 300 only.
+async function paintLR(more){
+  const el=document.getElementById('lrlist'); if(el && !more) el.innerHTML='<div class="spin"></div>';
+  const pg = more ? (S.lrPage||1)+1 : 1;
+  try{ const r = await api(`/api/lr/page?received=${S.lrFilter}&size=${PAGE}&page=${pg}`);
+    S.lr = more ? S.lr.concat(r.rows) : r.rows; S.lrPage = r.page; S.lrMore = r.page < r.pages; S.lrTotal = r.total; }
+  catch(e){ if(!more) S.lr=[]; S.lrMore=false; toast('Could not load consignments'); }
+  const cnt=document.getElementById('lrcnt'); if(cnt) cnt.textContent=S.lr.length+(S.lrMore?` of ${S.lrTotal}`:'')+' shown';
   const list=document.getElementById('lrlist'); if(!list) return;
   if(!S.lr.length){
     list.innerHTML=`<p style="color:var(--muted);text-align:center;margin-top:30px">${
@@ -1944,7 +2021,9 @@ async function paintLR(){
       </div>
       <div class="badge ${r.received_by?'bdone':'bpend'}">${r.received_by?esc(r.received_by):'receive'}</div>
     </div>`;
-  }).join('');
+  }).join('') + (S.lrMore ? `<button class="btn" id="lrmore" style="margin:12px 0">Load more</button>` : '');
+  const lm=document.getElementById('lrmore');
+  if(lm) lm.onclick=()=>{ lm.disabled=true; lm.textContent='Loading…'; paintLR(true); };
   // open the consignment rather than receiving it on the spot: you should see what
   // arrived — and be able to name whoever actually took it — before confirming
   list.querySelectorAll('.prow').forEach(row=>row.onclick=()=>{

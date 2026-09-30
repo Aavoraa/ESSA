@@ -4,6 +4,7 @@ import android.Manifest;
 import android.annotation.SuppressLint;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Bundle;
@@ -97,6 +98,12 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        // Portrait on a phone, where the screens are laid out for one hand; free
+        // on a tablet (600dp and up), which sits in a stand or is held sideways.
+        if (getResources().getConfiguration().smallestScreenWidthDp < 600) {
+            setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
+        }
 
         String base = baseUrl();
         if (base == null || base.isEmpty()) {

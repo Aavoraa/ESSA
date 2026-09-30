@@ -7,7 +7,9 @@ debit-note adjustment (the four variants in the recordings). Outstanding for an
 invoice = grand_total − Σ(settled across all allocations).
 """
 import datetime as dt
+from sqlalchemy import func, select
 from .. import models
+from ..request_memo import memo
 from . import dates
 
 
@@ -49,13 +51,50 @@ def invoice_outstanding(db, purchase):
 
 
 def pending_bills(db, supplier_id):
-    q = db.query(models.Purchase).filter(models.Purchase.status == "posted")
+    # Read once per request (request_memo — GET only, never beyond the request):
+    # the warehouse dashboard's payables tile and its notification feed's overdue
+    # rule both ask, in the same call.
+    # plain dicts, so shared by every session of the request (see dead_stock)
+    return memo(("pay.pending_bills", supplier_id),
+                lambda: _pending_bills(db, supplier_id))
+
+
+def pending_bills_by_supplier(db):
+    """{supplier_id: pending_bills(db, supplier_id)} for every supplier at once —
+    the Supplier Pending Bills report asked each of thousands of suppliers in
+    turn, re-reading every settlement for each."""
+    out = {}
+    for b in _pending_bills(db, None, with_supplier=True):
+        out.setdefault(b.pop("supplier_id"), []).append(b)
+    return out
+
+
+def _pending_bills(db, supplier_id, with_supplier=False):
+    # Plain rows of the same statement the ORM query issued (every column, same
+    # filter, same ORDER BY — so the same rows in the same order, ties included):
+    # building an ORM object per posted GRN was half this function's time.
+    P = models.Purchase
+    q = select(*P.__table__.columns).where(P.status == "posted")
     if supplier_id:
-        q = q.filter(models.Purchase.supplier_id == supplier_id)
+        q = q.where(P.supplier_id == supplier_id)
+    # The same figures invoice_settled / invoice_returns give, read for every
+    # invoice in two grouped queries instead of two queries per invoice — with
+    # tens of thousands of GRNs the per-invoice form took over a minute.
+    settled = dict(db.query(models.PaymentAllocation.purchase_id,
+                            func.sum(models.PaymentAllocation.settled))
+                     .filter(models.PaymentAllocation.purchase_id.isnot(None))
+                     .group_by(models.PaymentAllocation.purchase_id).all())
+    returns = dict(db.query(models.PurchaseReturn.purchase_id,
+                            func.sum(models.PurchaseReturn.total))
+                     .filter(models.PurchaseReturn.purchase_id.isnot(None),
+                             models.PurchaseReturn.status == "posted")
+                     .group_by(models.PurchaseReturn.purchase_id).all())
     out = []
     today = _today()
-    for p in q.order_by(models.Purchase.invoice_date).all():
-        outstanding = invoice_outstanding(db, p)
+    for p in db.execute(q.order_by(P.invoice_date)):
+        s = round(float(settled.get(p.id) or 0), 2)
+        r = round(float(returns.get(p.id) or 0), 2)
+        outstanding = round((p.grand_total or 0) - s - r, 2)
         if outstanding <= 0.01:
             continue
         d = _parse_date(p.invoice_date)
@@ -63,9 +102,11 @@ def pending_bills(db, supplier_id):
         out.append({
             "purchase_id": p.id, "invoice_number": p.invoice_number,
             "invoice_date": p.invoice_date, "days": days,
-            "grand_total": p.grand_total, "settled": invoice_settled(db, p.id),
-            "returns": invoice_returns(db, p.id), "outstanding": outstanding,
+            "grand_total": p.grand_total, "settled": s,
+            "returns": r, "outstanding": outstanding,
         })
+        if with_supplier:
+            out[-1]["supplier_id"] = p.supplier_id
     return out
 
 

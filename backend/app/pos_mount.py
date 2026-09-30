@@ -49,6 +49,24 @@ def _seed_if_empty(pkg) -> None:
 
 POS_SCHEMA = "shop"
 
+#: The shop's report catalogue module (its app/retail_reports), kept from the
+#: load below. Its `app` package is only importable during that swap, so it is
+#: captured then — the warehouse's Reports screen lists these reports.
+_retail_reports = None
+
+
+def store_report_catalogue():
+    """The shop's reports as plain data, in its own order: key, label, group,
+    group label, whether it takes dates, and why it cannot run (or None).
+    None when the shop is not loaded here."""
+    rr = _retail_reports
+    if rr is None:
+        return None
+    return [{"key": k, "label": s["label"], "group": s["group"],
+             "group_label": s["group_label"], "dated": bool(s.get("dated")),
+             "unavailable": s.get("unavailable") or None}
+            for k, s in rr.REPORTS.items()]
+
 
 def _single_store_name():
     """The store's name, when this company has exactly one — else None.
@@ -154,6 +172,8 @@ def load_pos_app():
     try:
         pkg = importlib.import_module("app")        # the shop's package
         flask_app = pkg.create_app()
+        global _retail_reports
+        _retail_reports = importlib.import_module("app.retail_reports")   # mid-swap: the shop's
         # The shop's own name, taken from the STORE the warehouse created rather
         # than from the shop's config default. Set before anything renders, so
         # the login screen greets people with the name they gave the place
@@ -176,7 +196,14 @@ def load_pos_app():
             from app.places import sync_locations
             from app.transfers import sync_transfers
             sync_master_categories()
+            # The warehouse's state as of this sync, recorded so the shop's first
+            # request does not run the very same full sync again through
+            # sync_if_stale (its "last seen" stamp starts empty). Taken BEFORE the
+            # sync, so a change made while it runs still triggers the next one.
+            from app import warehouse_items as _wi
+            seen = _wi._warehouse_signature()
             sync_warehouse_items()
+            _wi._last_signature = seen
             # The branches this warehouse dispatches to are the branches the till
             # sells from, so the shop reads that list rather than keeping a second
             # one. See the shop's app/places.

@@ -22,6 +22,8 @@ eleven.
 """
 import datetime as dt
 
+from sqlalchemy.orm import selectinload
+
 from .. import models
 from . import payments as pay_svc
 from . import shortages as short_svc
@@ -54,7 +56,7 @@ def _money(v):
 
 def _dead_bands(db, ctx):
     if "dead_bands" not in ctx:
-        ctx["dead_bands"] = ds_svc.alerts(db)["alerts"]
+        ctx["dead_bands"] = ds_svc.alert_levels(db)
     return ctx["dead_bands"]
 
 
@@ -78,8 +80,13 @@ def _r_grn_draft(db, ctx):
 
 
 def _r_shortages(db, ctx):
-    shorts = [sh for p in db.query(models.Purchase).all()
-              for l in p.lines for sh in l.shortages
+    # Every shortage on a GRN line, read directly — the same set as walking each
+    # purchase's lines, without loading every line of every GRN to find them.
+    shorts = [sh for sh in db.query(models.GrnShortage)
+                             .join(models.PurchaseLine,
+                                   models.PurchaseLine.id == models.GrnShortage.line_id)
+                             .join(models.Purchase,
+                                   models.Purchase.id == models.PurchaseLine.purchase_id)
               if sh.claimable and short_svc.status_of(db, sh) in ("open", "part-claimed")]
     if not shorts:
         return None
@@ -110,7 +117,9 @@ def _r_lr_unlinked(db, ctx):
 
 
 def _r_transit(db, ctx):
-    rows = db.query(models.StockOutward).filter(models.StockOutward.status == "posted").all()
+    # lines loaded with the notes: `total_qty` reads them, one query per note otherwise
+    rows = (db.query(models.StockOutward).options(selectinload(models.StockOutward.lines))
+              .filter(models.StockOutward.status == "posted").all())
     if not rows:
         return None
     qty = sum(o.total_qty for o in rows)
@@ -188,6 +197,7 @@ RULES = [
 ]
 
 _ORDER = {key: i for i, (key, _, _) in enumerate(RULES)}
+_FAILED = object()          # a rule that raised: its queue goes unreported this pass
 
 
 # ---------------------------------------------------------------- the feed ---
@@ -230,12 +240,22 @@ def collect(db, include_muted=False):
     now = dt.datetime.utcnow()
     ctx = {}                      # scratch shared by this pass; see _dead_bands
     out = []
-    for key, module, build in RULES:
+    # The dead-stock rules are asked LAST: on a dashboard the dead-stock rows
+    # they read are being built on another thread at the same moment, and the
+    # other rules' reads fit in that wait instead of queueing behind it. Only
+    # the asking moves — the notices are handled in RULES order below and sorted
+    # by it at the end, so the feed is the same.
+    built = {}
+    for key, module, build in sorted(RULES, key=lambda r: r[0].startswith("deadstock.")):
         try:
-            notice = build(db, ctx)
+            built[key] = build(db, ctx)
         except Exception:
             # one rule failing is one queue unreported, not a dead bell — the
             # centre exists to carry the other twelve
+            built[key] = _FAILED
+    for key, module, build in RULES:
+        notice = built[key]
+        if notice is _FAILED:
             continue
         st = _state(db, key)
         if notice is None:

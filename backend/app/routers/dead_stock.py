@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..database import get_db
+from ..fastjson import returns_json
 from .. import models
 from ..services import dead_stock as ds
 
@@ -22,7 +23,7 @@ router = APIRouter(prefix="/api/dead-stock", tags=["dead-stock"])
 
 # ------------------------------------------------------------------ read -----
 
-@router.get("/register")
+@returns_json(router.get("/register"))
 def register(q: str = "", bucket: str = "", category: str = "", supplier: str = "",
              size: str = "", status: str = "dead",
              min_value: Optional[float] = None, min_qty: Optional[float] = None,

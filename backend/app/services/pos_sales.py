@@ -31,6 +31,117 @@ from pathlib import Path
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
+from ..request_memo import memo, peek, remember
+import threading as _threading
+import time as _time
+
+# ---------------------------------------------------------------------------
+#  The till's two slowest facts, kept for up to a minute
+# ---------------------------------------------------------------------------
+#  `sales_of_stocked` and `status` each read the till's 2.1M bill lines (0.6 s
+#  each, more when the database is busy), and every dashboard load, the bell
+#  and the Command Center need both. They are kept here between requests —
+#  never older than TILL_MAX_AGE seconds, the same bound the Elasticsearch copy
+#  of these sales is held to — and refreshed in the background once they are
+#  TILL_SOFT_AGE old, so a screen gets the kept answer at once instead of
+#  waiting for the read. Figures from our own ledger (stock, GRNs, payables) are
+#  not kept: those are read live on every load. A product that came into stock
+#  after the till was read is fetched fresh (dead_stock._product_rows), as it
+#  always was.
+TILL_MAX_AGE = float(os.environ.get("ESSA_TILL_MAX_AGE", "60"))
+TILL_SOFT_AGE = min(TILL_MAX_AGE, float(os.environ.get("ESSA_TILL_SOFT_AGE", "30")))
+_till = {}                      # name -> (computed_at, value)
+_till_lock = _threading.Lock()
+_till_refreshing = set()
+
+
+_till_computes = {}             # name -> how to read it again
+_till_last_read = [0.0]
+_till_keeper = [None]
+TILL_KEEP_WHILE_USED = 600.0    # refresh in the background while read in the last 10 min
+
+
+def _till_keep_warm():
+    """While the dashboards are in use, read the till facts again every
+    TILL_SOFT_AGE seconds in the background, so a screen never waits for them.
+    Idle for TILL_KEEP_WHILE_USED, it stops asking the database anything."""
+    def loop():
+        while True:
+            _time.sleep(max(5.0, TILL_SOFT_AGE - 5.0))
+            if _time.time() - _till_last_read[0] > TILL_KEEP_WHILE_USED:
+                continue
+            for name, compute in list(_till_computes.items()):
+                try:
+                    t = _time.time()
+                    value = compute()
+                    with _till_lock:
+                        _till[name] = (t, value)
+                except Exception:                       # noqa: BLE001 — the next read computes
+                    pass
+    with _till_lock:
+        if _till_keeper[0] is None:
+            _till_keeper[0] = _threading.Thread(target=loop, name="till-keeper", daemon=True)
+            _till_keeper[0].start()
+
+
+def warm_till():
+    """Read the till facts now, in the background — at server start, so the
+    first dashboard finds them ready."""
+    def run():
+        for fn in (sales_of_stocked, status):
+            try:
+                fn()
+            except Exception:                           # noqa: BLE001 — the first read computes
+                pass
+    _threading.Thread(target=run, name="till-warm", daemon=True).start()
+
+
+def _till_kept(name, compute):
+    now = _time.time()
+    _till_last_read[0] = now
+    if TILL_MAX_AGE > 0 and name not in _till_computes:
+        _till_computes[name] = compute
+        _till_keep_warm()
+    with _till_lock:
+        hit = _till.get(name)
+    if hit is not None:
+        age = now - hit[0]
+        if age < TILL_SOFT_AGE:
+            return hit[1]
+        if age < TILL_MAX_AGE:
+            _till_refresh_later(name, compute)
+            return hit[1]
+    value = compute()
+    with _till_lock:
+        _till[name] = (now, value)
+    return value
+
+
+def _till_refresh_later(name, compute):
+    with _till_lock:
+        if name in _till_refreshing:
+            return
+        _till_refreshing.add(name)
+
+    def run():
+        try:
+            t = _time.time()
+            value = compute()
+            with _till_lock:
+                _till[name] = (t, value)
+        except Exception:                               # noqa: BLE001 — the next read computes
+            pass
+        finally:
+            with _till_lock:
+                _till_refreshing.discard(name)
+    _threading.Thread(target=run, name="till-refresh-" + name, daemon=True).start()
+
+
+def forget_till():
+    """Drop the kept facts — tests, and anything that must see the till now."""
+    with _till_lock:
+        _till.clear()
+
 # …/backend/app/services/pos_sales.py → …/essa-intake/Textile Retail Shop
 _SHOP_DIR = Path(__file__).resolve().parents[3] / "Textile Retail Shop"
 _DB_NAME = "textile_shop.db"
@@ -179,6 +290,16 @@ def _window(start, end, col):
 
 
 def sales_by_product(start=None, end=None):
+    """Net sales per warehouse product (see _sales_by_product).
+
+    Memoised for the length of one GET: the Command Centre reaches this through
+    the dead-stock count, the dead-stock alerts and the notification rules, and
+    each would otherwise re-run the same aggregation over every till line."""
+    return memo(("pos_sales.sales_by_product", str(start), str(end)),
+                lambda: _sales_by_product(start, end))
+
+
+def _sales_by_product(start=None, end=None):
     """Net sales per WAREHOUSE product id, optionally inside a date window.
 
     Returns {product_id: {"qty", "amount", "bills", "last_sold"}} where amount is
@@ -199,6 +320,12 @@ def sales_by_product(start=None, end=None):
         "JOIN " + q("products") + " p ON p.id = ii.product_id "
         "WHERE p.warehouse_id IS NOT NULL" + LIVE_BILL + sold_where +
         " GROUP BY p.warehouse_id", sold_params)
+    if not start and not end:
+        # Unwindowed, these groups are exactly what status() counts: the same
+        # join and filter, one group per linked product, each carrying its
+        # latest bill. Left for status() so it need not run the join again.
+        lasts = [r[4] for r in sold if r[4] is not None]
+        remember(("pos_sales.live_sale_facts",), (max(lasts) if lasts else None, len(sold)))
 
     ret_where, ret_params = _window(start, end, "cn.created_at")
     returned = _rows(
@@ -208,14 +335,20 @@ def sales_by_product(start=None, end=None):
         "JOIN " + q("products") + " p ON p.id = ci.product_id "
         "WHERE p.warehouse_id IS NOT NULL" + ret_where +
         " GROUP BY p.warehouse_id", ret_params)
+    return _merge(sold, returned)
 
+
+def _merge(sold, returned):
+    """{product_id: {qty, amount, bills, last_sold}} from the sold and returned
+    groups — sales less returns, as `_sales_by_product` describes."""
     out = {}
     for pid, qty, amount, bills, last in sold:
         if pid is None:
             continue
         out[int(pid)] = {"qty": float(qty or 0), "amount": float(amount or 0),
                          "bills": int(bills or 0),
-                         "last_sold": (last or "")[:10] or None}
+                         # str(): SQLite hands back ISO text, Postgres a datetime
+                         "last_sold": str(last or "")[:10] or None}
     for pid, qty, amount in returned:
         if pid is None:
             continue
@@ -224,6 +357,108 @@ def sales_by_product(start=None, end=None):
         row["qty"] = round(row["qty"] - float(qty or 0), 3)
         row["amount"] = round(row["amount"] - float(amount or 0), 2)
     return out
+
+
+def sales_of_stocked():
+    """`sales_by_product()`, only for the warehouse products holding stock, and
+    which of those it covers: `({product_id: {...}}, {covered ids})`.
+
+    Dead stock reads the till only for products on the shelf (~6K), but the full
+    aggregation groups every line ever billed (~340K products) and ships them all
+    back — 1.5 s where this is 0.45 s. The groups are the same groups, so the
+    figures are the same figures.
+
+    The in-stock set is read inside the same statement as the sales (one
+    statement, one snapshot) and returned as `covered`, so a product that came
+    into stock between this read and the caller's own product list is known to
+    be missing rather than silently read as never sold — see
+    dead_stock._product_rows, which fetches those with `sales_of`.
+
+    Only where the shop lives in the warehouse's own Postgres database; None
+    elsewhere (a SQLite till cannot see the warehouse's products table), and the
+    caller then uses `sales_by_product()` exactly as before. Memoised per GET."""
+    return memo(("pos_sales.sales_of_stocked",),
+                lambda: _till_kept("sales_of_stocked", _sales_of_stocked))
+
+
+def _shares_warehouse_db():
+    from ..database import IS_SQLITE
+    return not IS_SQLITE and _target() is not None
+
+
+def _sales_of_stocked():
+    if not _shares_warehouse_db():
+        return None
+    from .. import models
+    stocked = f"SELECT id FROM {models.Product.__tablename__} WHERE stock_qty > 0"
+    # The search index, when it is fresh: the same figures (see app/search),
+    # without aggregating the till's bill lines here. The stocked set is still
+    # read from PostgreSQL, and is what `covered` reports. Anything the index
+    # cannot answer — disabled, down, behind — falls through to the SQL below.
+    from ..search import sales as es_sales, config as es_config
+    if es_config.ENABLED:
+        from ..database import engine as wh_engine
+        with wh_engine.connect() as con:
+            ids = [r[0] for r in con.execute(text(stocked))]
+        got = es_sales.sales_of(ids) if ids else None
+        if got is not None:
+            return got, set(ids)
+    # the in-stock set twice in ONE statement: the outer list says which products
+    # were covered, the inner filter keeps the aggregation to them — the same
+    # snapshot, so the two cannot disagree
+    sold = _rows(
+        "SELECT s.id, a.wid, a.qty, a.amount, a.bills, a.last "
+        f"FROM {models.Product.__tablename__} s LEFT JOIN ("
+        " SELECT p.warehouse_id AS wid, SUM(ii.quantity) AS qty, SUM(ii.line_total) AS amount,"
+        "        COUNT(DISTINCT i.id) AS bills, MAX(i.invoice_date) AS last"
+        " FROM " + q("invoice_items") + " ii"
+        " JOIN " + q("invoices") + " i ON i.id = ii.invoice_id"
+        " JOIN " + q("products") + " p ON p.id = ii.product_id"
+        f" WHERE p.warehouse_id IN ({stocked})" + LIVE_BILL +
+        " GROUP BY p.warehouse_id) a ON a.wid = s.id WHERE s.stock_qty > 0", [])
+    returned = _rows(
+        "SELECT s.id, a.wid, a.qty, a.amount "
+        f"FROM {models.Product.__tablename__} s LEFT JOIN ("
+        " SELECT p.warehouse_id AS wid, SUM(ci.quantity) AS qty, SUM(ci.line_total) AS amount"
+        " FROM " + q("credit_note_items") + " ci"
+        " JOIN " + q("credit_notes") + " cn ON cn.id = ci.credit_note_id"
+        " JOIN " + q("products") + " p ON p.id = ci.product_id"
+        f" WHERE p.warehouse_id IN ({stocked})"
+        " GROUP BY p.warehouse_id) a ON a.wid = s.id WHERE s.stock_qty > 0", [])
+    if not sold:
+        # nothing in stock, or the read failed (`_rows` answers [] for both):
+        # either way the full aggregation is the safe answer
+        return None
+    covered = {int(r[0]) for r in sold} & {int(r[0]) for r in returned}
+    # a.wid is set exactly where the product had a group — as the full
+    # aggregation has one row per product that was billed / returned
+    out = _merge([r[1:] for r in sold if r[1] is not None],
+                 [r[1:] for r in returned if r[1] is not None])
+    return out, covered
+
+
+def sales_of(product_ids):
+    """`sales_by_product()` for these warehouse product ids only."""
+    ids = sorted({int(i) for i in product_ids})
+    if not ids:
+        return {}
+    listed = ", ".join(str(i) for i in ids)          # ints, so nothing to escape
+    sold = _rows(
+        "SELECT p.warehouse_id, SUM(ii.quantity), SUM(ii.line_total),"
+        "       COUNT(DISTINCT i.id), MAX(i.invoice_date) "
+        "FROM " + q("invoice_items") + " ii "
+        "JOIN " + q("invoices") + " i ON i.id = ii.invoice_id "
+        "JOIN " + q("products") + " p ON p.id = ii.product_id "
+        f"WHERE p.warehouse_id IN ({listed})" + LIVE_BILL +
+        " GROUP BY p.warehouse_id", [])
+    returned = _rows(
+        "SELECT p.warehouse_id, SUM(ci.quantity), SUM(ci.line_total) "
+        "FROM " + q("credit_note_items") + " ci "
+        "JOIN " + q("credit_notes") + " cn ON cn.id = ci.credit_note_id "
+        "JOIN " + q("products") + " p ON p.id = ci.product_id "
+        f"WHERE p.warehouse_id IN ({listed})"
+        " GROUP BY p.warehouse_id", [])
+    return _merge(sold, returned)
 
 
 def bills_for_product(product_id, limit=50):
@@ -247,11 +482,11 @@ def bills_for_product(product_id, limit=50):
         "FROM " + q("invoice_items") + " ii "
         "JOIN " + q("invoices") + " i ON i.id = ii.invoice_id "
         "JOIN " + q("products") + " p ON p.id = ii.product_id "
-        "LEFT JOIN customers c ON c.id = i.customer_id "
+        "LEFT JOIN " + q("customers") + " c ON c.id = i.customer_id "
         "WHERE p.warehouse_id = ?" + LIVE_BILL + " "
         "ORDER BY i.invoice_date DESC, i.id DESC LIMIT ?", (int(product_id), int(limit)))
     rows = [{
-        "kind": "sale", "bill_no": r[0], "date": (r[1] or "")[:10] or None,
+        "kind": "sale", "bill_no": r[0], "date": str(r[1] or "")[:10] or None,
         "qty": float(r[2] or 0), "rate": float(r[3] or 0),
         "gst_rate": r[4], "tax": float(r[5] or 0), "amount": float(r[6] or 0),
         "customer": r[7], "phone": r[8],
@@ -266,7 +501,7 @@ def bills_for_product(product_id, limit=50):
         "WHERE p.warehouse_id = ? "
         "ORDER BY cn.created_at DESC LIMIT ?", (int(product_id), int(limit)))
     rows += [{
-        "kind": "return", "bill_no": r[0], "date": (r[1] or "")[:10] or None,
+        "kind": "return", "bill_no": r[0], "date": str(r[1] or "")[:10] or None,
         "qty": -float(r[2] or 0), "rate": float(r[3] or 0),
         "gst_rate": r[4], "tax": -float(r[5] or 0), "amount": -float(r[6] or 0),
         "customer": r[7], "phone": None,
@@ -294,20 +529,47 @@ def last_sold_index():
 
 def status():
     """What the register should say about where its sales figures came from."""
+    return memo(("pos_sales.status",), lambda: _till_kept("status", _status))
+
+
+def _status():
     t = _target()
     if not t:
         return {"available": False, "reason": "The shop (POS) module is not installed here",
                 "path": None, "source": None, "last_sale": None,
                 "linked_products": 0}
     p = t[2]
-    rows = _rows("SELECT MAX(i.invoice_date), COUNT(DISTINCT p.warehouse_id) "
-                 "FROM " + q("invoices") + " i "
-                 "JOIN " + q("invoice_items") + " ii ON ii.invoice_id = i.id "
-                 "JOIN " + q("products") + " p ON p.id = ii.product_id "
-                 "WHERE p.warehouse_id IS NOT NULL" + LIVE_BILL, [])
-    last, linked = (rows[0] if rows else (None, 0))
+    known = peek(("pos_sales.live_sale_facts",))
+    if known is not None:
+        last, linked = known
+    elif _shares_warehouse_db():
+        # The same two facts as the join below, asked the way the indexes can
+        # answer: the newest live bill carrying a linked item (invoice_date index,
+        # stops at the first), and the linked products with any live sale. The
+        # full aggregation used to hand these over for free; dead stock now reads
+        # only the stocked products' sales (sales_of_stocked), so they are asked
+        # for here — 0.6 s where the join is 0.8 s.
+        lr = _rows("SELECT i.invoice_date FROM " + q("invoices") + " i "
+                   "WHERE i.invoice_date IS NOT NULL" + LIVE_BILL +
+                   " AND EXISTS (SELECT 1 FROM " + q("invoice_items") + " ii "
+                   "JOIN " + q("products") + " p ON p.id = ii.product_id "
+                   "WHERE ii.invoice_id = i.id AND p.warehouse_id IS NOT NULL) "
+                   "ORDER BY i.invoice_date DESC LIMIT 1", [])
+        lk = _rows("SELECT COUNT(DISTINCT p.warehouse_id) FROM " + q("products") + " p "
+                   "WHERE p.warehouse_id IS NOT NULL AND EXISTS (SELECT 1 FROM "
+                   + q("invoice_items") + " ii JOIN " + q("invoices") + " i ON i.id = ii.invoice_id "
+                   "WHERE ii.product_id = p.id" + LIVE_BILL + ")", [])
+        last = lr[0][0] if lr else None
+        linked = lk[0][0] if lk else 0
+    else:
+        rows = _rows("SELECT MAX(i.invoice_date), COUNT(DISTINCT p.warehouse_id) "
+                     "FROM " + q("invoices") + " i "
+                     "JOIN " + q("invoice_items") + " ii ON ii.invoice_id = i.id "
+                     "JOIN " + q("products") + " p ON p.id = ii.product_id "
+                     "WHERE p.warehouse_id IS NOT NULL" + LIVE_BILL, [])
+        last, linked = (rows[0] if rows else (None, 0))
     return {"available": True, "reason": None, "path": str(p), "source": str(p),
-            "last_sale": (last or "")[:10] or None,
+            "last_sale": str(last or "")[:10] or None,
             "linked_products": int(linked or 0)}
 
 

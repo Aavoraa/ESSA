@@ -27,9 +27,13 @@ building without anybody buying them; counting that as life would hide a line
 that was rejected precisely because it wasn't selling.
 """
 import datetime as dt
-from sqlalchemy import func
+import json
+
+from sqlalchemy import func, select
+from sqlalchemy.orm import selectinload
 
 from .. import models, runtime
+from ..request_memo import memo
 from . import pos_sales, stock_view
 
 # The ladder from the clearance worksheet, and the assumptions the cash impact
@@ -160,23 +164,32 @@ def _days_since(iso, today):
         return None
 
 
-def _movement_index(db):
+def _movement_index(db, stocked_only=False):
     """Per product: when stock last went OUT on a dispatch, and last came IN.
 
     Two grouped queries rather than a walk of the ledger — the ledger is
     append-only and grows without limit, and this runs on every open of the
-    register."""
+    register.
+
+    `stocked_only` limits both to products holding stock — the only ones the
+    register reads. Every product that ever moved is hundreds of thousands of
+    groups shipped back to Python to be looked up a few thousand times; the
+    stocked ones are found through the product_id index instead."""
     out = {}
-    dispatched = db.query(models.StockMovement.product_id,
-                          func.max(models.StockMovement.created_at)) \
-        .filter(models.StockMovement.ref_type == "outward") \
-        .group_by(models.StockMovement.product_id).all()
+    M = models.StockMovement
+    stocked = (db.query(models.Product.id).filter(models.Product.stock_qty > 0)
+               if stocked_only else None)
+
+    def latest(cond):
+        q = db.query(M.product_id, func.max(M.created_at)).filter(cond)
+        if stocked is not None:
+            q = q.filter(M.product_id.in_(stocked.scalar_subquery()))
+        return q.group_by(M.product_id).all()
+
+    dispatched = latest(M.ref_type == "outward")
     for pid, when in dispatched:
         out.setdefault(pid, {})["dispatched"] = _iso(when)
-    received = db.query(models.StockMovement.product_id,
-                        func.max(models.StockMovement.created_at)) \
-        .filter(models.StockMovement.kind == "inward") \
-        .group_by(models.StockMovement.product_id).all()
+    received = latest(M.kind == "inward")
     for pid, when in received:
         out.setdefault(pid, {})["received"] = _iso(when)
     return out
@@ -206,14 +219,64 @@ def product_rows(db, rules=None, today=None, include_healthy=True):
     """
     rules = rules or get_rules()
     today = today or dt.date.today()
-    sold = pos_sales.last_sold_index()
-    sales = pos_sales.sales_by_product()
-    moves = _movement_index(db)
+    # the Command Centre asks for this twice in one load (the dead-stock count
+    # and the notification rules); same inputs, same request, same answer
+    # Not keyed on the session: the rows are plain dicts, and the dashboards
+    # build their sections on separate sessions of the same request.
+    key = ("dead_stock.product_rows", today.isoformat(), bool(include_healthy),
+           json.dumps(rules, sort_keys=True, default=str))
+    return memo(key, lambda: _product_rows(db, rules, today, include_healthy))
+
+
+class _Supplier:
+    __slots__ = ("name",)
+
+    def __init__(self, name):
+        self.name = name
+
+
+class _ProductRow:
+    """A product read as a plain row, answering `p.<column>` and
+    `p.primary_supplier.name` as the ORM object did."""
+    __slots__ = ("_row", "primary_supplier")
+
+    def __init__(self, row, supplier_names):
+        self._row = row
+        sid = row.primary_supplier_id
+        self.primary_supplier = _Supplier(supplier_names[sid]) if sid in supplier_names else None
+
+    def __getattr__(self, name):
+        return getattr(self._row, name)
+
+
+def _product_rows(db, rules, today, include_healthy):
+    # One read of the till. last_sold is taken from it rather than from
+    # pos_sales.last_sold_index(), which is this same aggregation run again.
+    # Only the stocked products' sales where the till shares our database — the
+    # only ones read below — and the whole aggregation otherwise.
+    # Our own two reads first, the till's after: on a dashboard the till's is
+    # already running on another thread (command_center.warm_groups), so by the
+    # time these are done it is usually there to be picked up — rather than
+    # these waiting behind it. Reads only, so the order changes no figure.
+    moves = _movement_index(db, stocked_only=True)
+    # The stocked products as plain rows (the same statement's columns, the same
+    # order) and the suppliers' names from one small read, rather than 360K
+    # full objects with a supplier each: this was half of every dashboard's wait.
+    P = models.Product
+    names = dict(db.query(models.Supplier.id, models.Supplier.name).all())
+    products = [_ProductRow(r, names) for r in db.execute(
+        select(*P.__table__.columns).where(P.stock_qty > 0).order_by(P.id))]
+    scoped = pos_sales.sales_of_stocked()
+    sales = pos_sales.sales_by_product() if scoped is None else scoped[0]
 
     rows = []
-    products = db.query(models.Product).filter(models.Product.stock_qty > 0).all()
+    if scoped is not None:
+        # stocked since the till was read: fetched rather than read as unsold
+        missing = [p.id for p in products if p.id not in scoped[1]]
+        if missing:
+            sales = {**sales, **pos_sales.sales_of(missing)}
     for p in products:
-        last_sold = sold.get(p.id)
+        last_sold = (sales.get(p.id) or {}).get("last_sold")
         mv = moves.get(p.id, {})
         last_dispatched = mv.get("dispatched")
         last_received = mv.get("received") or _iso(p.created_at)
@@ -486,6 +549,14 @@ def alerts(db):
     before the line goes dead: at 60 days a markdown of 10% might still move it,
     and at 180 the question has changed from "what discount" to "who will take
     the lot"."""
+    return {"alerts": alert_levels(db), "checked_on": dt.date.today().isoformat(),
+            "pos": pos_sales.status()}
+
+
+def alert_levels(db):
+    """`alerts()["alerts"]` alone — for the notification rules, which read the
+    bands and not where the till's figures came from (`status()`, a query of
+    its own)."""
     rules = get_rules()
     rows = product_rows(db, rules)
     levels = []
@@ -509,8 +580,7 @@ def alerts(db):
             "stock_value": round(sum(r["stock_value"] for r in band), 2),
             "expected_realisation": round(sum(r["expected_realisation"] for r in band), 2),
         })
-    return {"alerts": levels, "checked_on": dt.date.today().isoformat(),
-            "pos": pos_sales.status()}
+    return levels
 
 
 # ------------------------------------------------------------- campaigns -----

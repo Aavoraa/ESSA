@@ -5,6 +5,7 @@ from flask import Blueprint, render_template, request, redirect, url_for, flash,
 from flask_login import login_required, current_user
 from sqlalchemy import func
 from app import db
+from app.paging import paged
 from app import warehouse_items
 from app.models import Floor, Product, Category, StockMovement
 from app.master_categories import SECTION_ORDER, grouped_categories
@@ -102,8 +103,10 @@ def list_products():
         )
     if cat_id:
         query = query.filter_by(category_id=cat_id)
-    products = query.order_by(Product.name).all()
-    return render_template("inventory/list.html", products=products,
+    # a page at a time: the catalogue is the warehouse's (416K), and every row
+    # draws a QR — the whole list took minutes and held the server (app/paging)
+    page = paged(query.order_by(Product.name, Product.id))
+    return render_template("inventory/list.html", products=page.items, page=page,
                            category_groups=grouped_categories(), q=q, cat_id=cat_id)
 
 
@@ -338,5 +341,6 @@ def labels_sheet():
     query = Product.query.filter_by(active=True)
     if cat_id:
         query = query.filter_by(category_id=cat_id)
-    products = query.order_by(Product.name).all()
-    return render_template("inventory/labels.html", products=products, single=None)
+    # a sheet per page of the list, for the same reason as the list itself
+    page = paged(query.order_by(Product.name, Product.id))
+    return render_template("inventory/labels.html", products=page.items, page=page, single=None)

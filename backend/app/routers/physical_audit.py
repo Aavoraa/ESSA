@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from .. import models
 from ..database import get_db
+from ..fastjson import returns_json
 from ..services import physical_audit as audit, scope
 
 router = APIRouter(prefix="/api/physical-audit", tags=["physical-audit"])
@@ -121,7 +122,7 @@ def _guard(fn, *args, **kwargs):
 
 
 # --- choosing what to count ------------------------------------------------
-@router.get("/options")
+@returns_json(router.get("/options"))
 def options(db: Session = Depends(get_db),
             wid: Optional[int] = Depends(scope.current)):
     """What the filter panel may offer, for this warehouse's own stock."""
@@ -137,12 +138,7 @@ def preview(body: PreviewIn, db: Session = Depends(get_db),
     document with a number — so the panel says "4,312 items, 18,004 pieces"
     first. The Search button on the screen is this.
     """
-    wid = _counting_warehouse(db, wid)
-    rows = audit.candidates(db, wid, body.filters or {})
-    from ..services import stock_locations
-    qty = sum(stock_locations.qty_at(db, p.id, wid) or 0 for p in rows)
-    return {"items": len(rows), "qty": round(float(qty), 3),
-            "filters": audit.clean_scope(body.filters or {})}
+    return audit.preview(db, _counting_warehouse(db, wid), body.filters or {})
 
 
 # --- the count itself ------------------------------------------------------

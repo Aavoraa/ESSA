@@ -186,8 +186,24 @@ def product_ids_here(db, warehouse_id, include_zero=False):
     return {row[0] for row in q.all()}
 
 
-def products(db, query, warehouse_id, include_zero=True):
-    """Narrow a Product query to what this warehouse has anything to do with."""
+def products(db, query, warehouse_id, include_zero=True, as_subquery=False):
+    """Narrow a Product query to what this warehouse has anything to do with.
+
+    `as_subquery` narrows by the balances query itself (`id IN (SELECT …)`)
+    rather than reading the ids out and sending them back as a literal list —
+    the same products, without shipping hundreds of thousands of ids each way.
+    Opt-in, for callers whose ORDER BY decides the order completely (or that
+    want a set): a different plan may return rows that tie in a different order."""
+    if as_subquery:
+        if not warehouse_id:
+            return query
+        q = db.query(models.StockBalance.product_id).filter(
+            models.StockBalance.warehouse_id == warehouse_id)
+        if not include_zero:
+            q = q.filter(models.StockBalance.qty > 0)
+        # an empty subquery matches nothing — the same answer as the explicit
+        # `id IS NULL` below gives a warehouse with nothing in it yet
+        return query.filter(models.Product.id.in_(q.scalar_subquery()))
     ids = product_ids_here(db, warehouse_id, include_zero=include_zero)
     if ids is None:
         return query

@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional, List
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from ..database import get_db
+from ..fastjson import returns_json
 from .. import models
 from ..services import payments as svc
 
@@ -45,15 +46,17 @@ def _pay_out(p, with_allocs=False):
     return d
 
 
-@router.get("/pending")
+@returns_json(router.get("/pending"))
 def pending(supplier_id: Optional[int] = None, db: Session = Depends(get_db)):
     """Unpaid invoices (optionally for one supplier) — the 'Search Pendings'."""
     return svc.pending_bills(db, supplier_id)
 
 
-@router.get("")
+@returns_json(router.get(""))
 def list_payments(db: Session = Depends(get_db)):
-    return [_pay_out(p) for p in db.query(models.Payment).order_by(models.Payment.id.desc()).all()]
+    return [_pay_out(p) for p in db.query(models.Payment)
+            .options(joinedload(models.Payment.supplier))
+            .order_by(models.Payment.id.desc()).all()]
 
 
 @router.post("")

@@ -15,8 +15,9 @@ const TOKEN_KEY = 'essa_token'
 
 export const session = {
   get: () => localStorage.getItem(TOKEN_KEY) || '',
-  set: (t) => { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY) },
-  clear: () => localStorage.removeItem(TOKEN_KEY),
+  // a different (or no) account starts with nothing remembered (readCache below)
+  set: (t) => { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY); clearAll() },
+  clear: () => { localStorage.removeItem(TOKEN_KEY); clearAll() },
 }
 
 // Called by App when a call comes back 401, so an expired or revoked token
@@ -49,13 +50,15 @@ export const warehouse = {
     if (w && w.id) localStorage.setItem(WAREHOUSE_KEY, JSON.stringify(
       { id: w.id, name: w.name, code: w.code, catalogue: w.catalogue }))
     else localStorage.removeItem(WAREHOUSE_KEY)
+    // nothing is emptied here: every remembered answer is keyed by warehouse, so
+    // another building's can never be shown, and coming BACK finds this one's
     warehouseListener(w || null)
   },
   clear: () => warehouse.set(null),
   onChange: (fn) => { warehouseListener = fn || (() => {}) },
 }
 
-const fetch = (url, opts = {}) => {
+const send = (url, opts = {}) => {
   const token = session.get()
   const headers = new Headers(opts.headers || {})
   if (token) headers.set('X-Essa-Token', token)
@@ -69,6 +72,125 @@ const fetch = (url, opts = {}) => {
       if (r.status === 401 && !String(url).includes('/api/auth/')) onUnauthorized()
       return r
     })
+}
+
+// ==========================================================================
+//  Recent answers, kept for a minute
+//  ------------------------------------------------------------------------
+//  Leaving a screen unmounts it, and coming back re-asked the server for
+//  everything it shows. Every read passes through here, so a read answered in
+//  the last CACHE_MS is answered again from memory — instantly — instead.
+//
+//  The rules that keep it honest:
+//    * only GET, only /api/, only JSON, only answers that succeeded;
+//    * ANY write from this browser (POST, PUT, PATCH, DELETE) empties it — a
+//      save is on screen the moment you look, never a minute late. A read that
+//      was already on its way while a write happened is not kept (`generation`);
+//    * keyed by who is signed in and which warehouse you are inside, so neither
+//      a different account nor another building can see a remembered answer;
+//    * never for what must be live or current: the bell's count, the LR
+//      register's poll, server status, sign-in, and anything printed/exported;
+//    * ↻ Refresh buttons ask the server (`readCache.fresh`), and the dashboards
+//      show the remembered figures and then the server's (see App: `swr`).
+//  Memory only: a reload, a sign-out or a closed tab starts empty.
+// ==========================================================================
+const CACHE_MS = 60 * 1000
+const CACHE_MAX_CHARS = 20 * 1024 * 1024          // Stock Outward's list is ~10 MB
+const CACHE_MAX_ENTRIES = 60
+const KEPT_MAX_ENTRIES = 80                         // dashboards + reports, least recently used goes
+// (/api/notifications: the bell's count is live, so the list under it must be too)
+const NEVER_CACHE = [/^\/api\/auth\//, /^\/api\/status$/, /^\/api\/notifications/,
+  /^\/api\/lr(\?|$|\/page|\/search)/, /^\/api\/search\//, /print|label|qr\.|barcode|\.csv|format=csv|download|export|backup/]
+// The dashboards (Command Center, Central, warehouse Dashboard and its charts)
+// and the reports are kept for the whole session: no minute's limit, and a save does not empty
+// them — they are always shown with `swr`, which asks the server again every
+// time, so a remembered dashboard is on screen for one round-trip at most.
+// …and so are the reports (their list, and every report as last run with its filters)
+const ALWAYS = [/^\/api\/command\/overview/, /^\/api\/locations\/(overview|sales)/, /^\/api\/dashboard\//,
+  /^\/api\/reports(\/|\?|$)/]
+const kept = new Map()           // key -> entry, for ALWAYS paths; emptied only with the session
+const cache = new Map()          // key -> { at, body, status, type }, oldest first
+const inflight = new Map()       // key -> Promise<entry>, so a screen asking twice asks once
+let generation = 0
+let bypass = 0
+let lastHit = false
+
+const clearCache = () => { cache.clear(); inflight.clear(); generation++ }
+const clearAll = () => { clearCache(); kept.clear() }
+
+export const readCache = {
+  clear: clearCache,
+  // run `fn` with the cache skipped — for ↻ Refresh, and a dashboard's second look
+  fresh: (fn) => { bypass++; try { return fn() } finally { bypass-- } },
+  // a ↻ Refresh button: forget everything remembered, then reload the screen
+  refresh: (fn) => { clearCache(); return fn() },
+  // whether the call just made was answered from memory (read straight after it)
+  lastWasHit: () => lastHit,
+}
+
+// Show what is remembered now, then what the server says. `call` is an api
+// function call (() => api.commandOverview(…)); `apply` receives each answer. A
+// remembered answer is applied at once and the server is asked in the
+// background; its answer is applied when it lands — so a dashboard appears
+// instantly and is never more than one round-trip behind. Without a remembered
+// answer this is simply `call().then(apply)`.
+export const swr = (call, apply, onError) => {
+  const first = call()
+  const wasHit = lastHit
+  const p = first.then(apply)
+  if (wasHit) {
+    readCache.fresh(call).then(apply).catch((e) => { if (onError) onError(e) })
+  }
+  return p
+}
+
+const toResponse = (e) => new Response(e.body, { status: e.status, headers: { 'Content-Type': e.type } })
+
+const fetch = (url, opts = {}) => {
+  const method = String(opts.method || 'GET').toUpperCase()
+  lastHit = false
+  if (method !== 'GET') {
+    // emptied before the write is sent and again when it lands, so nothing read
+    // in between is remembered either
+    clearCache()
+    return send(url, opts).then((r) => { clearCache(); return r })
+  }
+  const path = String(url)
+  if (!path.startsWith('/api/') || NEVER_CACHE.some((rx) => rx.test(path))) return send(url, opts)
+  const key = `${session.get()}|${warehouse.get()?.id || ''}|${path}`
+  const always = ALWAYS.some((rx) => rx.test(path))
+  const hit = always ? kept.get(key) : cache.get(key)
+  if (!bypass && hit && (always || Date.now() - hit.at < CACHE_MS)) {
+    lastHit = true
+    const store = always ? kept : cache
+    store.delete(key); store.set(key, hit)       // most recently used goes last
+    return Promise.resolve(toResponse(hit))
+  }
+  if (!bypass && inflight.has(key)) {
+    return inflight.get(key).then((e) => (e.raw ? e.raw.clone() : toResponse(e)))
+  }
+  const gen = generation
+  const p = send(url, opts).then(async (r) => {
+    const type = r.headers.get('content-type') || ''
+    if (!r.ok || !type.includes('application/json')) return { raw: r }
+    const body = await r.text()
+    const entry = { at: Date.now(), body, status: r.status, type }
+    if (always) {                                // the latest answer, whatever happened meanwhile
+      if (body.length <= CACHE_MAX_CHARS) {
+        kept.delete(key); kept.set(key, entry)
+        while (kept.size > KEPT_MAX_ENTRIES) kept.delete(kept.keys().next().value)
+      }
+    } else if (gen === generation && body.length <= CACHE_MAX_CHARS) {
+      cache.set(key, entry)
+      while (cache.size > CACHE_MAX_ENTRIES) cache.delete(cache.keys().next().value)
+    }
+    return entry
+  })
+  inflight.set(key, p)
+  const done = () => { if (inflight.get(key) === p) inflight.delete(key) }
+  p.then(done, done)
+  // every caller gets its own Response: a body can only be read once
+  return p.then((e) => (e.raw ? e.raw.clone() : toResponse(e)))
 }
 
 // The message the server sent, not "Error: 403" — the API answers a refused
@@ -169,6 +291,9 @@ export const api = {
   // rather than a fault, and the screen can say which.
   dashboardCharts: (months) => fetch('/api/dashboard/charts' + (months ? `?months=${months}` : ''))
     .then(r => { if (!r.ok) throw Object.assign(new Error(String(r.status)), { status: r.status }); return r.json() }),
+  // Every figure the warehouse dashboard's tiles show, in one call — see
+  // routers/dashboard.summary. A part this account may not read comes back null.
+  dashboardSummary: () => fetch('/api/dashboard/summary').then(J),
   listDocuments: () => fetch('/api/documents').then(J),
   getDocument: (id) => fetch(`/api/documents/${id}`).then(J),
   // Read an already-uploaded document again — for one whose reading ran out of
@@ -221,6 +346,14 @@ export const api = {
 
   // purchases / GRN
   listPurchases: () => fetch('/api/purchases').then(J),
+  // one page of the GRN list with the sidebar's counts (routers/purchases.page_purchases)
+  pagePurchases: (p) => fetch('/api/purchases/page?' + new URLSearchParams(p).toString()).then(J),
+  // Invoice Entry: every invoice at whatever stage it has reached (documents
+  // waiting, receipts being received, receipts in stock), a page at a time
+  invoicePage: (p) => fetch('/api/purchases/invoices?' + new URLSearchParams(
+    Object.fromEntries(Object.entries(p || {}).filter(([, v]) => v !== '' && v != null))).toString()).then(J),
+  // the stock one receipt made: its products, what it brought, its piece codes
+  purchaseStock: (id) => fetch(`/api/purchases/${id}/stock`).then(J),
   getPurchase: (id) => fetch(`/api/purchases/${id}`).then(J),
   // which warehouse took this delivery in. Draft only — once posted the stock is
   // standing somewhere and moving it is unpost → set → post.
@@ -269,7 +402,11 @@ export const api = {
 
   // inventory
   inventorySummary: () => fetch('/api/inventory/summary').then(J),
-  listProducts: () => fetch('/api/inventory/products').then(J),
+  // `held: 1` = only what this warehouse holds now; `q` searches every SKU on the
+  // server; `limit` caps the answer. A catalogue of hundreds of thousands of SKUs
+  // cannot be sent whole, so the screens list what is held and search the rest.
+  listProducts: (params) => fetch('/api/inventory/products'
+    + (params ? '?' + new URLSearchParams(params).toString() : '')).then(J),
   getProduct: (id) => fetch(`/api/inventory/products/${id}`).then(J),
   // no editProduct: a product is what its GRN made it — correct it by unposting
   // the GRN, fixing the line and posting again (stock is corrected via adjustStock)
@@ -280,6 +417,8 @@ export const api = {
   lookupByCode: (code) => fetch('/api/inventory/lookup?code=' + encodeURIComponent(code))
     .then(async r => { const j = await r.json().catch(() => ({})); if (!r.ok) throw Object.assign(new Error('lk'), { detail: j.detail }); return j }),
   labelUrl: (id) => `/api/inventory/products/${id}/label`,
+  // the receipts (invoices) a product came in on
+  productSources: (id) => fetch(`/api/inventory/products/${id}/sources`).then(J),
   labelsUrl: (ids, status) => {
     const p = []
     if (ids && ids.length) p.push('ids=' + ids.join(','))
@@ -738,6 +877,12 @@ export const api = {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ document_id, rows }) }).then(J),
   lrList: () => fetch('/api/lr').then(J),
+  // one page of the register (search=true: of the Search panel's matches)
+  lrPage: (params) => {
+    const p = new URLSearchParams()
+    Object.entries(params || {}).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== '') p.append(k, v) })
+    return fetch('/api/lr/page?' + p.toString()).then(J)
+  },
   lrGet: (id) => fetch(`/api/lr/${id}`).then(J),
   // key in ONE consignment (the LR Entry form's Save / Save&Next)
   lrCreate: (body) => fetch('/api/lr', {
@@ -849,6 +994,8 @@ export const api = {
   // pass the same bag without a per-report branch.
   reportCatalogue: () => fetch('/api/reports').then(J),
   reportGroups: () => fetch('/api/reports/groups').then(J),
+  // the Store (shop) reports — listed here, run and drawn by the shop at /pos/reports/r/<key>
+  storeReportCatalogue: () => fetch('/api/reports/store-catalogue').then(J),
   runReport: (key, params) => fetch(`/api/reports/${key}${qs(params)}`).then(J),
   reportCsvUrl: (key, params) => `/api/reports/${key}/csv${qs(params)}`,
   // Ask a question instead of picking a report and setting filters. POST because

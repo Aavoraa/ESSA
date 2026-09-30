@@ -325,6 +325,12 @@ html.in-frame .brand-nav .nav-icon-btn:hover { color: var(--brand) !important; b
 html.in-frame .brand-nav .navbar-toggler:focus { box-shadow: 0 0 0 2px var(--accent); }
 html.in-frame .brand-nav .navbar-toggler { margin-left: auto; padding: .25rem .5rem; }
 html.in-frame .brand-nav .frame-title { display: inline-flex; }
+/* Inside Essa the module menu next to STORE is not drawn: Essa's own sidebar
+   already lists every Store screen, and two menus for the same screens is one
+   too many. Standalone, this menu is the navigation, so it stays there. The
+   account menu that followed it keeps its place on the right. */
+html.in-frame .brand-nav .navbar-collapse > .navbar-nav.me-auto { display: none; }
+html.in-frame .brand-nav .navbar-collapse > .navbar-nav.me-auto + .navbar-nav { margin-left: auto; }
 .brand-nav .frame-title { display: none; align-items: center; gap: .375rem; font-size: .6875rem;
   font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-right: .75rem; white-space: nowrap; }
 html.in-frame main.container-fluid { max-width: none; padding: 1rem 1.25rem 1.5rem; }

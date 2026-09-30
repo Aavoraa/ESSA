@@ -41,7 +41,8 @@ garment on two systems' shelves and double the company's stock on hand.
 """
 import datetime as dt
 
-from sqlalchemy.orm import Session
+from sqlalchemy import case, func
+from sqlalchemy.orm import Session, joinedload
 
 from .. import models
 
@@ -357,17 +358,18 @@ def warehouse_totals(db: Session, warehouse_ids=None) -> list:
     invisible until someone wonders where it went.
     """
     wanted = set(warehouse_ids) if warehouse_ids else None
-    rows = db.query(models.StockBalance).all()
-    agg = {}
-    for r in rows:
-        if wanted is not None and r.warehouse_id not in wanted:
-            continue
-        qty = float(r.qty or 0)
-        a = agg.setdefault(r.warehouse_id, {"qty": 0.0, "value": 0.0, "items": 0})
-        a["qty"] += qty
-        a["value"] += qty * float(r.avg_cost or 0)
-        if qty > TOLERANCE:
-            a["items"] += 1
+    # Summed per warehouse by the database: one row per building instead of
+    # every balance row in the company loaded as an object (hundreds of
+    # thousands of them on a real catalogue) to be added up here.
+    B = models.StockBalance
+    q = db.query(B.warehouse_id,
+                 func.sum(func.coalesce(B.qty, 0)),
+                 func.sum(func.coalesce(B.qty, 0) * func.coalesce(B.avg_cost, 0)),
+                 func.sum(case((func.coalesce(B.qty, 0) > TOLERANCE, 1), else_=0)))
+    if wanted is not None:
+        q = q.filter(B.warehouse_id.in_(list(wanted)))
+    agg = {wid: {"qty": float(qty or 0), "value": float(value or 0), "items": int(items or 0)}
+           for wid, qty, value, items in q.group_by(B.warehouse_id).all()}
 
     # Built from the SAME serialiser every other warehouse payload uses, rather
     # than hand-rolled here. Hand-rolling is what made the dashboard's "Trades
@@ -406,7 +408,9 @@ def warehouse_totals(db: Session, warehouse_ids=None) -> list:
 
 def stock_at(db: Session, warehouse_id, limit=None) -> list:
     """Every product standing in one warehouse, most valuable first."""
+    # each balance's product loaded with it, not one query per row
     rows = (db.query(models.StockBalance)
+              .options(joinedload(models.StockBalance.product))
               .filter(models.StockBalance.warehouse_id == warehouse_id,
                       models.StockBalance.qty > TOLERANCE).all())
     out = []
@@ -486,6 +490,24 @@ def transfer_summary(db: Session, since=None, warehouse_id=None) -> dict:
         rows = [o for o in rows
                 if warehouse_id in (o.from_warehouse_id, o.to_warehouse_id)]
 
+    # The line totals every note needs, in ONE grouped query. Reading
+    # `o.total_qty` / `o.total_accepted` loads each note's lines separately —
+    # one query per note, 17,000 of them on a real register — for two sums the
+    # database can give for all of them at once. Same arithmetic as the model's
+    # properties: sent = Σ qty; accepted = Σ (accepted_qty, else qty).
+    L = models.StockOutwardLine
+    line_sums = {oid: (float(sent or 0), float(acc or 0)) for oid, sent, acc in
+                 db.query(L.outward_id, func.sum(L.qty),
+                          func.sum(func.coalesce(L.accepted_qty, L.qty)))
+                   .group_by(L.outward_id).all()}
+
+    def sent_of(o):
+        return line_sums.get(o.id, (0.0, 0.0))[0]
+
+    def accepted_of(o):
+        # StockOutward.total_accepted: nothing is accepted until it is received
+        return line_sums.get(o.id, (0.0, 0.0))[1] if o.status == "received" else 0.0
+
     per = {}
 
     def slot(wid):
@@ -497,7 +519,7 @@ def transfer_summary(db: Session, since=None, warehouse_id=None) -> dict:
     totals = {"transfers": 0, "to_store": 0, "dispatch": 0,
               "qty_moved": 0.0, "in_transit": 0.0}
     for o in rows:
-        qty = float(o.total_qty or 0)
+        qty = sent_of(o)
         kind = ("transfer" if o.to_warehouse_id
                 else "store" if o.to_store_id else "dispatch")
         totals[{"transfer": "transfers", "store": "to_store",
@@ -515,7 +537,7 @@ def transfer_summary(db: Session, since=None, warehouse_id=None) -> dict:
         if kind == "transfer":
             b = slot(o.to_warehouse_id)
             if o.status == "received":
-                b["received"] += float(o.total_accepted or 0)
+                b["received"] += accepted_of(o)
             else:
                 # dispatched and not yet accepted — standing in neither building
                 b["in_transit"] += qty

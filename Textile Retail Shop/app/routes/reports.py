@@ -6,6 +6,8 @@ from flask_login import login_required
 from datetime import datetime, date, timedelta
 from sqlalchemy import func
 from app import db
+from app.paging import paged
+from app.datefilter import day_from, day_to
 from app.models import (Company, Counter, Customer, Invoice, InvoiceItem,
                         Location, Product)
 from app.utils import role_required
@@ -72,8 +74,8 @@ def index():
     start, end = parse_range()
     where, chosen = parse_places()
     q = db.session.query(Invoice).filter(
-        Invoice.live(), func.date(Invoice.invoice_date) >= start,
-        func.date(Invoice.invoice_date) <= end,
+        Invoice.live(), day_from(Invoice.invoice_date, start),
+        day_to(Invoice.invoice_date, end),
         *where,
     )
     invoices = q.all()
@@ -108,8 +110,8 @@ def index():
     ).join(InvoiceItem, InvoiceItem.product_id == Product.id
     ).join(Invoice, Invoice.id == InvoiceItem.invoice_id
     ).filter(
-        Invoice.live(), func.date(Invoice.invoice_date) >= start,
-        func.date(Invoice.invoice_date) <= end,
+        Invoice.live(), day_from(Invoice.invoice_date, start),
+        day_to(Invoice.invoice_date, end),
         *where,
     ).group_by(Product.id).order_by(func.sum(InvoiceItem.line_total + InvoiceItem.tax_amount).desc()).limit(10).all()
 
@@ -145,8 +147,8 @@ def index():
         Customer.name, func.count(Invoice.id), func.sum(Invoice.total)
     ).join(Invoice, Invoice.customer_id == Customer.id
     ).filter(
-        Invoice.live(), func.date(Invoice.invoice_date) >= start,
-        func.date(Invoice.invoice_date) <= end,
+        Invoice.live(), day_from(Invoice.invoice_date, start),
+        day_to(Invoice.invoice_date, end),
         *where,
     ).group_by(Customer.id).order_by(func.sum(Invoice.total).desc()).limit(10).all()
 
@@ -158,8 +160,8 @@ def index():
                                  func.count(Invoice.id),
                                  func.coalesce(func.sum(Invoice.total), 0))
                 .join(join_model, join_on)
-                .filter(Invoice.live(), func.date(Invoice.invoice_date) >= start,
-                        func.date(Invoice.invoice_date) <= end, *where)
+                .filter(Invoice.live(), day_from(Invoice.invoice_date, start),
+                        day_to(Invoice.invoice_date, end), *where)
                 .group_by(label_col)
                 .order_by(func.coalesce(func.sum(Invoice.total), 0).desc()).all())
 
@@ -174,8 +176,8 @@ def index():
                                      func.count(Invoice.id),
                                      func.coalesce(func.sum(Invoice.total), 0))
                     .join(Location, Location.id == Invoice.location_id)
-                    .filter(Invoice.live(), func.date(Invoice.invoice_date) >= start,
-                            func.date(Invoice.invoice_date) <= end, *where)
+                    .filter(Invoice.live(), day_from(Invoice.invoice_date, start),
+                            day_to(Invoice.invoice_date, end), *where)
                     .group_by(func.date(Invoice.invoice_date), Location.name)
                     .order_by(func.date(Invoice.invoice_date).desc(),
                               func.coalesce(func.sum(Invoice.total), 0).desc()).all())
@@ -266,10 +268,12 @@ def report(key):
 @login_required
 @role_required("admin", "manager")
 def low_stock():
-    items = Product.query.filter(
+    # a page at a time — after the migration nearly the whole catalogue sits at
+    # or under its reorder level (411K rows, 114 MB of page)
+    page = paged(Product.query.filter(
         Product.stock_qty <= Product.reorder_level, Product.active == True
-    ).order_by(Product.stock_qty).all()
-    return render_template("reports/low_stock.html", items=items)
+    ).order_by(Product.stock_qty, Product.id))
+    return render_template("reports/low_stock.html", items=page.items, page=page)
 
 
 # ---------- Ask a question ----------

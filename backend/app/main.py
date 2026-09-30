@@ -14,7 +14,7 @@ from . import models  # noqa: F401  (register tables)
 from .routers import (documents, suppliers, purchases, purchase_orders,
                       inventory, outward, pricing, stock_audit, physical_audit,
                       payments, returns, reports, settings, auth, masters, lr,
-                      bundles, dashboard, master_data, labels, dead_stock,
+                      bundles, dashboard, search, master_data, labels, dead_stock,
                       notifications, voice, users, locations, catalogues,
                       command, audit)
 from .extraction.engine import provider_status
@@ -528,7 +528,7 @@ def _boot_wanted() -> bool:
 # viewable (the image route takes ?page=), a merge refuses rather than destroys
 # when a page's file is gone, and a failed reading says which of the two things
 # went wrong instead of always claiming it fell back to OCR.
-app = FastAPI(title="Essa Document Intake", version="0.2.0",
+app = FastAPI(title="Warexx", version="0.2.0",
               description="Trainable invoice-to-data extraction for Essa Garments")
 
 # ---- who may call what ----
@@ -542,6 +542,17 @@ app = FastAPI(title="Essa Document Intake", version="0.2.0",
 # preflight OPTIONS is answered by CORS before it ever reaches an auth check it
 # carries no token to pass.
 app.middleware("http")(auth_middleware)
+
+# Within one GET, an expensive read asked for twice is computed once (see
+# request_memo.py). Its position does not matter: the contextvar it sets is
+# copied into every task and threadpool call the request makes.
+from .request_memo import RequestMemoMiddleware
+app.add_middleware(RequestMemoMiddleware)
+
+# Request / SQL timing, registered only when ESSA_PERF_LOG is set (see perf.py).
+# Added after auth so it sits outside it and times the whole request.
+from . import perf as _perf
+_perf.install(app, engine)
 
 
 @app.exception_handler(OperationalError)
@@ -605,6 +616,7 @@ app.include_router(master_data.router)
 app.include_router(lr.router)
 app.include_router(bundles.router)
 app.include_router(dashboard.router)
+app.include_router(search.router)
 app.include_router(labels.router)
 app.include_router(dead_stock.router)
 app.include_router(notifications.router)
@@ -635,6 +647,49 @@ app.include_router(audit.router)
 _pos_error = None
 _pos_app = None
 _pos_loaded = False
+
+
+@app.on_event("startup")
+def _preload_pos():
+    """On a long-lived process, build the shop BEFORE the first request.
+
+    Loading the shop swaps `sys.modules["app"]` to the shop's package for as long
+    as its syncs run (see pos_mount.load_pos_app), and every warehouse request
+    that does a function-level import in that window fails with "No module named
+    app.services". With a demo catalogue the window is a second; with a real one
+    (hundreds of thousands of products to sync) it is a minute, and the
+    inventory list, the dashboard and the rest fail for whoever is using them.
+
+    Done here, the swap happens while the server is not yet answering anything.
+    Serverless keeps the deferred build (_boot_wanted says no), because there the
+    cold-start cost this deferral exists for is the thing that matters.
+    """
+    if _boot_wanted():
+        _pos_asgi()
+
+
+@app.on_event("startup")
+def _start_search_sync():
+    """Keep the Elasticsearch read index in step with PostgreSQL (app/search).
+
+    Registered after _preload_pos, so it starts once the shop is loaded.
+    A background thread on a long-lived server only — serverless instances
+    start constantly and never read the index. Off unless ELASTICSEARCH_ENABLED
+    is set; failing to start it changes nothing, reads use PostgreSQL."""
+    if _boot_wanted():
+        try:
+            from .search import sync as search_sync
+            search_sync.start_background()
+        except Exception:                                  # noqa: BLE001 — optional layer
+            import logging
+            logging.getLogger("uvicorn.error").warning("search sync did not start", exc_info=True)
+        # the till's slowest facts, read now in the background so the first
+        # dashboard after a start finds them ready (services/pos_sales)
+        try:
+            from .services import pos_sales
+            pos_sales.warm_till()
+        except Exception:                                  # noqa: BLE001 — the first read computes
+            pass
 
 
 def _pos_asgi():

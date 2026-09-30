@@ -28,9 +28,10 @@ from sqlalchemy.orm import selectinload
 # `from app import …` run at request time would reach the warehouse's own `app`
 # (test_mounted.py holds this).
 from app import db, drawer, reports_lib, vouchers
+from app.datefilter import day_from, day_to
 from app import warehouse_items as wi
 from app.models import (Attendance, Category, Company, Counter, Coupon,
-                        CouponRedemption, CreditNote, Customer, CustomerAdvance,
+                        CouponRedemption, CreditNote, CreditNoteItem, Customer, CustomerAdvance,
                         CustomerFeedback, Delivery, DrawerSession, Invoice,
                         InvoiceItem, InvoicePayment, Location, LocationStock,
                         LoyaltyTxn, Product, PromotionApplication, PromotionScheme,
@@ -74,8 +75,8 @@ class Ctx:
 
     def bills(self, *options):
         q = Invoice.query.filter(Invoice.live(),
-                                 func.date(Invoice.invoice_date) >= self.start,
-                                 func.date(Invoice.invoice_date) <= self.end)
+                                 day_from(Invoice.invoice_date, self.start),
+                                 day_to(Invoice.invoice_date, self.end))
         q = self._place(q, Invoice)
         if self.b2b:
             q = q.filter(Invoice.customer_id.in_(_registered_ids()))
@@ -88,8 +89,8 @@ class Ctx:
         q = (db.session.query(InvoiceItem, Invoice)
              .join(Invoice, Invoice.id == InvoiceItem.invoice_id)
              .filter(Invoice.live(),
-                     func.date(Invoice.invoice_date) >= self.start,
-                     func.date(Invoice.invoice_date) <= self.end))
+                     day_from(Invoice.invoice_date, self.start),
+                     day_to(Invoice.invoice_date, self.end)))
         q = self._place(q, Invoice)
         if self.b2b:
             q = q.filter(Invoice.customer_id.in_(_registered_ids()))
@@ -98,8 +99,8 @@ class Ctx:
     def credit_notes(self):
         """Credit notes RAISED in the period, placed by the bill they reverse."""
         q = (CreditNote.query.join(Invoice, Invoice.id == CreditNote.invoice_id)
-             .filter(func.date(CreditNote.created_at) >= self.start,
-                     func.date(CreditNote.created_at) <= self.end))
+             .filter(day_from(CreditNote.created_at, self.start),
+                     day_to(CreditNote.created_at, self.end)))
         q = self._place(q, Invoice)
         if self.b2b:
             q = q.filter(Invoice.customer_id.in_(_registered_ids()))
@@ -475,8 +476,8 @@ SESSION_COLS = ["Cart", "Created", "Salesperson", "Customer", "Lines", "Qty",
 
 
 def _sessions(ctx, statuses, billed=None):
-    q = SaleSession.query.filter(func.date(SaleSession.created_at) >= ctx.start,
-                                 func.date(SaleSession.created_at) <= ctx.end,
+    q = SaleSession.query.filter(day_from(SaleSession.created_at, ctx.start),
+                                 day_to(SaleSession.created_at, ctx.end),
                                  SaleSession.status.in_(statuses))
     if billed is True:
         q = q.filter(SaleSession.invoice_id.isnot(None))
@@ -503,8 +504,8 @@ def estimate_bills(ctx):
 
 
 def delivery_report(ctx):
-    q = Delivery.query.filter(func.date(Delivery.created_at) >= ctx.start,
-                              func.date(Delivery.created_at) <= ctx.end)
+    q = Delivery.query.filter(day_from(Delivery.created_at, ctx.start),
+                              day_to(Delivery.created_at, ctx.end))
     q = ctx._place(q, Delivery)
     rows = []
     for dlv in q.options(selectinload(Delivery.lines), selectinload(Delivery.bills))\
@@ -529,8 +530,8 @@ def sales_snapshot(ctx):
     qty = sum(i.total_qty for i in bills)
     back = _m(sum(n.total or 0 for n in ctx.credit_notes().all()))
     walkins = sum(1 for i in bills if not i.customer_id)
-    new_customers = Customer.query.filter(func.date(Customer.created_at) >= ctx.start,
-                                          func.date(Customer.created_at) <= ctx.end).count()
+    new_customers = Customer.query.filter(day_from(Customer.created_at, ctx.start),
+                                          day_to(Customer.created_at, ctx.end)).count()
     cats, items, days = {}, {}, {}
     for inv in bills:
         days[inv.invoice_date.date()] = days.get(inv.invoice_date.date(), 0) + (inv.total or 0)
@@ -660,24 +661,30 @@ def sales_purchase_stock(ctx):
     def row(p):
         cat = p.category.name if p and p.category else "Uncategorised"
         return agg.setdefault(cat, [cat, 0.0, 0.0, 0.0, 0.0])
-    received = (db.session.query(TransferReceipt)
-                .filter(func.date(TransferReceipt.applied_at) >= ctx.start,
-                        func.date(TransferReceipt.applied_at) <= ctx.end))
+    # each row's product and its category are read below; loaded with the rows
+    # rather than one query per row
+    _cat = lambda rel: selectinload(rel).selectinload(Product.category)  # noqa: E731
+    received = (db.session.query(TransferReceipt).options(_cat(TransferReceipt.product))
+                .filter(day_from(TransferReceipt.applied_at, ctx.start),
+                        day_to(TransferReceipt.applied_at, ctx.end)))
     if ctx.location:
         received = received.filter(TransferReceipt.location_id == ctx.location)
     for r in received.all():
         row(r.product)[1] += r.qty or 0
-    for m in (StockMovement.query.filter(StockMovement.change > 0,
+    for m in (StockMovement.query.options(_cat(StockMovement.product))
+              .filter(StockMovement.change > 0,
                                          StockMovement.reason.in_(("opening", "purchase")),
-                                         func.date(StockMovement.created_at) >= ctx.start,
-                                         func.date(StockMovement.created_at) <= ctx.end).all()):
+                                         day_from(StockMovement.created_at, ctx.start),
+                                         day_to(StockMovement.created_at, ctx.end)).all()):
         row(m.product)[1] += m.change or 0
-    for item, inv in ctx.lines().all():
+    for item, inv in ctx.lines().options(_cat(InvoiceItem.product)).all():
         row(item.product)[2] += item.quantity or 0
-    for note in ctx.credit_notes().options(selectinload(CreditNote.items)).all():
+    for note in ctx.credit_notes().options(
+            selectinload(CreditNote.items).selectinload(CreditNoteItem.product)
+            .selectinload(Product.category)).all():
         for ci in note.items:
             row(ci.product)[3] += ci.quantity or 0
-    for p in Product.query.filter(Product.active.is_(True)).all():
+    for p in Product.query.options(selectinload(Product.category)).filter(Product.active.is_(True)).all():
         row(p)[4] += p.stock_qty or 0
     rows = [[c, _q(r), _q(s), _q(b), _q(st)] for c, r, s, b, st in agg.values()
             if r or s or b or st]
@@ -773,9 +780,12 @@ def stock_aging(ctx):
 
 def direct_stock(ctx):
     rows = []
-    for m in (StockMovement.query.filter(StockMovement.reason.in_(("opening", "adjustment", "purchase")),
-                                         func.date(StockMovement.created_at) >= ctx.start,
-                                         func.date(StockMovement.created_at) <= ctx.end)
+    # the product of every movement is read below — loaded with the rows, not
+    # one query per movement (a month of opening stock is tens of thousands)
+    for m in (StockMovement.query.options(selectinload(StockMovement.product))
+              .filter(StockMovement.reason.in_(("opening", "adjustment", "purchase")),
+                                         day_from(StockMovement.created_at, ctx.start),
+                                         day_to(StockMovement.created_at, ctx.end))
               .order_by(StockMovement.created_at).all()):
         p = m.product
         rows.append([_dt(m.created_at), p.sku if p else "—", p.name if p else "—",
@@ -1000,8 +1010,8 @@ def credit_collection(ctx):
     q = (db.session.query(InvoicePayment, Invoice)
          .join(Invoice, Invoice.id == InvoicePayment.invoice_id)
          .filter(Invoice.live(),
-                 func.date(InvoicePayment.created_at) >= ctx.start,
-                 func.date(InvoicePayment.created_at) <= ctx.end,
+                 day_from(InvoicePayment.created_at, ctx.start),
+                 day_to(InvoicePayment.created_at, ctx.end),
                  func.date(InvoicePayment.created_at) > func.date(Invoice.invoice_date)))
     q = ctx._place(q, Invoice)
     for pay, inv in q.order_by(InvoicePayment.created_at).all():
@@ -1257,8 +1267,8 @@ def incentive_employees(ctx):
 def employee_detail(ctx):
     present = dict(db.session.query(Attendance.user_id,
                                     func.count(func.distinct(func.date(Attendance.check_in))))
-                   .filter(func.date(Attendance.check_in) >= ctx.start,
-                           func.date(Attendance.check_in) <= ctx.end)
+                   .filter(day_from(Attendance.check_in, ctx.start),
+                           day_to(Attendance.check_in, ctx.end))
                    .group_by(Attendance.user_id).all())
     rows = []
     for u in User.query.order_by(User.full_name).all():
@@ -1278,7 +1288,7 @@ def employee_detail(ctx):
 # ===========================================================================
 def credit_outstanding(ctx):
     agg = OrderedDict()
-    q = Invoice.query.filter(Invoice.live(), func.date(Invoice.invoice_date) <= ctx.end,
+    q = Invoice.query.filter(Invoice.live(), day_to(Invoice.invoice_date, ctx.end),
                              Invoice.customer_id.isnot(None))
     q = ctx._place(q, Invoice).options(selectinload(Invoice.payments))
     for inv in q.order_by(Invoice.invoice_date).all():
@@ -1319,8 +1329,8 @@ def loyalty_consumption(ctx):
     value = float(current_app.config.get("LOYALTY_POINT_VALUE", 1.0) or 1.0)
     rows = []
     for t in (LoyaltyTxn.query.filter(LoyaltyTxn.points < 0,
-                                      func.date(LoyaltyTxn.created_at) >= ctx.start,
-                                      func.date(LoyaltyTxn.created_at) <= ctx.end)
+                                      day_from(LoyaltyTxn.created_at, ctx.start),
+                                      day_to(LoyaltyTxn.created_at, ctx.end))
               .order_by(LoyaltyTxn.created_at).all()):
         c = db.session.get(Customer, t.customer_id)
         inv = db.session.get(Invoice, t.invoice_id) if t.invoice_id else None
@@ -1344,8 +1354,8 @@ def my_customers(ctx):
     period = dict((cid, (n, t)) for cid, n, t in
                   db.session.query(Invoice.customer_id, func.count(Invoice.id),
                                    func.sum(Invoice.total))
-                  .filter(Invoice.live(), func.date(Invoice.invoice_date) >= ctx.start,
-                          func.date(Invoice.invoice_date) <= ctx.end,
+                  .filter(Invoice.live(), day_from(Invoice.invoice_date, ctx.start),
+                          day_to(Invoice.invoice_date, ctx.end),
                           Invoice.customer_id.isnot(None))
                   .group_by(Invoice.customer_id).all())
     life = dict((cid, (n, last)) for cid, n, last in
@@ -1400,8 +1410,8 @@ def scheme_details(ctx):
                                  func.count(func.distinct(PromotionApplication.invoice_id)),
                                  func.sum(PromotionApplication.benefit_value))
                 .join(Invoice, Invoice.id == PromotionApplication.invoice_id)
-                .filter(Invoice.live(), func.date(Invoice.invoice_date) >= ctx.start,
-                        func.date(Invoice.invoice_date) <= ctx.end)
+                .filter(Invoice.live(), day_from(Invoice.invoice_date, ctx.start),
+                        day_to(Invoice.invoice_date, ctx.end))
                 .group_by(PromotionApplication.scheme_id).all())
     rows = []
     for s in PromotionScheme.query.order_by(PromotionScheme.priority, PromotionScheme.code).all():
@@ -1452,8 +1462,8 @@ def margin_target(ctx):
 # ===========================================================================
 def sales_cancelled(ctx):
     q = Invoice.query.filter(Invoice.payment_status == "cancelled",
-                             func.date(Invoice.invoice_date) >= ctx.start,
-                             func.date(Invoice.invoice_date) <= ctx.end)
+                             day_from(Invoice.invoice_date, ctx.start),
+                             day_to(Invoice.invoice_date, ctx.end))
     q = ctx._place(q, Invoice).options(selectinload(Invoice.items))
     rows = []
     for inv in q.order_by(Invoice.invoice_date, Invoice.id).all():
@@ -1471,8 +1481,8 @@ def sales_cancelled(ctx):
 
 
 def customer_advance(ctx):
-    q = CustomerAdvance.query.filter(func.date(CustomerAdvance.created_at) >= ctx.start,
-                                     func.date(CustomerAdvance.created_at) <= ctx.end)
+    q = CustomerAdvance.query.filter(day_from(CustomerAdvance.created_at, ctx.start),
+                                     day_to(CustomerAdvance.created_at, ctx.end))
     rows = []
     for a in ctx._place(q, CustomerAdvance).order_by(CustomerAdvance.created_at).all():
         used = vouchers.advance_used(a)
@@ -1489,8 +1499,8 @@ def customer_advance(ctx):
 
 
 def opening_closing(ctx):
-    q = DrawerSession.query.filter(func.date(DrawerSession.opened_at) >= ctx.start,
-                                   func.date(DrawerSession.opened_at) <= ctx.end)
+    q = DrawerSession.query.filter(day_from(DrawerSession.opened_at, ctx.start),
+                                   day_to(DrawerSession.opened_at, ctx.end))
     rows = []
     for s in ctx._place(q, DrawerSession).order_by(DrawerSession.opened_at).all():
         expected = s.expected_cash if s.closed_at else drawer.breakdown(s)[0]
@@ -1538,8 +1548,8 @@ def _coupon_row_status(cp):
 def settlement_coupon_issue(ctx):
     q = (db.session.query(Coupon, Invoice).join(Invoice, Invoice.id == Coupon.issued_invoice_id)
          .filter(Coupon.issued_via == "settlement",
-                 func.date(Invoice.invoice_date) >= ctx.start,
-                 func.date(Invoice.invoice_date) <= ctx.end))
+                 day_from(Invoice.invoice_date, ctx.start),
+                 day_to(Invoice.invoice_date, ctx.end)))
     rows = []
     for cp, inv in ctx._place(q, Invoice).order_by(Invoice.invoice_date, Coupon.id).all():
         rows.append([cp.code, cp.campaign.name, cp.campaign.describe, inv.invoice_number,
@@ -1555,8 +1565,8 @@ def settlement_coupon_issue(ctx):
 
 def coupon_issue(ctx):
     rows = []
-    for cp in (Coupon.query.filter(func.date(Coupon.created_at) >= ctx.start,
-                                   func.date(Coupon.created_at) <= ctx.end)
+    for cp in (Coupon.query.filter(day_from(Coupon.created_at, ctx.start),
+                                   day_to(Coupon.created_at, ctx.end))
                .order_by(Coupon.created_at, Coupon.id).all()):
         rows.append([cp.code, cp.campaign.name, cp.campaign.describe, _d(cp.created_at),
                      "At settlement" if cp.issued_via == "settlement" else "By hand",
@@ -1574,8 +1584,8 @@ def coupon_consumption(ctx):
     q = (db.session.query(CouponRedemption, Invoice)
          .join(Invoice, Invoice.id == CouponRedemption.invoice_id)
          .filter(CouponRedemption.voided_at.is_(None), Invoice.live(),
-                 func.date(Invoice.invoice_date) >= ctx.start,
-                 func.date(Invoice.invoice_date) <= ctx.end))
+                 day_from(Invoice.invoice_date, ctx.start),
+                 day_to(Invoice.invoice_date, ctx.end)))
     rows = []
     for r, inv in ctx._place(q, Invoice).order_by(Invoice.invoice_date, Invoice.id).all():
         cp = r.coupon
@@ -1594,8 +1604,8 @@ def gv_cn_consumption(ctx):
     q = (db.session.query(InvoicePayment, Invoice)
          .join(Invoice, Invoice.id == InvoicePayment.invoice_id)
          .filter(InvoicePayment.method == "credit_note", Invoice.live(),
-                 func.date(Invoice.invoice_date) >= ctx.start,
-                 func.date(Invoice.invoice_date) <= ctx.end))
+                 day_from(Invoice.invoice_date, ctx.start),
+                 day_to(Invoice.invoice_date, ctx.end)))
     pairs = ctx._place(q, Invoice).order_by(Invoice.invoice_date, InvoicePayment.id).all()
     numbers = {p.reference for p, _ in pairs if p.reference}
     notes = ({n.number: n for n in CreditNote.query.filter(CreditNote.number.in_(numbers)).all()}
@@ -1631,8 +1641,8 @@ def _wishes(ctx, kind):
     field = "dob" if kind == "birthday" else "anniversary"
     queued = {}
     for m in (ScheduledMessage.query.filter(ScheduledMessage.kind == kind,
-                                            func.date(ScheduledMessage.scheduled_for) >= ctx.start,
-                                            func.date(ScheduledMessage.scheduled_for) <= ctx.end)
+                                            day_from(ScheduledMessage.scheduled_for, ctx.start),
+                                            day_to(ScheduledMessage.scheduled_for, ctx.end))
               .order_by(ScheduledMessage.id).all()):
         queued[(m.customer_id, m.scheduled_for.date())] = m.status
     found = []
@@ -1667,8 +1677,8 @@ def anniversary(ctx):
 
 def feedback(ctx):
     rows = []
-    for f in (CustomerFeedback.query.filter(func.date(CustomerFeedback.created_at) >= ctx.start,
-                                            func.date(CustomerFeedback.created_at) <= ctx.end)
+    for f in (CustomerFeedback.query.filter(day_from(CustomerFeedback.created_at, ctx.start),
+                                            day_to(CustomerFeedback.created_at, ctx.end))
               .order_by(CustomerFeedback.created_at).all()):
         rows.append([_dt(f.created_at), f.customer.name if f.customer else "—",
                      (f.customer.phone if f.customer else "") or "—",
@@ -1687,8 +1697,8 @@ def feedback(ctx):
 
 def scheduled_messages(ctx):
     rows = []
-    for m in (ScheduledMessage.query.filter(func.date(ScheduledMessage.scheduled_for) >= ctx.start,
-                                            func.date(ScheduledMessage.scheduled_for) <= ctx.end)
+    for m in (ScheduledMessage.query.filter(day_from(ScheduledMessage.scheduled_for, ctx.start),
+                                            day_to(ScheduledMessage.scheduled_for, ctx.end))
               .order_by(ScheduledMessage.scheduled_for, ScheduledMessage.id).all()):
         rows.append([_dt(m.scheduled_for), m.customer.name if m.customer else "—", m.phone or "—",
                      (m.kind or "").capitalize(), m.body, (m.status or "").capitalize(),

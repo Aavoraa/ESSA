@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional, Dict
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from ..database import get_db
+from ..fastjson import returns_json
 from .. import models
 from ..services import returns as svc
 from ..services import stock_view
@@ -85,7 +86,7 @@ def _out(r, db: Session = None, with_lines=False):
     return d
 
 
-@router.get("")
+@returns_json(router.get(""))
 def list_returns(db: Session = Depends(get_db),
                  wid: Optional[int] = Depends(scope.current)):
     """Debit notes raised against GRNs received at this warehouse.
@@ -93,6 +94,9 @@ def list_returns(db: Session = Depends(get_db),
     A return carries no warehouse of its own — it belongs to the receipt it
     reverses, and giving it a second answer would let the two disagree."""
     q = scope.returns(db.query(models.PurchaseReturn), wid)
+    # the GRN and supplier each row names, loaded with it rather than per row
+    q = q.options(joinedload(models.PurchaseReturn.supplier),
+                  joinedload(models.PurchaseReturn.purchase))
     return [_out(r) for r in q.order_by(models.PurchaseReturn.id.desc()).all()]
 
 

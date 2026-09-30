@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>Warexx</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+
+	<!-- Scene lifecycle: Apple has said apps without it will stop launching
+	     under a future SDK, so it is used from the start. -->
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+		<key>UISceneConfigurations</key>
+		<dict>
+			<key>UIWindowSceneSessionRoleApplication</key>
+			<array>
+				<dict>
+					<key>UISceneConfigurationName</key>
+					<string>Default</string>
+					<key>UISceneDelegateClassName</key>
+					<string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
+				</dict>
+			</array>
+		</dict>
+	</dict>
+	<key>UILaunchScreen</key>
+	<dict>
+		<key>UIColorName</key>
+		<string>LaunchBackground</string>
+	</dict>
+
+	<!-- Portrait on iPhone, where the screens are laid out for one hand, as on
+	     Android. Every orientation on iPad — which also lets it run in Split
+	     View and Stage Manager beside another app. -->
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+
+	<!-- What iOS shows when it asks. Apple rejects vague wording, so each says
+	     what the permission is for in this app. -->
+	<key>NSCameraUsageDescription</key>
+	<string>Warexx uses the camera to scan QR codes and barcodes on product labels and cartons, and to photograph invoices and delivery dockets.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Warexx lets you attach an invoice or docket photo that is already on this device.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Warexx connects to your warehouse server on the shop's Wi-Fi network.</string>
+
+	<!-- Plain HTTP. The warehouse server on the shop's LAN is http://<PC address>:8000
+	     and has no certificate, so ATS would refuse it. NSAllowsArbitraryLoads
+	     ALONE on purpose: if NSAllowsLocalNetworking or
+	     NSAllowsArbitraryLoadsInWebContent is also present, iOS ignores this key
+	     entirely and the LAN address stops working. Apple asks for a reason at
+	     review — see ios/README.md. If the server is only ever reached over
+	     https, delete this block. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
+
+	<!-- Only standard HTTPS/TLS — answers App Store Connect's export-compliance
+	     question so every upload does not stop to ask it. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+</dict>
+</plist>

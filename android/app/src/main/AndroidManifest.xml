@@ -15,11 +15,22 @@
         android:usesCleartextTraffic="true"
         android:networkSecurityConfig="@xml/network_security_config">
 
+        <!-- configChanges: every change the WebView can simply re-lay out for.
+             Without one, Android destroys the activity and the page reloads from
+             /m, losing whatever was half-entered. The ones that bit: `keyboard` —
+             a Bluetooth barcode scanner connects as a hardware keyboard, so
+             pairing one mid-GRN wiped the screen; `smallestScreenSize` and
+             `screenLayout` — unfolding a foldable or resizing split-screen;
+             `uiMode` — the phone switching to dark mode at sunset.
+             No screenOrientation here: phones are held to portrait in
+             MainActivity, and tablets rotate (Android 16 ignores an orientation
+             lock on large screens anyway). adjustResize keeps a field the
+             keyboard would cover scrolled into view. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:configChanges="orientation|screenSize|keyboardHidden"
-            android:screenOrientation="portrait">
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode"
+            android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

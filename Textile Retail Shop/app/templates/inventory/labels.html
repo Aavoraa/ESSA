@@ -1,6 +1,8 @@
 {% extends "base.html" %}
 {% block title %}Labels — {{ SHOP_NAME }}{% endblock %}
 {% block content %}
+{% from "_pager.html" import pager with context %}
+<div class="d-print-none">{{ pager(page) }}</div>
 <div class="page-head d-print-none">
   <h4><i class="bi bi-upc-scan"></i>
     {% if single %}Label — {{ single.name }}{% else %}QR labels ({{ products|length }}){% endif %}
@@ -67,4 +69,5 @@
     .label { border: 1px solid #999; }
   }
 </style>
+<div class="d-print-none">{{ pager(page) }}</div>
 {% endblock %}

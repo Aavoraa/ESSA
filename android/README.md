@@ -1,4 +1,4 @@
-# ESSA AI — Android app
+# Warexx — Android app
 
 The phone app is the warehouse's own `/m` screens in a WebView, with scanning done
 natively. It is a shell, not a copy: the pages come from the server every time, so

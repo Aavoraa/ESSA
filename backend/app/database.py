@@ -42,8 +42,28 @@ else:
     #
     # pre_ping because the other end may have closed a connection that this side
     # still believes in — the first query then fails on a fault nobody caused.
-    engine = create_engine(DB_URL, poolclass=NullPool, pool_pre_ping=True,
-                           connect_args={"connect_timeout": 10})
+    #
+    # A LONG-LIVED process is the opposite case, and there NullPool is pure cost:
+    # every request opened one to three brand-new connections (the auth check,
+    # the route, the shop), each paying TCP setup and password authentication —
+    # measured at ~50-150 ms apiece on the warehouse PC, on every call, however
+    # trivial. So a server that stays up (the same signal main._boot_wanted uses:
+    # not a serverless platform) keeps a small pool. ESSA_DB_POOL=null|queue
+    # overrides the choice either way.
+    _pool_choice = (os.environ.get("ESSA_DB_POOL") or "").strip().lower()
+    _serverless = bool(os.environ.get("VERCEL"))
+    if _pool_choice == "null" or (_serverless and _pool_choice != "queue"):
+        engine = create_engine(DB_URL, poolclass=NullPool, pool_pre_ping=True,
+                               connect_args={"connect_timeout": 10})
+    else:
+        # Sized to the workload rather than maximised: uvicorn runs one process
+        # whose threadpool serves the requests, a dashboard opens ~15 at once,
+        # and each holds a connection only for the duration of its session.
+        # Recycled every half hour so a connection the server dropped is never
+        # handed out stale (pre_ping catches the rest).
+        engine = create_engine(DB_URL, pool_size=10, max_overflow=20,
+                               pool_pre_ping=True, pool_recycle=1800,
+                               connect_args={"connect_timeout": 10})
 
 if IS_SQLITE:
     # SQLite ships with foreign keys OFF and must be told, per connection.

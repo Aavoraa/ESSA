@@ -160,9 +160,40 @@ def candidates(db: Session, warehouse_id, filters: dict):
     shelf has three" is exactly the finding a count exists to produce, and
     dropping those rows would hide it.
     """
+    return _narrowed(db, warehouse_id, clean_scope(filters),
+                     scope.products(db, db.query(models.Product), warehouse_id,
+                                    include_zero=True), load=True)
+
+
+def preview(db: Session, warehouse_id, filters: dict) -> dict:
+    """How much a count with these filters would cover: items, and pieces here.
+
+    The same products `candidates` picks, and the same figure per product that
+    `stock_locations.qty_at` gives (its balance at this warehouse — the company
+    total when no warehouse), added up the same way — but read as ids and one
+    set of balances instead of every product as an object and a balance query
+    each. Over a whole warehouse (~400K products) that was over a minute and a
+    half, and this is the screen's Search button."""
     filters = clean_scope(filters)
-    query = scope.products(db, db.query(models.Product), warehouse_id,
-                           include_zero=True)
+    base = scope.products(db, db.query(models.Product), warehouse_id,
+                          include_zero=True, as_subquery=True)
+    ids = _narrowed(db, warehouse_id, filters, base, load=False)
+    if warehouse_id:
+        B = models.StockBalance
+        held = {}
+        for pid, qty in (db.query(B.product_id, B.qty)
+                           .filter(B.warehouse_id == warehouse_id).order_by(B.id)):
+            held.setdefault(pid, qty)          # qty_at reads the first such row
+        qty = sum(float(held.get(pid) or 0) for pid in ids)
+    else:
+        stock = dict(db.query(models.Product.id, models.Product.stock_qty))
+        qty = sum(float(stock.get(pid) or 0) for pid in ids)
+    return {"items": len(ids), "qty": round(float(qty), 3), "filters": filters}
+
+
+def _narrowed(db: Session, warehouse_id, filters, query, load):
+    """`query` narrowed by the panel: products in grid order (`load`), or just
+    their ids in that order."""
 
     for key, column in PRODUCT_FILTERS.items():
         value = filters.get(key)
@@ -202,12 +233,17 @@ def candidates(db: Session, warehouse_id, filters: dict):
             query = query.filter((models.Product.barcode == code)
                                  | (models.Product.sku == code))
 
+    if not load:
+        query = query.with_entities(models.Product.id)
     rows = query.order_by(models.Product.description).all()
+    if not load:
+        rows = [pid for (pid,) in rows]
 
     if filters.get("location"):
         where = _location_map(db, warehouse_id)
         want = str(filters["location"]).strip().lower()
-        rows = [p for p in rows if (where.get(p.id) or "").strip().lower() == want]
+        rows = [p for p in rows
+                if (where.get(p.id if load else p) or "").strip().lower() == want]
     return rows
 
 
@@ -219,13 +255,20 @@ def filter_options(db: Session, warehouse_id) -> dict:
     on these shelves, and a list carrying every brand the company has ever bought
     makes them scroll past choices that would return nothing.
     """
-    products = scope.products(db, db.query(models.Product), warehouse_id,
-                              include_zero=True).all()
+    # Each dropdown's DISTINCT raw values from the database, then the same
+    # strip / drop-blank / sort as before — the set of stripped values is the
+    # same whether the duplicates go before or after the strip. The building's
+    # every product (~360K) used to be read into Python to find a few hundred
+    # values per column.
+    held_q = scope.products(db, db.query(models.Product), warehouse_id,
+                            include_zero=True, as_subquery=True)
+    from .distinct import distinct_values          # one scan for every column
+    distinct = distinct_values(held_q, [getattr(models.Product, c) for c in
+                                        sorted(set(PRODUCT_FILTERS.values())) + ["primary_supplier_id"]])
     out = {}
     for key, column in PRODUCT_FILTERS.items():
-        out[key] = sorted({(getattr(p, column) or "").strip() for p in products}
-                          - {""})
-    supplier_ids = {p.primary_supplier_id for p in products if p.primary_supplier_id}
+        out[key] = sorted({(v or "").strip() for v in distinct[column]} - {""})
+    supplier_ids = {v for v in distinct["primary_supplier_id"] if v}
     out["supplier"] = [
         {"id": s.id, "name": s.name} for s in db.query(models.Supplier)
         .filter(models.Supplier.id.in_(supplier_ids))
@@ -233,7 +276,8 @@ def filter_options(db: Session, warehouse_id) -> dict:
     out["company"] = [{"id": b.id, "name": b.name} for b in
                       db.query(models.Business).order_by(models.Business.name).all()]
     where = _location_map(db, warehouse_id)
-    held = {p.id for p in products}
+    # the held ids only matter when there are put-away locations to match
+    held = {pid for (pid,) in held_q.with_entities(models.Product.id)} if where else set()
     out["location"] = sorted({v for k, v in where.items() if k in held and v})
     return out
 

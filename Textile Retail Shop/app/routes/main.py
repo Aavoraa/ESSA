@@ -3,9 +3,22 @@ from flask_login import login_required, current_user
 from sqlalchemy import func
 from datetime import date, timedelta
 from app import db
+from app.datefilter import day_from, day_on
 from app.models import Product, Invoice, Customer
 
 main_bp = Blueprint("main", __name__)
+
+
+def _from(day):
+    """`date(invoice_date) >= day`, as a range the invoice_date index can answer
+    (see app/datefilter). Wrapped in date(), the column hides from the index and
+    every figure below was a full pass over the invoices table — ten per load."""
+    return day_from(Invoice.invoice_date, day)
+
+
+def _on(day):
+    """`date(invoice_date) == day`, likewise."""
+    return day_on(Invoice.invoice_date, day)
 
 
 @main_bp.route("/")
@@ -16,15 +29,15 @@ def dashboard():
     month_ago = today - timedelta(days=30)
 
     today_sales = db.session.query(func.coalesce(func.sum(Invoice.total), 0)).filter(
-        Invoice.live(), func.date(Invoice.invoice_date) == today
+        Invoice.live(), _on(today)
     ).scalar() or 0
 
     week_sales = db.session.query(func.coalesce(func.sum(Invoice.total), 0)).filter(
-        Invoice.live(), func.date(Invoice.invoice_date) >= week_ago
+        Invoice.live(), _from(week_ago)
     ).scalar() or 0
 
     month_sales = db.session.query(func.coalesce(func.sum(Invoice.total), 0)).filter(
-        Invoice.live(), func.date(Invoice.invoice_date) >= month_ago
+        Invoice.live(), _from(month_ago)
     ).scalar() or 0
 
     total_products = Product.query.filter_by(active=True).count()
@@ -41,7 +54,7 @@ def dashboard():
     for i in range(6, -1, -1):
         d = today - timedelta(days=i)
         s = db.session.query(func.coalesce(func.sum(Invoice.total), 0)).filter(
-            Invoice.live(), func.date(Invoice.invoice_date) == d
+            Invoice.live(), _on(d)
         ).scalar() or 0
         trend_labels.append(d.strftime("%b %d"))
         trend_values.append(float(s))

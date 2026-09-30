@@ -26,23 +26,190 @@ which ones those are.
 Never raises for a missing half. The shop's till database may be absent; the
 dashboard still draws from the warehouse's and says the store figures are unknown.
 """
+import contextvars
 import datetime as dt
+import logging
+import os
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 from .. import models
+from ..request_memo import memo, remember
 from . import (audit as audit_svc, business_day, dead_stock, payments as pay_svc,
                pos_insights, stock_locations as stock_loc)
 from .figures import inr, inr_short, qty as fmt_qty
+from . import pos_sales
+
+log = logging.getLogger("uvicorn.error")
 
 
 def _safe(fn, default):
     try:
         return fn()
     except Exception:                                  # noqa: BLE001 — one tile, not the screen
+        # still one tile, not the screen — but said in the log, so a tile that is
+        # quietly blank because its query broke can be found
+        log.warning("command center: a section failed and was left empty", exc_info=True)
         return default
+
+
+# ---------------------------------------------------------------------------
+#  Running the independent sections side by side
+# ---------------------------------------------------------------------------
+#  Each section below is a read, and most are independent of each other. They
+#  are run as GROUPS on a small pool of threads, each group with its OWN
+#  session: a SQLAlchemy Session is not safe to share between threads.
+#
+#  Sections that share a read stay in one group, because the request memo that
+#  lets them share it is keyed by session: dead stock and the notification rules
+#  both need the stocked products' till sales; the places table reuses the
+#  warehouse totals, the transfer summary and the day's GRNs.
+#
+#  Nothing crosses between groups but plain values — ORM rows are dropped from
+#  a group's results before they leave it (`_plain`).
+#
+#  ESSA_DASHBOARD_WORKERS bounds the threads, and bounds them PROCESS-wide (one
+#  shared pool), so two dashboards opened together cannot open twice the
+#  connections. 1 runs everything in the request's own session, in order — the
+#  behaviour before this existed. SQLite always runs that way.
+#
+#  Default 2, from measurement (essa_staging, overview median of 3): 1 worker
+#  2.2-2.5 s, 2 workers 1.7 s, 4 and 6 workers 1.7 s. What remains is mostly
+#  Python, which threads share one interpreter lock for, so more workers add
+#  connections and nothing else.
+def _worker_count():
+    from ..database import IS_SQLITE
+    if IS_SQLITE:
+        return 1
+    try:
+        n = int((os.environ.get("ESSA_DASHBOARD_WORKERS") or "").strip() or 6)
+    except ValueError:
+        n = 6
+    return max(1, min(n, 8))
+
+
+_pool = None
+_pool_lock = threading.Lock()
+
+
+def _executor(n):
+    global _pool
+    with _pool_lock:
+        if _pool is None:
+            _pool = ThreadPoolExecutor(max_workers=n, thread_name_prefix="cc-worker")
+        return _pool
+
+
+def _is_orm(v):
+    return hasattr(v, "_sa_instance_state") or (
+        isinstance(v, list) and bool(v) and hasattr(v[0], "_sa_instance_state"))
+
+
+def _plain(value):
+    """A section's result without the ORM objects in it (`rows` of GRNs, the
+    `purchase` on an outstanding bill), which belong to the session that loaded
+    them. Plain rows — dead stock's dicts — are kept; overview reads them."""
+    if isinstance(value, dict):
+        return {k: v for k, v in value.items() if not _is_orm(v)}
+    if (isinstance(value, list) and value and isinstance(value[0], dict)
+            and any(_is_orm(v) for v in value[0].values())):
+        return [{k: v for k, v in row.items() if not _is_orm(v)} for row in value]
+    return value
+
+
+def _run_group(group, db=None):
+    """Run one group's sections in order in one session: `db`, or a new one."""
+    from ..database import SessionLocal
+    own = db is None
+    session = SessionLocal() if own else db
+    out, timings = {}, []
+    try:
+        for name, fn, default in group:
+            t = time.perf_counter()
+            if own:
+                try:
+                    value = _plain(fn(session))
+                except Exception:                      # noqa: BLE001 — as _safe
+                    log.warning("command center: section %s failed and was left empty",
+                                name, exc_info=True)
+                    value = default
+                    session.rollback()                 # the next section starts clean
+            else:
+                value = _safe(lambda: fn(session), default)
+            out[name] = value
+            timings.append((name, time.perf_counter() - t))
+    finally:
+        if own:
+            session.close()
+    # the (closed) session goes back to the caller and is kept referenced for the
+    # rest of the request: memo keys carry id(session), and a freed id could be
+    # handed to a later session in the same request and match a stale entry
+    return out, timings, session
+
+
+def warm_groups():
+    """The two slowest reads every dashboard needs — the till's sales for the
+    stocked products and the till's status — started first and side by side,
+    so the sections that need them find them done (or in progress) instead of
+    running them one after the other. They return nothing of their own."""
+    from . import pos_sales
+    return [[("_warm_sales", lambda s: (pos_sales.sales_of_stocked(), None)[1], None)],
+            [("_warm_status", lambda s: (pos_sales.status(), None)[1], None)]]
+
+
+def _run_groups(groups, db):
+    """Every group's sections → {name: value}. Parallel when workers > 1."""
+    from .. import perf
+    n = _worker_count()
+    t0 = time.perf_counter()
+    results, timings = {}, []
+    if n <= 1:
+        for g in groups:
+            out, tm, _ = _run_group(g, db)
+            results.update(out)
+            timings += tm
+    else:
+        pool = _executor(n)
+        # each task runs in a copy of the request's context, so the request memo
+        # (and the perf counters) are the request's own
+        futures = [pool.submit(contextvars.copy_context().run, _run_group, g) for g in groups]
+        sessions = []
+        for f in futures:
+            out, tm, s = f.result()
+            results.update(out)
+            timings += tm
+            sessions.append(s)
+        remember(("command_center.worker_sessions", time.perf_counter_ns()), sessions)
+    if perf.ENABLED:
+        slow = sorted(timings, key=lambda x: -x[1])[:8]
+        log.info("PERF command overview sections: %.2fs wall, %d worker(s) — %s",
+                 time.perf_counter() - t0, n,
+                 " | ".join(f"{name} {secs:.2f}s" for name, secs in slow))
+    return results
 
 
 def _in_allowed(q, col, allowed):
     return q.filter(col.in_(list(allowed))) if allowed else q
+
+
+# The screen's sections are built independently and several ask for the same
+# read: the warehouse totals for the tiles, the places table and its picker; the
+# transfer summary for the tiles and the places table; today's GRNs for the
+# tiles and the places table. Within one request those are one read each (see
+# request_memo — GET only, never beyond the request). Kept local to this module
+# so no other caller of stock_locations changes behaviour.
+def _ids_key(ids):
+    return tuple(sorted(int(i) for i in ids)) if ids is not None else None
+
+
+def _warehouse_totals(db, warehouse_ids=None):
+    return memo(("cc.warehouse_totals", id(db), _ids_key(warehouse_ids)),
+                lambda: stock_loc.warehouse_totals(db, warehouse_ids=warehouse_ids))
+
+
+def _transfer_summary(db):
+    return memo(("cc.transfer_summary", id(db)), lambda: stock_loc.transfer_summary(db))
 
 
 # ---------------------------------------------------------------------------
@@ -67,6 +234,11 @@ def counts(db, allowed=None, with_users=True):
 #  The warehouse's own flows over a UTC window
 # ---------------------------------------------------------------------------
 def purchases_between(db, start, end, allowed=None, warehouse_id=None):
+    return memo(("cc.purchases_between", id(db), start, end, _ids_key(allowed), warehouse_id),
+                lambda: _purchases_between(db, start, end, allowed, warehouse_id))
+
+
+def _purchases_between(db, start, end, allowed=None, warehouse_id=None):
     q = (db.query(models.Purchase)
            .filter(models.Purchase.status == "posted",
                    models.Purchase.posted_at >= start, models.Purchase.posted_at < end))
@@ -156,12 +328,24 @@ def outstanding(db, supplier_name=None):
                       .filter(models.PurchaseReturn.status == "posted")
                       .group_by(models.PurchaseReturn.purchase_id).all())
     out = []
-    for p in db.query(models.Purchase).filter(models.Purchase.status == "posted").all():
+    from sqlalchemy import select
+    # Only the columns read here and by the callers (id, total, date, supplier
+    # name), as plain rows: building an ORM object for every posted GRN was most
+    # of the cost. The same statement the ORM form issued — same columns, same
+    # outer join — so the same rows in the same order. `purchase` is that row:
+    # .id, .supplier_id, .invoice_date, .grand_total, as before.
+    P = models.Purchase
+    sup = models.Supplier.__table__.alias("suppliers_1")
+    for p in db.execute(
+            select(P.id, P.supplier_id, P.invoice_date, P.grand_total,
+                   sup.c.id.label("id_1"), sup.c.name)
+            .select_from(P.__table__.outerjoin(sup, sup.c.id == P.supplier_id))
+            .where(P.status == "posted")):
         owed = round(float(p.grand_total or 0) - float(settled.get(p.id) or 0)
                      - float(returned.get(p.id) or 0), 2)
         if owed <= 0.01:
             continue
-        name = p.supplier.name if p.supplier else "(no supplier)"
+        name = p.name if p.id_1 is not None else "(no supplier)"
         if supplier_name and supplier_name.lower() not in name.lower():
             continue
         d = pay_svc._parse_date(p.invoice_date)
@@ -239,10 +423,12 @@ _NOTICE_TAB = {"documents": "documents", "purchases": "purchases", "lr": "lr",
                "inward": "inward", "deadstock": "deadstock", "inventory": "inventory"}
 
 
-def alerts(db, day, allowed=None, at=None, k=None):
+def alerts(db, day, allowed=None, at=None, k=None, notices=None):
+    """`notices`, when given, is `_notices()` already read — the overview reads it
+    beside dead stock, which it shares the stocked products' till sales with."""
     start, end = business_day.bounds(day)
     out = []
-    for n in _safe(lambda: _notices(db), []):
+    for n in (notices if notices is not None else _safe(lambda: _notices(db), [])):
         if n.get("level") in ("critical", "warn"):
             out.append({"level": n["level"], "title": n["title"], "body": n.get("body") or "",
                         "tab": _NOTICE_TAB.get(n.get("module") or "", None),
@@ -327,7 +513,7 @@ def places(db, day, scope_ids=None, at=None, allotted=None):
         b["grns"] += 1
         b["value"] = round(b["value"] + float(p.grand_total or 0), 2)
     transit = {w["warehouse_id"]: w for w in
-               stock_loc.transfer_summary(db)["warehouses"]}
+               _transfer_summary(db)["warehouses"]}
 
     stores, by_wh = [], {}
     for s in loc_svc.store_rows(db):
@@ -351,7 +537,7 @@ def places(db, day, scope_ids=None, at=None, allotted=None):
     stores.sort(key=lambda r: -r["sales"])
 
     warehouses = []
-    for r in stock_loc.warehouse_totals(db, warehouse_ids=scope_ids):
+    for r in _warehouse_totals(db, warehouse_ids=scope_ids):
         wid = r["warehouse_id"]
         s = by_wh.get(wid, {})
         b = bought.get(wid, {})
@@ -371,7 +557,7 @@ def places(db, day, scope_ids=None, at=None, allotted=None):
     # being shown — scoping a screen to Erode must not remove the way back to
     # Karur. The same rule the Central Dashboard's warehouse table follows.
     picker = [{"warehouse_id": r["warehouse_id"], "name": r["name"], "code": r["code"]}
-              for r in stock_loc.warehouse_totals(db, warehouse_ids=allotted)]
+              for r in _warehouse_totals(db, warehouse_ids=allotted)]
     return {"warehouses": warehouses, "stores": stores, "counters": counters,
             "cashiers": cash, "picker": sorted(picker, key=lambda r: r["name"] or "")}
 
@@ -389,24 +575,49 @@ def overview(db, allowed=None, day=None, with_users=True, warehouse_id=None):
     at = {"location_ids": loc_ids} if loc_ids is not None else None
     pos_ok = pos_insights.available()
     allowed = scope_ids
+    hide = () if with_users else ("users", "settings")
 
-    sales = _safe(lambda: pos_insights.totals(start, end, at), {"available": False})
-    prof = _safe(lambda: pos_insights.margin(start, end, at), {"available": False})
-    pur = _safe(lambda: purchases_between(db, start, end, allowed),
-                {"grns": 0, "value": 0, "units": 0, "products": 0})
-    pays = _safe(lambda: payments_between(db, start, end), {"count": 0, "value": 0})
-    dn = _safe(lambda: debit_notes_between(db, start, end, allowed), {"count": 0, "value": 0})
-    stock_rows = _safe(lambda: stock_loc.warehouse_totals(db, warehouse_ids=allowed), [])
-    moves = _safe(lambda: movement_between(db, start, end, allowed), {"inward": 0, "outward": 0})
-    transit = _safe(lambda: stock_loc.transfer_summary(db)["totals"].get("in_transit", 0), 0)
-    pend = _safe(lambda: pending_grns(db, allowed), {"count": 0, "value": 0, "documents": 0})
-    owed = _safe(lambda: outstanding(db), [])
-    dead = _safe(lambda: dead_counts(db), {"days": 90, "count": 0, "value": 0, "critical": 0, "rows": []})
-    low = _safe(lambda: pos_insights.low_stock(limit=8), {"available": False, "count": 0, "rows": []})
-    sent_today = _safe(lambda: outwards_posted_between(db, start, end, allowed), 0)
-    top = _safe(lambda: pos_insights.top_products(
-        *business_day.bounds(day - dt.timedelta(days=29), day), at, limit=6), [])
-    top_floors = _safe(lambda: pos_insights.breakdown(start, end, "floor", at, limit=6), [])
+    # Every read the screen needs, in groups that share nothing but the request
+    # (see _run_groups). Within a group the order matters only for the memo:
+    # a later section finds an earlier one's read done.
+    E_PLACES = {"warehouses": [], "stores": [], "counters": [], "cashiers": [], "picker": []}
+    groups = warm_groups() + [
+        # the till's stocked-product sales, read once for both: the notices wait
+        # for dead stock's rows (the request memo) rather than reading them again
+        [("dead", lambda s: dead_counts(s),
+          {"days": 90, "count": 0, "value": 0, "critical": 0, "rows": []})],
+        [("notices", lambda s: _notices(s), [])],
+        [("owed", lambda s: outstanding(s), [])],
+        # the warehouse totals, transfer summary and the day's GRNs, read once
+        # for the tiles and again (from the memo) for the places table
+        [("stock_rows", lambda s: _warehouse_totals(s, warehouse_ids=allowed), []),
+         ("transit", lambda s: _transfer_summary(s)["totals"].get("in_transit", 0), 0),
+         ("pur", lambda s: purchases_between(s, start, end, allowed),
+          {"grns": 0, "value": 0, "units": 0, "products": 0}),
+         ("places", lambda s: places(s, day, scope_ids, at, allotted), E_PLACES)],
+        [("series", lambda s: series(s, day, 14, allowed, at), None),
+         ("moves", lambda s: movement_between(s, start, end, allowed), {"inward": 0, "outward": 0})],
+        [("sales", lambda s: pos_insights.totals(start, end, at), {"available": False}),
+         ("prof", lambda s: pos_insights.margin(start, end, at), {"available": False}),
+         # the till's low-stock list: till data, so kept like the till's sales
+         # (pos_sales._till_kept — never older than a minute)
+         ("low", lambda s: pos_sales._till_kept("low_stock_8", lambda: pos_insights.low_stock(limit=8)),
+          {"available": False, "count": 0, "rows": []}),
+         ("top", lambda s: pos_insights.top_products(
+             *business_day.bounds(day - dt.timedelta(days=29), day), at, limit=6), []),
+         ("top_floors", lambda s: pos_insights.breakdown(start, end, "floor", at, limit=6), [])],
+        [("pays", lambda s: payments_between(s, start, end), {"count": 0, "value": 0}),
+         ("dn", lambda s: debit_notes_between(s, start, end, allowed), {"count": 0, "value": 0}),
+         ("pend", lambda s: pending_grns(s, allowed), {"count": 0, "value": 0, "documents": 0}),
+         ("sent_today", lambda s: outwards_posted_between(s, start, end, allowed), 0),
+         ("counts", lambda s: counts(s, allowed, with_users), {}),
+         ("activity", lambda s: activity(s, 15, allowed, at, hide), [])],
+    ]
+    r = _run_groups(groups, db)
+    sales, prof, pur, pays, dn = r["sales"], r["prof"], r["pur"], r["pays"], r["dn"]
+    stock_rows, moves, transit, pend = r["stock_rows"], r["moves"], r["transit"], r["pend"]
+    owed, dead, low, sent_today = r["owed"], r["dead"], r["low"], r["sent_today"]
+    top, top_floors = r["top"], r["top_floors"]
 
     k = {
         "sales": {"value": sales.get("net", 0), "gross": sales.get("gross", 0),
@@ -443,7 +654,6 @@ def overview(db, allowed=None, day=None, with_users=True, warehouse_id=None):
                          "dispatches": sent_today},
     }
 
-    hide = () if with_users else ("users", "settings")
     return {
         "day": day.isoformat(), "label": business_day.label(day, day),
         "generated_at": business_day.now_local().isoformat(timespec="minutes"),
@@ -454,22 +664,21 @@ def overview(db, allowed=None, day=None, with_users=True, warehouse_id=None):
                   "warehouses": [r["name"] for r in stock_rows] if allowed else None,
                   "company_wide": ["dead_stock", "low_stock", "pending_payments", "payments"]},
         "pos": {"available": pos_ok},
-        "counts": _safe(lambda: counts(db, allowed, with_users), {}),
+        "counts": r["counts"],
         "kpis": k,
-        "series": _safe(lambda: series(db, day, 14, allowed, at), None),
+        "series": r["series"],
         "top_products": top,
         "top_floors": top_floors,
         # One row per warehouse, per store and per till — the drill-down the
         # tiles above always provoke. See `places`.
-        "places": _safe(lambda: places(db, day, scope_ids, at, allotted),
-                        {"warehouses": [], "stores": [], "counters": [], "cashiers": [],
-                         "picker": []}),
+        "places": r["places"],
         "low_stock": low.get("rows", []),
-        "dead_stock": [{"sku": r["sku"], "name": r["name"], "category": r["category"],
-                        "qty": r["qty"], "value": r["stock_value"], "days": r["days_idle"]}
-                       for r in sorted(dead["rows"], key=lambda r: -r["stock_value"])[:6]],
-        "alerts": _safe(lambda: alerts(db, day, allowed, at, k), []),
-        "activity": _safe(lambda: activity(db, 15, allowed, at, hide), []),
+        "dead_stock": [{"sku": x["sku"], "name": x["name"], "category": x["category"],
+                        "qty": x["qty"], "value": x["stock_value"], "days": x["days_idle"]}
+                       for x in sorted(dead["rows"], key=lambda x: -x["stock_value"])[:6]],
+        # after the rest: its last line reads the dead-stock KPI above
+        "alerts": _safe(lambda: alerts(db, day, allowed, at, k, notices=r["notices"]), []),
+        "activity": r["activity"],
         "headline": (f"{business_day.label(day, day)}: {inr(k['sales']['value'])} store sales, "
                      f"{inr_short(k['purchases']['value'])} received on {k['purchases']['grns']} GRN(s), "
                      f"{fmt_qty(k['transactions']['count'])} transactions")

@@ -14,6 +14,7 @@ from flask import (
 )
 from flask_login import login_required, current_user
 from datetime import datetime
+from sqlalchemy import func
 from app import db
 from app import billing_numbers, promotions, warehouse_items
 from app.models import (
@@ -77,7 +78,20 @@ def customer_lookup():
     # 2) digits-only match — normalizes "+91 99000 11111" vs "9900011111"
     digits = "".join(ch for ch in q if ch.isdigit())
     if not c and len(digits) >= 5:
-        for cand in Customer.query.filter(Customer.phone.isnot(None)).all():
+        # The same test, narrowed in the database first on PostgreSQL: a phone
+        # whose ASCII digits end in `digits` — or any phone holding a non-ASCII
+        # character, whose digits only Python's isdigit() can read — then the
+        # original check below, in the same scan order. It used to load every
+        # customer with a phone (150K) on each lookup.
+        cands = Customer.query.filter(Customer.phone.isnot(None))
+        if db.engine.dialect.name == "postgresql":
+            cands = cands.filter(db.or_(
+                func.regexp_replace(Customer.phone, "[^0-9]", "", "g").like("%" + digits),
+                Customer.phone.op("~")("[^[:ascii:]]"))).order_by(db.literal_column("ctid"))
+            # ctid: the table's physical order — the order the unfiltered scan
+            # it replaces returned rows in, so the FIRST match is the same one
+            # when several customers' numbers end in the same digits
+        for cand in cands.all():
             if "".join(ch for ch in (cand.phone or "") if ch.isdigit()).endswith(digits):
                 c = cand; break
     # 3) invoice number
@@ -173,8 +187,8 @@ def session_view(code):
     s = SaleSession.query.filter_by(code=code).first_or_404()
     if s.salesperson_id != current_user.id and not current_user.is_manager:
         abort(403)
-    customers = Customer.query.order_by(Customer.name).all()
-    return render_template("floor/salesperson.html", s=s, customers=customers)
+    # no customer list: salesperson.html never reads one, and it was all 150K
+    return render_template("floor/salesperson.html", s=s)
 
 
 @floor_bp.route("/s/<code>/state")

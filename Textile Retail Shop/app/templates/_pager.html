@@ -1,0 +1,29 @@
+{# Pager for a list shown a page at a time (see app/paging.py).
+   {% from "_pager.html" import pager with context %} … {{ pager(page) }}
+   Every query-string filter is carried to the other pages; only ?page= changes. #}
+{% macro pager(p) %}
+{% if p and p.total %}
+{% set args = request.args.to_dict() %}
+{% set _ = args.pop('page', None) %}
+{% set _ = args.update(request.view_args or {}) %}
+<nav class="d-flex align-items-center justify-content-between flex-wrap gap-2 my-2 small">
+  <span class="text-muted">
+    Showing {{ "{:,}".format((p.page - 1) * p.per_page + 1) }}–{{ "{:,}".format([p.page * p.per_page, p.total]|min) }}
+    of {{ "{:,}".format(p.total) }}
+  </span>
+  {% if p.pages > 1 %}
+  <ul class="pagination pagination-sm mb-0">
+    <li class="page-item {% if not p.has_prev %}disabled{% endif %}">
+      <a class="page-link" href="{{ url_for(request.endpoint, page=1, **args) }}">« First</a></li>
+    <li class="page-item {% if not p.has_prev %}disabled{% endif %}">
+      <a class="page-link" href="{{ url_for(request.endpoint, page=p.prev_num or 1, **args) }}">‹ Previous</a></li>
+    <li class="page-item disabled"><span class="page-link">Page {{ "{:,}".format(p.page) }} of {{ "{:,}".format(p.pages) }}</span></li>
+    <li class="page-item {% if not p.has_next %}disabled{% endif %}">
+      <a class="page-link" href="{{ url_for(request.endpoint, page=p.next_num or p.pages, **args) }}">Next ›</a></li>
+    <li class="page-item {% if not p.has_next %}disabled{% endif %}">
+      <a class="page-link" href="{{ url_for(request.endpoint, page=p.pages, **args) }}">Last »</a></li>
+  </ul>
+  {% endif %}
+</nav>
+{% endif %}
+{% endmacro %}

@@ -15,6 +15,7 @@ from datetime import date, timedelta
 from sqlalchemy import func
 
 from app import db
+from app.datefilter import day_from, day_to
 from app.models import (Alteration, CreditNote, Category, Counter, Customer,
                         Invoice, InvoiceItem, Location, LoyaltyTxn, Product,
                         PromotionApplication, PromotionAudit, StockAudit,
@@ -23,8 +24,8 @@ from app.models import (Alteration, CreditNote, Category, Counter, Customer,
 
 def _inv_in(start, end):
     return db.session.query(Invoice).filter(
-        Invoice.live(), func.date(Invoice.invoice_date) >= start,
-        func.date(Invoice.invoice_date) <= end)
+        Invoice.live(), day_from(Invoice.invoice_date, start),
+        day_to(Invoice.invoice_date, end))
 
 
 def _money(v):
@@ -38,8 +39,8 @@ def sales_summary(start, end):
     for d, n, amt, tax in db.session.query(
             func.date(Invoice.invoice_date), func.count(Invoice.id),
             func.sum(Invoice.total), func.sum(Invoice.cgst + Invoice.sgst + Invoice.igst)
-    ).filter(Invoice.live(), func.date(Invoice.invoice_date) >= start,
-             func.date(Invoice.invoice_date) <= end
+    ).filter(Invoice.live(), day_from(Invoice.invoice_date, start),
+             day_to(Invoice.invoice_date, end)
              ).group_by(func.date(Invoice.invoice_date)).order_by(func.date(Invoice.invoice_date)).all():
         rows.append([d, n, _money(amt), _money(tax)])
         total += _money(amt)
@@ -55,8 +56,8 @@ def sales_by_product(start, end):
         func.sum(InvoiceItem.line_total + InvoiceItem.tax_amount)
     ).join(InvoiceItem, InvoiceItem.product_id == Product.id
            ).join(Invoice, Invoice.id == InvoiceItem.invoice_id
-                  ).filter(Invoice.live(), func.date(Invoice.invoice_date) >= start,
-                           func.date(Invoice.invoice_date) <= end
+                  ).filter(Invoice.live(), day_from(Invoice.invoice_date, start),
+                           day_to(Invoice.invoice_date, end)
                            ).group_by(Product.id).order_by(func.sum(
                                InvoiceItem.line_total + InvoiceItem.tax_amount).desc()).all()
     out = [[s, n, round(float(q), 2), _money(r)] for s, n, q, r in rows]
@@ -72,8 +73,8 @@ def sales_by_category(start, end):
     ).join(Product, Product.category_id == Category.id
            ).join(InvoiceItem, InvoiceItem.product_id == Product.id
                   ).join(Invoice, Invoice.id == InvoiceItem.invoice_id
-                         ).filter(Invoice.live(), func.date(Invoice.invoice_date) >= start,
-                                  func.date(Invoice.invoice_date) <= end
+                         ).filter(Invoice.live(), day_from(Invoice.invoice_date, start),
+                                  day_to(Invoice.invoice_date, end)
                                   ).group_by(Category.id).order_by(func.sum(
                                       InvoiceItem.line_total + InvoiceItem.tax_amount).desc()).all()
     out = [[c, round(float(q), 2), _money(r)] for c, q, r in rows]
@@ -88,12 +89,12 @@ def sales_by_staff(start, end):
         served = db.or_(Invoice.staff_id == u.id,
                         db.and_(Invoice.staff_id.is_(None), Invoice.cashier_id == u.id))
         sold = db.session.query(func.coalesce(func.sum(Invoice.total), 0)).filter(
-            served, Invoice.live(), func.date(Invoice.invoice_date) >= start,
-            func.date(Invoice.invoice_date) <= end).scalar() or 0
+            served, Invoice.live(), day_from(Invoice.invoice_date, start),
+            day_to(Invoice.invoice_date, end)).scalar() or 0
         back = db.session.query(func.coalesce(func.sum(CreditNote.total), 0)).join(
             Invoice, CreditNote.invoice_id == Invoice.id).filter(
-            served, func.date(CreditNote.created_at) >= start,
-            func.date(CreditNote.created_at) <= end).scalar() or 0
+            served, day_from(CreditNote.created_at, start),
+            day_to(CreditNote.created_at, end)).scalar() or 0
         if not sold and not back:
             continue
         net = _money(sold - back)
@@ -111,8 +112,8 @@ def sales_by_customer(start, end):
     rows = db.session.query(
         Customer.name, Customer.phone, func.count(Invoice.id), func.sum(Invoice.total)
     ).join(Invoice, Invoice.customer_id == Customer.id
-           ).filter(Invoice.live(), func.date(Invoice.invoice_date) >= start,
-                    func.date(Invoice.invoice_date) <= end
+           ).filter(Invoice.live(), day_from(Invoice.invoice_date, start),
+                    day_to(Invoice.invoice_date, end)
                     ).group_by(Customer.id).order_by(func.sum(Invoice.total).desc()).all()
     out = [[n, p or "—", c, _money(t)] for n, p, c, t in rows]
     walkins = _inv_in(start, end).filter(Invoice.customer_id.is_(None)).count()
@@ -174,8 +175,8 @@ def invoice_list(start, end):
 
 def returns_report(start, end):
     out = []
-    for n in CreditNote.query.filter(func.date(CreditNote.created_at) >= start,
-                                     func.date(CreditNote.created_at) <= end
+    for n in CreditNote.query.filter(day_from(CreditNote.created_at, start),
+                                     day_to(CreditNote.created_at, end)
                                      ).order_by(CreditNote.id.desc()).all():
         out.append([n.number, n.invoice.invoice_number,
                     n.created_at.strftime("%d %b %Y"),
@@ -190,8 +191,8 @@ def returns_report(start, end):
 
 def alterations_report(start, end):
     out = []
-    for a in Alteration.query.filter(func.date(Alteration.created_at) >= start,
-                                     func.date(Alteration.created_at) <= end
+    for a in Alteration.query.filter(day_from(Alteration.created_at, start),
+                                     day_to(Alteration.created_at, end)
                                      ).order_by(Alteration.id.desc()).all():
         out.append([a.number, a.invoice.invoice_number,
                     a.created_at.strftime("%d %b %Y"),
@@ -239,8 +240,8 @@ def loyalty_report(start, end):
         Customer.name, func.sum(db.case((LoyaltyTxn.points > 0, LoyaltyTxn.points), else_=0)),
         func.sum(db.case((LoyaltyTxn.points < 0, -LoyaltyTxn.points), else_=0))
     ).join(LoyaltyTxn, LoyaltyTxn.customer_id == Customer.id
-           ).filter(func.date(LoyaltyTxn.created_at) >= start,
-                    func.date(LoyaltyTxn.created_at) <= end
+           ).filter(day_from(LoyaltyTxn.created_at, start),
+                    day_to(LoyaltyTxn.created_at, end)
                     ).group_by(Customer.id).all()
     out = [[n, round(float(e or 0), 2), round(float(r or 0), 2)] for n, e, r in rows]
     held = _money(db.session.query(func.coalesce(func.sum(Customer.loyalty_points), 0)).scalar())
@@ -265,8 +266,8 @@ def commission_report(start, end):
 def _promo_apps(start, end):
     return (db.session.query(PromotionApplication)
             .join(Invoice, Invoice.id == PromotionApplication.invoice_id)
-            .filter(Invoice.live(), func.date(Invoice.invoice_date) >= start,
-                    func.date(Invoice.invoice_date) <= end))
+            .filter(Invoice.live(), day_from(Invoice.invoice_date, start),
+                    day_to(Invoice.invoice_date, end)))
 
 
 def _reward_lines(start, end):
@@ -276,8 +277,8 @@ def _reward_lines(start, end):
                   PromotionApplication.id == InvoiceItem.promo_application_id)
             .join(Invoice, Invoice.id == InvoiceItem.invoice_id)
             .filter(InvoiceItem.promo_role == "reward",
-                    Invoice.live(), func.date(Invoice.invoice_date) >= start,
-                    func.date(Invoice.invoice_date) <= end))
+                    Invoice.live(), day_from(Invoice.invoice_date, start),
+                    day_to(Invoice.invoice_date, end)))
 
 
 def promotion_schemes(start, end):
@@ -299,8 +300,8 @@ def promotion_schemes(start, end):
         func.sum(PromotionApplication.reward_qty),
         func.sum(PromotionApplication.benefit_value))
         .join(Invoice, Invoice.id == PromotionApplication.invoice_id)
-        .filter(Invoice.live(), func.date(Invoice.invoice_date) >= start,
-                func.date(Invoice.invoice_date) <= end)
+        .filter(Invoice.live(), day_from(Invoice.invoice_date, start),
+                day_to(Invoice.invoice_date, end))
         .group_by(PromotionApplication.scheme_code,
                   PromotionApplication.scheme_name)
         .order_by(func.sum(PromotionApplication.benefit_value).desc()).all())
@@ -372,8 +373,8 @@ def promotion_places(start, end):
         .join(Invoice, Invoice.id == PromotionApplication.invoice_id)
         .outerjoin(Location, Location.id == Invoice.location_id)
         .outerjoin(Counter, Counter.id == Invoice.counter_id)
-        .filter(Invoice.live(), func.date(Invoice.invoice_date) >= start,
-                func.date(Invoice.invoice_date) <= end)
+        .filter(Invoice.live(), day_from(Invoice.invoice_date, start),
+                day_to(Invoice.invoice_date, end))
         .group_by(Location.name, Counter.name)
         .order_by(func.sum(PromotionApplication.benefit_value).desc()).all())
     out = [[loc or "—", till or "—", bills, int(times or 0),
@@ -397,8 +398,8 @@ def promotion_daily(start, end):
         func.sum(PromotionApplication.benefit_value))
         .join(PromotionApplication,
               PromotionApplication.invoice_id == Invoice.id)
-        .filter(Invoice.live(), func.date(Invoice.invoice_date) >= start,
-                func.date(Invoice.invoice_date) <= end)
+        .filter(Invoice.live(), day_from(Invoice.invoice_date, start),
+                day_to(Invoice.invoice_date, end))
         .group_by(func.date(Invoice.invoice_date))
         .order_by(func.date(Invoice.invoice_date)).all())
     out = [[d, bills, int(times or 0), round(float(qual or 0), 2),
@@ -419,8 +420,8 @@ def stock_audits(start, end):
     an audit approved a fortnight later still describes the day it was walked.
     """
     rows = (StockAudit.query
-            .filter(func.date(StockAudit.started_at) >= start,
-                    func.date(StockAudit.started_at) <= end)
+            .filter(day_from(StockAudit.started_at, start),
+                    day_to(StockAudit.started_at, end))
             .order_by(StockAudit.id.desc()).all())
     out = []
     for a in rows:
@@ -450,8 +451,8 @@ def stock_audit_lines(start, end):
     """Every counted line, product by product — the detail behind the summary."""
     rows = (db.session.query(StockAuditLine, StockAudit)
             .join(StockAudit, StockAudit.id == StockAuditLine.audit_id)
-            .filter(func.date(StockAudit.started_at) >= start,
-                    func.date(StockAudit.started_at) <= end,
+            .filter(day_from(StockAudit.started_at, start),
+                    day_to(StockAudit.started_at, end),
                     StockAuditLine.physical_qty.isnot(None))
             .order_by(StockAudit.id.desc(), StockAuditLine.id).all())
     out = []
@@ -486,8 +487,8 @@ def promotion_audit(start, end):
     like a scheme nobody is using, until this report says otherwise.
     """
     rows = (PromotionAudit.query
-            .filter(func.date(PromotionAudit.created_at) >= start,
-                    func.date(PromotionAudit.created_at) <= end)
+            .filter(day_from(PromotionAudit.created_at, start),
+                    day_to(PromotionAudit.created_at, end))
             .order_by(PromotionAudit.id.desc()).limit(1000).all())
     labels = {"applied": "Applied", "blocked_no_stock": "BLOCKED — no stock",
               "substituted": "Substituted", "reduced": "Reduced by a return",

@@ -63,6 +63,19 @@ def find(db: Session, filters=None, text="", limit=None):
     Only products that are real stock items — an archived one is not repriced,
     because it is not for sale.
     """
+    q = _selection(db, filters, text)
+    q = q.order_by(models.Product.description, models.Product.sku)
+    return q.limit(limit).all() if limit else q.all()
+
+
+def count(db: Session, filters=None, text=""):
+    """How many products `find` would return with no limit — counted by the
+    database rather than by loading every one of them."""
+    return _selection(db, filters, text).count()
+
+
+def _selection(db: Session, filters=None, text=""):
+    """The filtered product query `find` and `count` share."""
     filters = {k: v for k, v in (filters or {}).items() if v not in (None, "")}
     q = db.query(models.Product)
     for field, value in filters.items():
@@ -78,8 +91,7 @@ def find(db: Session, filters=None, text="", limit=None):
                          models.Product.sku.ilike(like),
                          models.Product.barcode.ilike(like),
                          models.Product.design_no.ilike(like)))
-    q = q.order_by(models.Product.description, models.Product.sku)
-    return q.limit(limit).all() if limit else q.all()
+    return q
 
 
 def describe(filters=None, text="", ids=None):

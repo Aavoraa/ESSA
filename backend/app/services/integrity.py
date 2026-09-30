@@ -52,6 +52,8 @@ Two different questions, deliberately answered against two different figures:
   hundred codes is the failure this module exists for; ten codes and seven in
   stock means three have already gone out wearing their labels.
 """
+from sqlalchemy import func
+
 from .. import models
 
 #: movement rows a GRN writes — the inwards and the reversals of earlier unposts
@@ -74,7 +76,13 @@ def _purchase_status(db):
     return {pid: st for pid, st in db.query(models.Purchase.id, models.Purchase.status)}
 
 
-def _product_links(db):
+def _in_scope(q, col, scope):
+    """Restrict a per-product read to `scope` (ids, or a select of ids); None is
+    every product."""
+    return q if scope is None else q.filter(col.in_(scope))
+
+
+def _product_links(db, scope=None):
     """{product_id: {purchase_id, …}} from GRN lines, breakdown rows and movements.
 
     All three, because a product can be reachable by any of them: a plain line
@@ -85,42 +93,49 @@ def _product_links(db):
         if pid:
             links.setdefault(pid, set()).add(purchase_id)
 
-    for pid, purchase_id in db.query(
-            models.PurchaseLine.product_id, models.PurchaseLine.purchase_id):
+    # DISTINCT: the result is a set per product, and a SKU received on one GRN
+    # as fifty ledger rows needs that pair sent back once, not fifty times
+    for pid, purchase_id in _in_scope(db.query(
+            models.PurchaseLine.product_id, models.PurchaseLine.purchase_id),
+            models.PurchaseLine.product_id, scope).distinct():
         add(pid, purchase_id)
-    for pid, purchase_id in db.query(
+    for pid, purchase_id in _in_scope(db.query(
             models.PurchaseLineSplit.product_id, models.PurchaseLine.purchase_id).join(
-            models.PurchaseLine, models.PurchaseLineSplit.line_id == models.PurchaseLine.id):
+            models.PurchaseLine, models.PurchaseLineSplit.line_id == models.PurchaseLine.id),
+            models.PurchaseLineSplit.product_id, scope).distinct():
         add(pid, purchase_id)
-    for pid, ref_id in db.query(
+    for pid, ref_id in _in_scope(db.query(
             models.StockMovement.product_id, models.StockMovement.ref_id).filter(
-            models.StockMovement.ref_type.in_(GRN_REF_TYPES)):
+            models.StockMovement.ref_type.in_(GRN_REF_TYPES)),
+            models.StockMovement.product_id, scope).distinct():
         add(pid, ref_id)
     return links
 
 
-def _movement_count(db):
+def _movement_count(db, scope=None):
     """{product_id: how many ledger rows} — a product with movements has history
-    of its own and is never treated as debris, whatever created it."""
-    out = {}
-    for pid, in db.query(models.StockMovement.product_id):
-        out[pid] = out.get(pid, 0) + 1
-    return out
+    of its own and is never treated as debris, whatever created it.
+
+    Counted by the database: the ledger is a million rows and only the count per
+    product is wanted."""
+    M = models.StockMovement
+    return {pid: int(n) for pid, n in
+            _in_scope(db.query(M.product_id, func.count(M.id)), M.product_id, scope)
+            .group_by(M.product_id)}
 
 
-def _received_qty(db):
+def _received_qty(db, scope=None):
     """{product_id: net quantity received from GRNs}.
 
     Inwards less the reversals of any unpost — i.e. what the receipts still say
     this SKU took in, which is the number of piece identities that should exist.
     Outward, return and adjustment rows are deliberately not counted: they move
     stock, they do not un-receive it."""
-    out = {}
-    for pid, delta in db.query(
-            models.StockMovement.product_id, models.StockMovement.qty_delta).filter(
-            models.StockMovement.ref_type.in_(GRN_REF_TYPES)):
-        out[pid] = out.get(pid, 0.0) + float(delta or 0)
-    return {k: _round(v) for k, v in out.items()}
+    M = models.StockMovement
+    rows = (_in_scope(db.query(M.product_id, func.sum(func.coalesce(M.qty_delta, 0)))
+                        .filter(M.ref_type.in_(GRN_REF_TYPES)), M.product_id, scope)
+            .group_by(M.product_id))
+    return {k: _round(v) for k, v in rows}
 
 
 def _state(purchase_ids, statuses, has_history):
@@ -138,13 +153,68 @@ class Context:
     """Everything the checks need, gathered in a handful of queries so a scan of
     the whole inventory stays a handful of queries."""
 
-    def __init__(self, db):
+    def __init__(self, db, product_ids=None):
+        """`product_ids` (a list of ids, or a SELECT of them) limits what is read
+        to those products — a screen judging a few thousand products need not read
+        the provenance of every product ever received. A scoped context must only
+        be asked about products inside its scope: any other reads as having no
+        receipt, no history and no codes."""
         self.db = db
+        self.scope = product_ids
         self.statuses = _purchase_status(db)
-        self.links = _product_links(db)
-        self.history = _movement_count(db)
-        self.received = _received_qty(db)
+        self.links = _product_links(db, product_ids)
+        self.history = _movement_count(db, product_ids)
+        self.received = _received_qty(db, product_ids)
         self._adopted = {}
+        self._units = None          # {product_id: [unit rows by seq]} once preloaded
+        self._countable = {}        # uom → countable, asked once per pass
+
+    def preload_units(self, product_ids=None):
+        """Read every piece code once, for a pass over the whole inventory.
+
+        Only the four columns the checks read, as plain rows, ordered as
+        `_adopted_ids` needs them. Without this a whole-inventory scan asked for
+        each product's codes separately — hundreds of thousands of queries on a
+        real catalogue — and loaded every code as a full ORM object besides.
+
+        `product_ids` limits the read to those products — a list screen showing
+        a few thousand items has no use for millions of codes. Only those
+        products may then be asked about: any other would read as having none."""
+        U = models.ProductUnit
+        by = {}
+        q = self.db.query(U.id, U.product_id, U.purchase_id, U.seq)
+        if product_ids is not None:
+            ids = sorted({int(i) for i in product_ids})
+            if not ids:
+                self._units = by
+                return
+            q = q.filter(U.product_id.in_(ids))
+        for row in q.order_by(U.product_id, U.seq):
+            by.setdefault(row.product_id, []).append(row)
+        self._units = by
+
+    def units_for(self, product_id):
+        """This product's piece codes, ordered by seq."""
+        if self._units is not None:
+            return self._units.get(product_id, [])
+        return self.db.query(models.ProductUnit).filter(
+            models.ProductUnit.product_id == product_id).order_by(
+            models.ProductUnit.seq).all()
+
+    def can_serialise(self, uom, qty):
+        """units.can_serialise, with the unit-type lookup asked once per unit.
+
+        The lookup reads the whole unit-type master, and a scan asks it once per
+        product. The fast form (no db) is used only where it gives the same
+        answer — a unit the built-in list and the master both call countable;
+        anything else takes the exact, database-backed path."""
+        from . import units as unit_svc
+        key = (uom or "PCS").strip().upper()
+        if key not in self._countable:
+            self._countable[key] = unit_svc.is_countable(key, self.db)
+        if self._countable[key] and key in unit_svc.COUNTABLE_UOM:
+            return unit_svc.can_serialise(uom, qty)
+        return unit_svc.can_serialise(uom, qty, self.db)
 
     def product_state(self, product):
         return _state(self.links.get(product.id, set()), self.statuses,
@@ -167,9 +237,7 @@ class Context:
         human reading the list would take to be the original set."""
         if product_id in self._adopted:
             return self._adopted[product_id]
-        rows = self.db.query(models.ProductUnit).filter(
-            models.ProductUnit.product_id == product_id).order_by(
-            models.ProductUnit.seq).all()
+        rows = self.units_for(product_id)
         named_live = sum(1 for u in rows if self.statuses.get(u.purchase_id) == "posted")
         shortfall = int(round(self.received.get(product_id, 0.0))) - named_live
         nameless = [u for u in rows if u.purchase_id is None]
@@ -206,15 +274,15 @@ class Context:
 def product_report(db, product, ctx=None):
     """Provenance, piece-code arithmetic and print eligibility for one product."""
     from . import units as unit_svc
-    ctx = ctx or Context(db)
+    # alone, only this product's provenance is needed — not every product's
+    ctx = ctx or Context(db, product_ids=[product.id])
     state = ctx.product_state(product)
-    rows = db.query(models.ProductUnit).filter(
-        models.ProductUnit.product_id == product.id).all()
+    rows = ctx.units_for(product.id)
     live = [u for u in rows if ctx.unit_state(u) == POSTED]
     orphaned = [u for u in rows if ctx.unit_state(u) == ORPHAN]
     stock = _round(product.stock_qty)
     expected = ctx.received.get(product.id, 0.0)
-    serialisable, why = unit_svc.can_serialise(product.uom, expected or stock, db)
+    serialisable, why = ctx.can_serialise(product.uom, expected or stock)
 
     d = {
         "product_id": product.id, "sku": product.sku,
@@ -272,6 +340,7 @@ def scan(db):
     Read-only — this is what the Inventory Repair screen shows *before* anyone
     agrees to delete anything."""
     ctx = Context(db)
+    ctx.preload_units()
     products = db.query(models.Product).order_by(models.Product.id).all()
 
     orphan_products, unposted_products, unit_mismatches = [], [], []
@@ -291,7 +360,8 @@ def scan(db):
 
     product_ids = {p.id for p in products}
     orphan_units = []
-    for u in db.query(models.ProductUnit).order_by(models.ProductUnit.id).all():
+    U = models.ProductUnit
+    for u in db.query(U.id, U.code, U.product_id, U.purchase_id).order_by(U.id):
         if u.product_id not in product_ids:
             orphan_units.append({"id": u.id, "code": u.code,
                                  "why": "its product no longer exists"})

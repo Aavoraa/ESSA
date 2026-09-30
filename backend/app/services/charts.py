@@ -79,10 +79,13 @@ def purchases_by_month(db, months=MONTHS_BACK):
     month the goods were billed, which is the month someone is asking about."""
     axis = _month_axis(months)
     seen = dict.fromkeys(axis, 0.0)
-    for p in db.query(models.Purchase).filter(models.Purchase.status == "posted").all():
-        k = _month_key(p.invoice_date)
+    # the two columns read, not every GRN as a full object
+    for invoice_date, grand_total in (db.query(models.Purchase.invoice_date,
+                                               models.Purchase.grand_total)
+                                        .filter(models.Purchase.status == "posted")):
+        k = _month_key(invoice_date)
         if k in seen:
-            seen[k] += float(p.grand_total or 0)
+            seen[k] += float(grand_total or 0)
     return {"labels": [_label(k) for k in axis],
             "values": [round(seen[k], 2) for k in axis]}
 
@@ -96,13 +99,19 @@ def movement_by_month(db, months=MONTHS_BACK):
     axis = _month_axis(months)
     inward = dict.fromkeys(axis, 0.0)
     outward = dict.fromkeys(axis, 0.0)
-    for m in db.query(models.StockMovement).all():
-        if not m.created_at:
+    # Only the two columns this reads, and only the months on the axis: the
+    # whole ledger as ORM rows was a million objects to draw twelve bars.
+    start = dt.datetime.strptime(axis[0] + "-01", "%Y-%m-%d") if axis else None
+    rows = db.query(models.StockMovement.created_at, models.StockMovement.qty_delta)
+    if start is not None:
+        rows = rows.filter(models.StockMovement.created_at >= start)
+    for created_at, qty_delta in rows:
+        if not created_at:
             continue
-        k = m.created_at.strftime("%Y-%m")
+        k = created_at.strftime("%Y-%m")
         if k not in inward:
             continue
-        q = float(m.qty_delta or 0)
+        q = float(qty_delta or 0)
         if q >= 0:
             inward[k] += q
         else:
@@ -122,9 +131,15 @@ def stock_by_category(db, top=5):
     Folded rather than truncated: a top-5 that quietly drops the rest would show a
     ring that does not add up to the stock value stated beside it."""
     from . import integrity
-    ctx = integrity.Context(db)
+    from sqlalchemy import select
+    # provenance read for exactly the products this ring can include
+    ctx = integrity.Context(db, product_ids=select(models.Product.id)
+                            .where(models.Product.stock_qty != 0))
     buckets = defaultdict(float)
-    for p in db.query(models.Product).all():
+    # A product with no stock has no stock value, so it cannot reach a bucket;
+    # asking only the ones that hold stock gives the same ring for a fraction of
+    # the provenance checks.
+    for p in db.query(models.Product).filter(models.Product.stock_qty != 0):
         if ctx.product_state(p) != integrity.POSTED:
             continue
         val = float(p.stock_value or 0)
@@ -143,8 +158,14 @@ def stock_by_category(db, top=5):
 def top_suppliers(db, top=6):
     """Suppliers by posted purchase value, biggest first."""
     buckets = defaultdict(float)
-    for p in db.query(models.Purchase).filter(models.Purchase.status == "posted").all():
-        buckets[p.supplier.name if p.supplier else "—"] += float(p.grand_total or 0)
+    # the supplier's name joined in, rather than one lazy load per supplier
+    for sid, name, grand_total in (db.query(models.Supplier.id, models.Supplier.name,
+                                            models.Purchase.grand_total)
+                                .select_from(models.Purchase)
+                                .outerjoin(models.Supplier,
+                                           models.Supplier.id == models.Purchase.supplier_id)
+                                .filter(models.Purchase.status == "posted")):
+        buckets[name if sid is not None else "—"] += float(grand_total or 0)
     ranked = sorted(buckets.items(), key=lambda kv: -kv[1])[:top]
     return [{"label": k, "value": round(v, 2)} for k, v in ranked]
 

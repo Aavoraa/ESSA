@@ -103,8 +103,16 @@ def list_documents(db: Session = Depends(get_db),
 
     Bills with no warehouse — everything keyed before workspaces existed — stay
     on every queue rather than disappearing from all of them. See services/scope.
+
+    INVOICES only. A photographed LR register / transport page and a scanned
+    purchase order are stored as documents too (document_type lr_register /
+    purchase_order) and belong to their own screens; listed here they read as
+    invoices waiting to be reviewed. A row with no type predates the column and
+    was an invoice.
     """
-    q = scope.documents(db.query(models.Document), wid)
+    D = models.Document
+    q = scope.documents(db.query(D), wid).filter(
+        (D.document_type == "invoice") | (D.document_type.is_(None)))
     docs = q.order_by(models.Document.id.desc()).all()
     return [_doc_out(d) for d in docs]
 

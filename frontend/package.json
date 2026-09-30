@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "check": "vite build && node tools/boot_test.mjs && node tools/render_test.mjs && node tools/pricing_test.mjs && node tools/size_run_test.mjs && node tools/date_format_test.mjs",
+    "check": "vite build && node tools/boot_test.mjs && node tools/render_test.mjs && node tools/pricing_test.mjs && node tools/size_run_test.mjs && node tools/date_format_test.mjs && node tools/cache_test.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

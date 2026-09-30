@@ -1,4 +1,6 @@
 backend/.venv/
+# any other Python environment copied in from another machine
+backend/.venv*/
 backend/data/essa.db
 backend/data/settings.json
 backend/data/uploads/*
@@ -8,6 +10,9 @@ frontend/dist/
 __pycache__/
 *.pyc
 .env
+# backups of .env carry the same secrets (database URL, auth secret, passwords)
+.env.*
+!.env.example
 .DS_Store
 
 # Android build. `local.properties` holds a machine-specific SDK path, and the

@@ -5,8 +5,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from typing import Optional
-from sqlalchemy.orm import Session
+from sqlalchemy import func, or_
+from sqlalchemy.orm import Session, selectinload
 from ..database import get_db
+from ..fastjson import returns_json
 from .. import models
 from ..config import DATA_DIR
 from ..services import inventory as inv
@@ -105,7 +107,7 @@ def _base_options():
 BASE_OPTIONS = _base_options()
 
 
-def _localise(d: dict, db: Session, product, wid):
+def _localise(d: dict, db: Session, product, wid, balances=None):
     """Restate a product payload as THIS warehouse sees it.
 
     Inside a warehouse the word "Stock" on a screen means that warehouse's
@@ -119,8 +121,16 @@ def _localise(d: dict, db: Session, product, wid):
     if not wid or product is None:
         return d
     from ..services import stock_locations as stock_loc
-    qty = stock_loc.qty_at(db, product.id, wid)
-    cost = stock_loc.cost_at(db, product.id, wid)
+    if balances is not None:
+        # the list's one read of this warehouse's balances; the same arithmetic
+        # as qty_at / cost_at, without two queries per product
+        row = balances.get(product.id)
+        qty = float(row[0] or 0) if row else 0.0
+        cost = (float(row[1] or 0) if row and (row[0] or 0) > stock_loc.TOLERANCE
+                else float(product.avg_cost or 0))
+    else:
+        qty = stock_loc.qty_at(db, product.id, wid)
+        cost = stock_loc.cost_at(db, product.id, wid)
     return {**d,
             "company_stock_qty": d.get("stock_qty"),
             "company_stock_value": d.get("stock_value"),
@@ -172,6 +182,9 @@ def _product_fields(p: models.Product):
         "attrs": p.attrs if isinstance(p.attrs, dict) else {},
         "detailed": bool(p.detailed), "detailed_by": p.detailed_by,
         "detailed_at": p.detailed_at.isoformat() if p.detailed_at else None,
+        # when the product first came into stock — Label Printing lists the
+        # newest first, because a fresh receipt is what is waiting for tags
+        "created_at": p.created_at.isoformat() if p.created_at else None,
     }
 
 
@@ -206,7 +219,7 @@ def summary(db: Session = Depends(get_db),
     return s
 
 
-@router.get("/product-options")
+@returns_json(router.get("/product-options"))
 def product_options(warehouse_id: Optional[int] = None,
                     catalogue_id: Optional[int] = None,
                     db: Session = Depends(get_db)):
@@ -241,15 +254,17 @@ def product_options(warehouse_id: Optional[int] = None,
     # been is how one line's vocabulary leaks into another's.
     cols = {a["key"]: getattr(models.Product, a["column"])
             for a in attrs if a["column"]}
+    # every column's distinct values in one scan (services/distinct)
+    from ..services.distinct import distinct_values
+    found = distinct_values(db.query(models.Product).filter(
+        (models.Product.catalogue_id == catalogue_id)
+        | (models.Product.catalogue_id.is_(None))), list({c.key: c for c in cols.values()}.values()))
     for key, col in cols.items():
         opts.setdefault(key, [])
         # case-insensitive: the master says "Regular Fit", and a product already
         # carrying "REGULAR FIT" is the same fit, not a second one to offer
         have = {v.strip().lower() for v in opts[key]}
-        rows = (db.query(col).filter(
-            (models.Product.catalogue_id == catalogue_id)
-            | (models.Product.catalogue_id.is_(None))).distinct().all())
-        for val in sorted({v[0] for v in rows if v[0]}):
+        for val in sorted({v for v in found[col.key] if v}):
             if val.strip().lower() not in have:
                 opts[key].append(val)
                 have.add(val.strip().lower())
@@ -262,8 +277,48 @@ def product_options(warehouse_id: Optional[int] = None,
     return opts
 
 
-@router.get("/products")
-def list_products(status: str = "all", q: str = "", db: Session = Depends(get_db),
+def _ordered_id_chunks(db, query, chunk):
+    """The ids `query` returns under ORDER BY description, id — `chunk` at a time.
+
+    On PostgreSQL each chunk is fetched after the last (description, id) seen:
+    a top-N sort per chunk, stopping as soon as the caller has enough, instead
+    of sorting every match (363K for the phone's default list) up front. Rows
+    with no description sort LAST there (NULLS LAST), so they follow, by id —
+    the order the single ORDER BY returned them in. Elsewhere (SQLite sorts
+    NULLs first) the whole ordered id list is read, as before."""
+    P = models.Product
+    base = query.with_entities(P.id, P.description)
+    if db.bind.dialect.name != "postgresql":
+        ids = [i for (i, _d) in base.order_by(P.description, P.id)]
+        for i in range(0, len(ids), chunk):
+            yield ids[i:i + chunk]
+        return
+    from sqlalchemy import tuple_
+    last = None
+    while True:
+        q = base.filter(P.description.isnot(None))
+        if last is not None:
+            q = q.filter(tuple_(P.description, P.id) > tuple_(*last))
+        rows = q.order_by(P.description, P.id).limit(chunk).all()
+        if not rows:
+            break
+        yield [r[0] for r in rows]
+        last = (rows[-1][1], rows[-1][0])
+    last_id = None
+    while True:
+        q = base.filter(P.description.is_(None))
+        if last_id is not None:
+            q = q.filter(P.id > last_id)
+        rows = q.order_by(P.id).limit(chunk).all()
+        if not rows:
+            break
+        yield [r[0] for r in rows]
+        last_id = rows[-1][0]
+
+
+@returns_json(router.get("/products"))
+def list_products(status: str = "all", q: str = "", held: bool = False,
+                  limit: Optional[int] = None, offset: int = 0, db: Session = Depends(get_db),
                   wid: Optional[int] = Depends(scope.current)):
     """status: all | pending (not yet detailed) | detailed | excluded. q: text search.
 
@@ -272,28 +327,82 @@ def list_products(status: str = "all", q: str = "", db: Session = Depends(get_db
     otherwise sit there looking exactly like the real thing, scannable and
     printable. `status=excluded` shows precisely those, which is what the
     Inventory Repair screen lists; the count is on `/summary` either way, so the
-    exclusion is never silent."""
+    exclusion is never silent.
+
+    `held=true` narrows the list to what this warehouse holds now (the
+    `include_zero=False` scope), and `limit` caps it. Both exist for a catalogue
+    too large to send whole — hundreds of thousands of SKUs after years of
+    receipts, where the full list cannot be built or drawn. The screens list what
+    is held and search the rest through `q`, which is matched in the database
+    rather than over every product in Python. Called with neither, the answer is
+    exactly what it always was."""
     from ..services import integrity
-    ctx = integrity.Context(db)
     # Only what THIS warehouse has anything to do with. Items whose balance here
     # has fallen to zero are kept: they are this building's stock lines, and a
     # list that dropped them the moment they sold out would hide the re-orders.
-    query = scope.products(db, db.query(models.Product), wid)
+    # as a subquery: the ORDER BY below (description, id) decides the order
+    # completely, so the plan cannot change which rows come first
+    query = scope.products(db, db.query(models.Product), wid, include_zero=not held,
+                           as_subquery=True)
     if status == "pending":
         query = query.filter((models.Product.detailed == False) | (models.Product.detailed.is_(None)))  # noqa: E712
     elif status == "detailed":
         query = query.filter(models.Product.detailed == True)  # noqa: E712
-    ps = query.order_by(models.Product.description).all()
-    if status == "excluded":
-        ps = [p for p in ps if ctx.product_state(p) != integrity.POSTED]
-    else:
-        ps = [p for p in ps if ctx.product_state(p) == integrity.POSTED]
     if q:
-        ql = q.lower()
-        ps = [p for p in ps if ql in (p.description or "").lower()
-              or ql in (p.sku or "").lower() or ql in (p.barcode or "").lower()
-              or ql in (p.hsn or "").lower()]
-    return [_localise(_product_out(p, ctx), db, p, wid) for p in ps]
+        # the same four fields and the same case-insensitive substring test as
+        # before, asked of the database
+        like = "%" + q.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        query = query.filter(or_(*(func.lower(func.coalesce(c, "")).like(like, escape="\\")
+                                   for c in (models.Product.description, models.Product.sku,
+                                             models.Product.barcode, models.Product.hsn))))
+    # id breaks ties, so products sharing a description come back in the same
+    # order every time — and the same ones fall inside `limit`
+    order = (models.Product.description, models.Product.id)
+    loaded = query.options(selectinload(models.Product.primary_supplier))
+
+    def keep(chunk, ctx):
+        if status == "excluded":
+            return [p for p in chunk if ctx.product_state(p) != integrity.POSTED]
+        return [p for p in chunk if ctx.product_state(p) == integrity.POSTED]
+
+    # Provenance read for exactly the products found, not the whole catalogue.
+    # With a limit, it is read a slice at a time in list order and stops once
+    # the limit is filled: a search matching thousands of products shows the
+    # first few hundred, and the same ones, whichever way it is read.
+    # `offset` skips that many rows of the same ordered, filtered list — the
+    # phone reads the catalogue a page at a time (its default list is 363K
+    # products). Without it the answer is exactly what it always was.
+    offset = max(0, int(offset or 0))
+    if limit:
+        # Only the ids are read in full, in list order; whole products are
+        # loaded a chunk at a time until the page is filled — the same rows in
+        # the same order as loading every match first, without building an
+        # object for each of hundreds of thousands of matches.
+        want, CHUNK, kept = offset + max(1, int(limit)), 2000, []
+        for chunk_ids in _ordered_id_chunks(db, query, CHUNK):
+            by_id = {p.id: p for p in loaded.filter(models.Product.id.in_(chunk_ids))}
+            chunk = [by_id[j] for j in chunk_ids if j in by_id]
+            kept += keep(chunk, integrity.Context(db, product_ids=[p.id for p in chunk]))
+            if len(kept) >= want:
+                break
+        ps = kept[offset:want]
+        ctx = integrity.Context(db, product_ids=[p.id for p in ps])
+    else:
+        ps = loaded.order_by(*order).all()
+        ctx = integrity.Context(db, product_ids=[p.id for p in ps])
+        ps = keep(ps, ctx)
+    # Everything the rows below read per product, read once for the whole list:
+    # the piece codes of exactly these products, and this warehouse's balances.
+    ctx.preload_units([p.id for p in ps])
+    balances = None
+    if wid:
+        B = models.StockBalance
+        bq = db.query(B.product_id, B.qty, B.avg_cost).filter(B.warehouse_id == wid)
+        if limit:
+            # a page reads the balances of its own rows, not the warehouse's 363K
+            bq = bq.filter(B.product_id.in_([p.id for p in ps]))
+        balances = {pid: (q_, c_) for pid, q_, c_ in bq}
+    return [_localise(_product_out(p, ctx), db, p, wid, balances) for p in ps]
 
 
 @router.get("/products/{prod_id}")
@@ -388,6 +497,34 @@ def _unit_out(u: models.ProductUnit):
     }
 
 
+@router.get("/products/{prod_id}/sources")
+def product_sources(prod_id: int, db: Session = Depends(get_db)):
+    """The receipts (invoices) this product came in on, newest first — each with
+    how many it brought — so the product can be traced back to its invoice."""
+    PL, S, Pu = models.PurchaseLine, models.PurchaseLineSplit, models.Purchase
+    qty = {}
+    for pid, q, line_id in (db.query(PL.purchase_id, PL.qty, PL.id)
+                            .filter(PL.product_id == prod_id).all()):
+        qty.setdefault(pid, []).append(("line", line_id, q))
+    for pid, q in (db.query(PL.purchase_id, S.qty).join(PL, PL.id == S.line_id)
+                   .filter(S.product_id == prod_id).all()):
+        qty.setdefault(pid, []).append(("split", None, q))
+    if not qty:
+        return []
+    out = []
+    for p in (db.query(Pu).filter(Pu.id.in_(list(qty))).order_by(Pu.id.desc()).all()):
+        parts = qty[p.id]
+        # a line that is broken down counts through its rows, not itself
+        split_lines = {l.id for l in p.lines if l.splits}
+        n = sum(float(q or 0) for kind, line_id, q in parts
+                if kind == "split" or line_id not in split_lines)
+        out.append({"purchase_id": p.id, "document_id": p.document_id, "grn_no": p.grn_no,
+                    "invoice_number": p.invoice_number, "invoice_date": p.invoice_date,
+                    "supplier_name": p.supplier.name if p.supplier else None,
+                    "status": p.status, "qty": round(n, 3)})
+    return out
+
+
 @router.get("/products/{prod_id}/units")
 def product_units(prod_id: int, db: Session = Depends(get_db)):
     """The individual pieces under one SKU — what the Inventory screen shows when
@@ -403,7 +540,7 @@ def product_units(prod_id: int, db: Session = Depends(get_db)):
     p = db.get(models.Product, prod_id)
     if not p:
         raise HTTPException(404, "product not found")
-    ctx = integrity.Context(db)
+    ctx = integrity.Context(db, product_ids=[p.id])
     rep = integrity.product_report(db, p, ctx)
     rows = db.query(models.ProductUnit).filter(
         models.ProductUnit.product_id == prod_id).order_by(models.ProductUnit.seq).all()
@@ -484,7 +621,7 @@ def unit_label(uid: int, db: Session = Depends(get_db)):
     u = db.get(models.ProductUnit, uid)
     if not u:
         raise HTTPException(404, "piece not found")
-    if integrity.Context(db).unit_state(u) != integrity.POSTED:
+    if integrity.Context(db, product_ids=[u.product_id]).unit_state(u) != integrity.POSTED:
         raise HTTPException(400, f"{u.code} belongs to no posted GRN — it is a left-over "
                                  f"code, not a garment. Run Inventory Repair.")
     unit_svc.mark_printed(db, [u])
@@ -512,7 +649,7 @@ def unit_labels(ids: str = "", product_id: int = 0, db: Session = Depends(get_db
         rows = q.filter(models.ProductUnit.id.in_(want)).all()
         rows.sort(key=lambda u: want.index(u.id))
         # a hand-picked selection still may not include a dead code
-        ctx = integrity.Context(db)
+        ctx = integrity.Context(db, product_ids=sorted({u.product_id for u in rows}))
         dead = [u.code for u in rows if ctx.unit_state(u) != integrity.POSTED]
         if dead:
             raise HTTPException(400, f"{len(dead)} of these piece codes belong to no "
@@ -523,7 +660,7 @@ def unit_labels(ids: str = "", product_id: int = 0, db: Session = Depends(get_db
         p = db.get(models.Product, product_id)
         if not p:
             raise HTTPException(404, "product not found")
-        ctx = integrity.Context(db)
+        ctx = integrity.Context(db, product_ids=[p.id])
         ok, why = integrity.can_print(db, p, ctx)
         if not ok:
             raise HTTPException(400, why)
@@ -730,9 +867,11 @@ def labels(ids: str = "", status: str = "detailed", db: Session = Depends(get_db
     say what it left out. An explicit id list is stricter: naming a record that is
     not stock is a mistake worth surfacing, not silently honouring."""
     from ..services import integrity
-    ctx = integrity.Context(db)
+    want = [int(x) for x in ids.split(",") if x.strip().isdigit()] if ids.strip() else None
+    # a selection needs only its own products' provenance; the bulk sheet is
+    # every product, so it reads everything as before
+    ctx = integrity.Context(db, product_ids=want) if want else integrity.Context(db)
     if ids.strip():
-        want = [int(x) for x in ids.split(",") if x.strip().isdigit()]
         ps = db.query(models.Product).filter(models.Product.id.in_(want)).all()
         ps.sort(key=lambda p: want.index(p.id))
         bad = [p for p in ps if ctx.product_state(p) != integrity.POSTED]

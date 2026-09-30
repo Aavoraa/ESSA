@@ -17,7 +17,23 @@ REM prefix from where it stands, so it keeps working after the folder is moved.
 set "PY=%~dp0backend\.venv\Scripts\python.exe"
 if not exist "%PY%" set "PY=python"
 
+REM Settings from essa-intake\.env (KEY=VALUE lines, # comments), as .env.example
+REM describes. This is where ESSA_DATABASE_URL lives when the data is in Postgres,
+REM so the connection string (a password) is never written into a script.
+REM A variable already set in the environment wins over the file.
+if exist "%~dp0.env" (
+  for /f "usebackq eol=# tokens=1,* delims==" %%A in ("%~dp0.env") do (
+    if not "%%A"=="" if not defined %%A set "%%A=%%B"
+  )
+)
+
 REM Seed only if the DB does not exist yet (pass --reset to force a rebuild).
+REM Never against Postgres: seed.py --reset DROPS EVERY TABLE, and "no essa.db
+REM file" says nothing about a Postgres database, which holds the real data.
+if defined ESSA_DATABASE_URL (
+  if "%1"=="--reset" echo ==^> --reset ignored: ESSA_DATABASE_URL is set, and a reset would drop the Postgres data.
+  goto serve
+)
 if not exist data\essa.db (
   echo ==^> Seeding database
   "%PY%" app\seed.py --reset
@@ -26,6 +42,8 @@ if "%1"=="--reset" (
   echo ==^> Resetting database
   "%PY%" app\seed.py --reset
 )
+
+:serve
 
 echo.
 echo ==^> Serving on http://localhost:8000/   (Ctrl-C to stop)

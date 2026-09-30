@@ -54,19 +54,19 @@ jobs:
 
       # Named for the app, not for the build. This is the file that lands in
       # someone's downloads and then on a phone, beside an icon that already says
-      # ESSA AI — a filename carrying a run number and a commit hash makes the
+      # Warexx — a filename carrying a run number and a commit hash makes the
       # two look like different things. Which build it is stays answerable: the
       # run itself records its commit, and the summary below repeats it.
       - name: Name the APK
         id: name
         run: |
           SRC=android/app/build/outputs/apk/debug/app-debug.apk
-          OUT="ESSA AI.apk"
+          OUT="Warexx.apk"
           cp "$SRC" "$OUT"
           echo "path=$OUT" >> "$GITHUB_OUTPUT"
           ls -lh "$OUT"
           {
-            echo "### ESSA AI.apk"
+            echo "### Warexx.apk"
             echo ""
             echo "- build \`#${GITHUB_RUN_NUMBER}\` from commit \`${GITHUB_SHA::7}\`"
             echo "- download it under **Artifacts** below, then open it on the phone"
@@ -74,6 +74,6 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ESSA AI
+          name: Warexx
           path: ${{ steps.name.outputs.path }}
           if-no-files-found: error

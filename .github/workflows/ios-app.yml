@@ -1,0 +1,55 @@
+name: Build iPhone app
+
+# Compiles the iPhone/iPad app on a Mac runner and runs its tests, so a change
+# that breaks it is caught without anyone owning a Mac. It does NOT produce an
+# installable app: installing on an iPhone needs the app signed with your Apple
+# Developer account, which is done from Xcode (see ios/README.md).
+# Run it from the Actions tab (Run workflow), or push a change under ios/.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'ios/**'
+      - 'backend/app/mobile/index.html'
+      - '.github/workflows/ios-app.yml'
+
+jobs:
+  ios:
+    runs-on: macos-15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Cheap and first: the injected scanner shim leans on the mobile page's
+      # internals, and a rename there breaks the scan button without breaking
+      # the build.
+      - name: Check the scanner shim still matches the page
+        run: node ios/tools/shim_test.mjs
+
+      - name: Generate the Xcode project
+        working-directory: ios
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      # Unit tests on whichever iPhone simulator this runner image carries — the
+      # name changes with every Xcode release, so it is looked up, not hard-coded.
+      - name: Run the tests on an iPhone simulator
+        working-directory: ios
+        run: |
+          SIM=$(xcrun simctl list devices available | grep -m1 -oE 'iPhone [0-9A-Za-z ]+ \(' | sed 's/ ($//')
+          echo "Simulator: $SIM"
+          xcodebuild test -project Warexx.xcodeproj -scheme Warexx \
+            -destination "platform=iOS Simulator,name=$SIM" \
+            CODE_SIGNING_ALLOWED=NO | tail -40
+          exit ${PIPESTATUS[0]}
+
+      # And for a real device (unsigned) — proves it builds for arm64 hardware,
+      # not only for the simulator.
+      - name: Build for iPhone hardware (unsigned)
+        working-directory: ios
+        run: |
+          xcodebuild build -project Warexx.xcodeproj -scheme Warexx \
+            -destination 'generic/platform=iOS' -configuration Release \
+            CODE_SIGNING_ALLOWED=NO | tail -20
+          exit ${PIPESTATUS[0]}

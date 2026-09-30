@@ -5,6 +5,7 @@ from flask_login import current_user, login_required
 from sqlalchemy import func
 
 from app import db, messaging, places, vouchers
+from app.paging import paged
 from app.models import (Customer, CustomerAdvance, CustomerFeedback, Invoice,
                         LoyaltyTxn, MESSAGE_KINDS, PAYMENT_METHODS, ScheduledMessage)
 from app.utils import generate_number, role_required
@@ -45,8 +46,8 @@ def list_customers():
         query = query.filter(
             (Customer.name.ilike(f"%{q}%")) | (Customer.phone.ilike(f"%{q}%")) | (Customer.email.ilike(f"%{q}%"))
         )
-    customers = query.order_by(Customer.name).all()
-    return render_template("customers/list.html", customers=customers, q=q)
+    page = paged(query.order_by(Customer.name, Customer.id))     # 150K customers
+    return render_template("customers/list.html", customers=page.items, page=page, q=q)
 
 
 @customers_bp.route("/new", methods=["GET", "POST"])

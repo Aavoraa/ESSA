@@ -4,8 +4,9 @@ from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload, selectinload
 from ..database import get_db
+from ..fastjson import returns_json
 from .. import models
 from ..config import UPLOAD_DIR
 from ..services import lr as lr_svc
@@ -357,6 +358,12 @@ def _row_out(e: models.LREntry):
     return out
 
 
+# What `_row_out` reads off each row's relations, loaded with the page rather than
+# one query per row — the register is polled every 15 s, 500 rows at a time.
+_ROW_LOADS = (joinedload(models.LREntry.purchase_order),
+              selectinload(models.LREntry.attachments))
+
+
 def _filtered(db, received="all", q="", supplier="", transport="",
               status="all", date_from="", date_to=""):
     """The register narrowed by the Search panel's filters.
@@ -396,7 +403,7 @@ def _filtered(db, received="all", q="", supplier="", transport="",
     return query
 
 
-@router.get("")
+@returns_json(router.get(""))
 def list_lr(received: str = "all", limit: int = 500, db: Session = Depends(get_db),
             wid: Optional[int] = Depends(scope.current)):
     """The register, newest first. `received=pending|received` filters by whether
@@ -406,12 +413,12 @@ def list_lr(received: str = "all", limit: int = 500, db: Session = Depends(get_d
     Narrowed to consignments coming to the warehouse this call is made inside;
     rows booked before workspaces existed have no warehouse and stay on every
     register. See services/scope."""
-    rows = scope.lr_entries(_filtered(db, received=received), wid).order_by(
+    rows = scope.lr_entries(_filtered(db, received=received), wid).options(*_ROW_LOADS).order_by(
         models.LREntry.id.desc()).limit(max(1, min(limit, 2000))).all()
     return [_row_out(e) for e in rows]
 
 
-@router.get("/search")
+@returns_json(router.get("/search"))
 def search(q: str = "", supplier: str = "", transport: str = "", received: str = "all",
            status: str = "all", date_from: str = "", date_to: str = "",
            limit: int = 500, db: Session = Depends(get_db)):
@@ -422,7 +429,8 @@ def search(q: str = "", supplier: str = "", transport: str = "", received: str =
                       transport=transport, status=status,
                       date_from=date_from, date_to=date_to)
     total = query.count()
-    rows = query.order_by(models.LREntry.id.desc()).limit(max(1, min(limit, 2000))).all()
+    rows = query.options(*_ROW_LOADS).order_by(
+        models.LREntry.id.desc()).limit(max(1, min(limit, 2000))).all()
 
     def _sum(attr):
         return round(sum(float(getattr(e, attr) or 0) for e in rows), 2)
@@ -435,6 +443,51 @@ def search(q: str = "", supplier: str = "", transport: str = "", received: str =
                        # lines under it, which is the figure a payment run needs
                        "freight_total": _sum("freight_total")},
             "rows": [_row_out(e) for e in rows]}
+
+
+_TOTALS = ("qty", "bundle", "boxes", "amount", "freight_amount", "freight_total")
+
+
+@returns_json(router.get("/page"))
+def page_lr(page: int = 1, size: int = 100, search: bool = False,
+            q: str = "", supplier: str = "", transport: str = "", received: str = "all",
+            status: str = "all", date_from: str = "", date_to: str = "",
+            db: Session = Depends(get_db),
+            wid: Optional[int] = Depends(scope.current)):
+    """One page of the register, newest first, so the desk reads it 100 at a
+    time instead of the newest 500 and nothing older.
+
+    `search=false` is the register exactly as `list_lr` builds it (this
+    warehouse's consignments plus the unassigned ones, the `received` filter);
+    `search=true` is the Search panel exactly as `search` builds it (every
+    filter; not narrowed to the warehouse, as that route is not). The rows are
+    `_row_out`, the same fields. `total` counts every match, and in search mode
+    `totals` adds up every match too — `search` added up only the rows it
+    returned, which stopped being the whole answer past its 500-row limit."""
+    if search:
+        query = _filtered(db, received=received, q=q, supplier=supplier,
+                          transport=transport, status=status,
+                          date_from=date_from, date_to=date_to)
+    else:
+        query = scope.lr_entries(_filtered(db, received=received), wid)
+    E = models.LREntry
+    size = max(1, min(int(size), 2000))
+    total = query.count()
+    pages = max(1, -(-total // size))
+    page = min(max(1, int(page)), pages)
+    rows = (query.options(*_ROW_LOADS).order_by(E.id.desc())
+                 .offset((page - 1) * size).limit(size).all())
+    out = {"rows": [_row_out(e) for e in rows], "total": total, "page": page,
+           "size": size, "pages": pages}
+    if search:
+        # the same addition `search` does — float(v or 0), newest first, rounded
+        # once at the end — over every matching row rather than the returned ones
+        sums = [0] * len(_TOTALS)          # 0, not 0.0, with no rows — as sum() gives
+        for vals in query.with_entities(*[getattr(E, a) for a in _TOTALS]).order_by(E.id.desc()):
+            for i, v in enumerate(vals):
+                sums[i] += float(v or 0)
+        out["totals"] = {a: round(s, 2) for a, s in zip(_TOTALS, sums)}
+    return out
 
 
 @router.patch("/{entry_id}")

@@ -412,9 +412,7 @@ def low_stock(limit=50, item=None):
     if not available():
         return {"available": False, "count": 0, "rows": []}
     f_sql, f_params, _w = item_filter(item) if item else ("", [], [])
-    rows = pos_sales._rows(
-        "SELECT p.sku, p.name, COALESCE(cat.name,''), p.stock_qty, p.reorder_level, "
-        "       COALESCE(f.name,'') "
+    source = (
         "FROM " + _t("products") + " p "
         "LEFT JOIN " + _t("categories") + " cat ON cat.id = p.category_id "
         "LEFT JOIN " + _t("floors") + " f ON f.id = p.floor_id "
@@ -422,10 +420,24 @@ def low_stock(limit=50, item=None):
         # column is an integer on SQLite and a boolean on Postgres, and COALESCE of
         # a boolean with 1 is a type error there.
         "WHERE (p.active IS NULL OR p.active = ?) "
-        "AND COALESCE(p.stock_qty,0) <= COALESCE(p.reorder_level,0)"
-        + f_sql + " ORDER BY p.stock_qty ASC, p.name", [True] + f_params)
-    out = [{"sku": r[0], "product": r[1], "category": r[2], "stock": _num(r[3]),
-            "reorder_level": _num(r[4]), "floor": r[5] or None} for r in rows]
+        "AND COALESCE(p.stock_qty,0) <= COALESCE(p.reorder_level,0)" + f_sql)
+    select = ("SELECT p.sku, p.name, COALESCE(cat.name,''), p.stock_qty, p.reorder_level, "
+              "       COALESCE(f.name,'') " + source + " ORDER BY p.stock_qty ASC, p.name")
+    params = [True] + f_params
+
+    def shape(rows):
+        return [{"sku": r[0], "product": r[1], "category": r[2], "stock": _num(r[3]),
+                 "reorder_level": _num(r[4]), "floor": r[5] or None} for r in rows]
+
+    if limit:
+        # The count and the first `limit` rows, asked for as exactly that. A shop
+        # whose reorder levels are unset has nearly every product "low", and
+        # fetching all of them to show eight was most of the dashboard's wait.
+        counted = pos_sales._rows("SELECT COUNT(*) " + source, params)
+        if counted:
+            rows = pos_sales._rows(select + f" LIMIT {int(limit)}", params)
+            return {"available": True, "count": int(counted[0][0] or 0), "rows": shape(rows)}
+    out = shape(pos_sales._rows(select, params))
     return {"available": True, "count": len(out), "rows": out[:limit] if limit else out}
 
 

@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react'
-import { api, session, warehouse, setUnauthorizedHandler } from './api.js'
+import { api, session, warehouse, setUnauthorizedHandler, swr, readCache } from './api.js'
 import { parseDictation, coerceSpoken, dictationTargets } from './voicefill.js'
 
 // ---------- helpers ----------
@@ -57,6 +57,20 @@ const matches = (obj, q, fields) => {
 //  into six subtly different behaviours.
 // ==========================================================================
 const PAGE_SIZES = [25, 50, 100, 200]
+
+// A kept-open screen (App's dashboard stash) refreshes when it is shown again —
+// not while hidden, and not on its first showing (it has just loaded).
+function useReshow(active, reload) {
+  const was = useRef(active)
+  const fn = useRef(reload)
+  fn.current = reload
+  useEffect(() => {
+    if (active && !was.current) fn.current()
+    was.current = active
+  }, [active])
+}
+// how many dashboards (per warehouse) stay open at once
+const STASH_MAX = 8
 
 function usePaged(rows, initial = 50) {
   const [page, setPage] = useState(1)
@@ -170,6 +184,50 @@ function FilterPanel({ open, active, onClear, onApply, children, hint }) {
   )
 }
 
+// The state behind one Filters panel: its values, open or shut, and how many are
+// set — counted the same way on every screen, so the badge on the button means
+// the same thing wherever it is read.
+function useFilters() {
+  const [open, setOpen] = useState(false)
+  const [f, setAll] = useState({})
+  const set = (k, v) => setAll((x) => ({ ...x, [k]: v }))
+  const active = Object.values(f).filter((v) => v !== '' && v != null).length
+  return { open, toggle: () => setOpen((o) => !o), f, set, clear: () => setAll({}), active }
+}
+
+// The distinct non-blank values of one field, sorted — the options a Filters
+// dropdown offers, drawn from the records actually on the list so it never
+// offers a choice that can only come back empty.
+const uniqOf = (rows, key) => [...new Set((rows || []).map((r) => r?.[key])
+  .filter((v) => v != null && String(v).trim() !== '').map(String))]
+  .sort((a, b) => a.localeCompare(b))
+
+// A Filters dropdown: "Any" plus the given options ([value, label] or a value).
+function FilterSelect({ label, value, onChange, options, anyLabel = 'Any', style }) {
+  return (
+    <div className="field" style={style}><label>{label}</label>
+      <select value={value ?? ''} onChange={(e) => onChange(e.target.value)}>
+        <option value="">{anyLabel}</option>
+        {options.map((o) => {
+          const [v, l] = Array.isArray(o) ? o : [o, o]
+          return <option key={v} value={v}>{l}</option>
+        })}
+      </select>
+    </div>
+  )
+}
+
+// Search and Filters on one row at the top of a sidebar list — the same pair
+// every full-width screen has, fitted to a 300px column.
+function SideTools({ q, setQ, placeholder, flt }) {
+  return (
+    <div className="sidetools">
+      <SearchBox value={q} onChange={setQ} placeholder={placeholder} />
+      <FilterButton open={flt.open} onToggle={flt.toggle} active={flt.active} />
+    </div>
+  )
+}
+
 // Collapsed panels are remembered per screen and survive a reload, because a
 // warehouse screen is set up once for how someone works and then left alone.
 const MINI_KEY = 'essa_minimized'
@@ -245,34 +303,13 @@ function Section({ id, title, summary, actions, children, defaultOpen = true, st
   )
 }
 
-// The ESSA-AI logo mark — the letters "AI" (rotating during the login intro)
-function AiLogo({ size = 120 }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <defs>
-        <linearGradient id="lg" x1="0" y1="0" x2="120" y2="120">
-          <stop offset="0" stopColor="#2F8F68" /><stop offset="1" stopColor="#0B3D2E" />
-        </linearGradient>
-      </defs>
-      {/* gradient ring + a rotating orbit dot for flair */}
-      <circle cx="60" cy="60" r="54" stroke="url(#lg)" strokeWidth="2.5" opacity="0.3" />
-      <circle cx="60" cy="60" r="54" stroke="url(#lg)" strokeWidth="2.5" strokeDasharray="70 250" strokeLinecap="round" />
-      <circle cx="114" cy="60" r="3.5" fill="url(#lg)" />
-      {/* the letters A I */}
-      <text x="60" y="63" textAnchor="middle" dominantBaseline="central"
-        fontFamily="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
-        fontSize="52" fontWeight="800" letterSpacing="2" fill="url(#lg)">AI</text>
-    </svg>
-  )
-}
-
 function LoginScreen({ onLogin }) {
-  const [phase, setPhase] = useState('intro')   // intro (logo spins) -> form (smoke reveal)
   const [username, setUsername] = useState('admin')
   const [password, setPassword] = useState('')
+  const [show, setShow] = useState(false)          // password visible
+  const [caps, setCaps] = useState(false)          // Caps Lock is on
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
-  useEffect(() => { const t = setTimeout(() => setPhase('form'), 2200); return () => clearTimeout(t) }, [])
 
   const submit = async (e) => {
     e.preventDefault(); setErr(''); setBusy(true)
@@ -281,27 +318,67 @@ function LoginScreen({ onLogin }) {
       onLogin(r.token, r.user, r.role, r.permissions)
     } catch (e) { setErr(e.detail || 'Login failed'); setBusy(false) }
   }
+  // a password typed with Caps Lock on is the commonest failed sign-in, and
+  // nothing on screen says so unless this does
+  const capsCheck = (e) => setCaps(!!e.getModifierState?.('CapsLock'))
 
   return (
     <div className="login-wrap">
-      <div className="login-bg" />
-      <div className={'login-logo ' + phase}><AiLogo size={130} /></div>
-      {phase === 'form' && <>
-        {[0, 1, 2, 3, 4].map((i) => <div key={i} className={'smoke smoke-' + i} />)}
-        <form className="login-card" onSubmit={submit}>
-          <div className="login-brand"><span className="th-logo" aria-hidden="true">E</span>
-            Essa <span>· ERP</span></div>
-          <div className="login-sub">Enterprise ERP · sign in to continue</div>
-          <div className="field"><label>Username</label>
-            <input value={username} onChange={(e) => setUsername(e.target.value)} autoFocus /></div>
-          <div className="field"><label>Password</label>
-            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••" /></div>
-          {err && <div className="login-err">{err}</div>}
-          <button className="btn primary" style={{ width: '100%', marginTop: 6 }} disabled={busy}>
-            {busy ? 'Signing in…' : 'Sign in'}</button>
+      <aside className="login-side" aria-hidden="true">
+        <div className="login-side-brand">
+          <span className="login-mark">W</span>
+          <span>Warexx <em>· Enterprise ERP</em></span>
+        </div>
+        <div className="login-side-copy">
+          <h1>Inventory, stores and suppliers — in one place.</h1>
+          <p>Multi-warehouse inventory and retail supply chain, from the invoice at the dock to the bill at the till.</p>
+          <ul>
+            <li><b>Warehouse</b><span>GRN, stock, audits, dispatch</span></li>
+            <li><b>Store / POS</b><span>Billing, floor sales, store stock</span></li>
+            <li><b>Reports</b><span>Every register, filtered and exportable</span></li>
+          </ul>
+        </div>
+        <div className="login-side-foot">© {new Date().getFullYear()} Warexx · Enterprise ERP</div>
+      </aside>
+
+      <main className="login-main">
+        <form className="login-card" onSubmit={submit} noValidate>
+          <div className="login-card-mark"><span className="login-mark">W</span></div>
+          <h2 className="login-title">Welcome back</h2>
+          <p className="login-sub">Sign in to your Warexx account</p>
+
+          <label className="login-field">
+            <span>Username</span>
+            <div className="login-input">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>
+              <input value={username} onChange={(e) => setUsername(e.target.value)} autoFocus
+                autoComplete="username" spellCheck={false} placeholder="Your username" />
+            </div>
+          </label>
+
+          <label className="login-field">
+            <span>Password</span>
+            <div className="login-input">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
+              <input type={show ? 'text' : 'password'} value={password}
+                onChange={(e) => setPassword(e.target.value)} onKeyUp={capsCheck} onKeyDown={capsCheck}
+                autoComplete="current-password" placeholder="Your password" />
+              <button type="button" className="login-eye" onClick={() => setShow((v) => !v)}
+                aria-label={show ? 'Hide password' : 'Show password'} title={show ? 'Hide password' : 'Show password'}>
+                {show ? 'Hide' : 'Show'}</button>
+            </div>
+          </label>
+          {caps && <div className="login-hint">Caps Lock is on</div>}
+
+          {err && <div className="login-err" role="alert">{err}</div>}
+
+          <button className="login-submit" disabled={busy || !username.trim() || !password}>
+            {busy && <span className="login-spin" aria-hidden="true" />}
+            {busy ? 'Signing in…' : 'Sign in'}
+          </button>
+          <p className="login-foot">Access is managed by your administrator.</p>
         </form>
-      </>}
+      </main>
     </div>
   )
 }
@@ -411,6 +488,42 @@ const fmtDate = (value, blank = '—') => {
 const ISO_CELL_RE = /^\d{4}-\d{2}-\d{2}(?:[T ].*)?$/
 const fmtLoose = (v) => (typeof v === 'string' && ISO_CELL_RE.test(v.trim())
   ? (readableDate(v.trim().slice(0, 10)) || v) : v)
+
+// ---------- filtering BY a date ----------
+// A record's date as ISO, whether it was stored as a register date or as a
+// timestamp — the first of `values` that reads as one. ISO compares as text in
+// calendar order, so a from/to range is two string comparisons.
+const isoOf = (...values) => {
+  for (const v of values) {
+    if (v == null || v === '') continue
+    const s = String(v)
+    const iso = toISODate(s) || toISODate((s.match(ISO_STAMP_RE) || [])[1])
+    if (iso) return iso
+  }
+  return ''
+}
+// The LOCAL calendar day of a server timestamp. The server stamps naive UTC, so
+// reading the first ten characters puts anything done before 05:30 IST on the
+// previous day.
+const localDay = (stamp) => {
+  if (!stamp) return ''
+  const s = String(stamp)
+  const t = new Date(/(?:[zZ]|[+-]\d\d:?\d\d)$/.test(s) ? s : s + 'Z')
+  return isNaN(t) ? isoOf(s) : `${t.getFullYear()}-${pad2(t.getMonth() + 1)}-${pad2(t.getDate())}`
+}
+// Today's local date, less `days`, as ISO.
+const daysAgo = (days) => {
+  const d = new Date(); d.setDate(d.getDate() - days)
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
+}
+// Whether an ISO date sits inside a from/to range, either end open. A record
+// with no readable date is left OUT once a range is set: it cannot be shown to
+// fall inside it, and listing it anyway would make the filter look broken.
+const inRange = (iso, from, to) => {
+  if (!from && !to) return true
+  if (!iso) return false
+  return (!from || iso >= from) && (!to || iso <= to)
+}
 
 // ---------- picking one ----------
 // The box reads DD-MM-YYYY and the calendar behind it is one click away. A bare
@@ -1607,8 +1720,484 @@ const REVIEW_TABS = [
   { key: 'grn', label: 'GRN & Notes', paths: ['meta.'],
     hint: 'The handwritten GRN number, who received it, and anything else' },
 ]
+// …and, on the invoice page, what the goods on it BECOME: the receipt (where
+// they land, what each line is, sizes, shortages, prices, posting) and the stock
+// it made. The same invoice, further along — so the same tab strip.
+const RECEIPT_TABS = [
+  { key: 'receive', label: 'Receive & Post', paths: [],
+    hint: 'The GRN: warehouse, category, unit, received qty, shortages, size breakdown, retail price — and posting it into stock' },
+  { key: 'stock', label: 'Stock & Labels', paths: [],
+    hint: 'What this invoice put in stock: products, piece codes, and its labels' },
+]
 
-function Review({ docId, onSaved, onCreateGrn, toast }) {
+// One saved invoice, opened from the register: read-only, because it is already
+// a GRN — the header, what was billed, and the way to the GRN where it is
+// worked on.
+//: The invoice register's columns — every saved supplier invoice (its GRN), in
+//: the LR register's layout: one wide row each, the figure you look for first.
+const INV_REG_COLS = [
+  { k: 'grn_no', h: 'GRN No', w: 96, mono: 1 },
+  { k: 'invoice_number', h: 'Invoice No', w: 110, sub: 'invoice_date', mono: 1 },
+  { k: 'supplier_name', h: 'Supplier', w: 220 },
+  { k: 'warehouse_name', h: 'Warehouse', w: 110 },
+  { k: 'line_count', h: 'Lines', w: 52, num: 1 },
+  { k: 'items', h: 'Items', w: 52, num: 1 },
+  { k: 'taxable_total', h: 'Taxable', w: 96, num: 1, money: 1 },
+  { k: 'tax_total', h: 'Tax', w: 84, num: 1, money: 1 },
+  { k: 'grand_total', h: 'Grand Total', w: 104, num: 1, money: 1 },
+  { k: 'short_value', h: 'Short', w: 84, num: 1, money: 1 },
+  { k: 'posted_at', h: 'Posted On', w: 92, mono: 1 },
+]
+
+// Invoice Entry's main area when no document is open: every saved supplier
+// invoice as a register, read from the server 100 at a time (/api/purchases/page
+// — the GRN list's own rows, order and search), newest first. Most of these were
+// brought over from the old system as posted GRNs and have no uploaded scan; the
+// ones read from a scan are here too once they became a GRN.
+function InvoiceRegister({ onOpenGrn, active = true }) {
+  const [pg, setPg] = useState({ rows: [], total: 0, page: 1, pages: 1, size: 100, counts: {} })
+  const [page, setPage] = useState(1)
+  const [size, setSize] = useState(100)
+  const [q, setQ] = useState('')
+  const [scope, setScope] = useState('all')
+  const [open, setOpen] = useState(null)             // purchase id being viewed
+  const [busy, setBusy] = useState(false)
+  // The Filters panel — invoice-date range, supplier, amount range — narrowed on
+  // the server (/api/purchases/page), so it holds across every page, not this one.
+  const [filtersOpen, setFiltersOpen] = useState(false)
+  const [pf, setPf] = useState({})
+  const [suppliers, setSuppliers] = useState([])
+  useEffect(() => { if (filtersOpen && !suppliers.length) api.listSuppliers().then((s) => setSuppliers(s.map((x) => x.name).filter(Boolean))).catch(() => {}) }, [filtersOpen])
+  const setF = (k, v) => setPf((f) => ({ ...f, [k]: v }))
+  const activeF = Object.values(pf).filter((v) => v !== '' && v != null).length
+  const panel = JSON.stringify(pf)
+  useEffect(() => { setPage(1) }, [q, scope, panel])
+  useEffect(() => {
+    if (!active) return undefined
+    setBusy(true)
+    const t = setTimeout(() => api.pagePurchases({
+      page, size: size || 2000, q, filter: scope,
+      ...Object.fromEntries(Object.entries(pf).filter(([, v]) => v !== '' && v != null)),
+    })
+      .then((r) => { setPg(r); if (r.page !== page) setPage(r.page) })
+      .catch(() => {}).finally(() => setBusy(false)), q || activeF ? 300 : 0)
+    return () => clearTimeout(t)
+  }, [page, size, q, scope, panel, active])
+  if (open) return <RecordedInvoice id={open} onOpenGrn={onOpenGrn} onBack={() => setOpen(null)} />
+  const c = pg.counts || {}
+  const pager = {
+    page, setPage, size, setSize, total: pg.total, pages: pg.pages, slice: pg.rows,
+    from: pg.total === 0 ? 0 : (pg.page - 1) * pg.size + 1,
+    to: Math.min(pg.total, pg.page * pg.size),
+  }
+  const cell = (r, col) => {
+    const v = r[col.k]
+    if (col.k === 'posted_at') return v ? fmtLoose(String(v).slice(0, 10)) ?? String(v).slice(0, 10) : ''
+    if (col.k === 'short_value') return v ? money(v) : ''
+    if (col.money) return money(v)
+    if (col.k === 'items') return r.status === 'posted' ? (v ?? '') : ''
+    return v ?? ''
+  }
+  return (
+    <div style={{ flex: 1, minWidth: 0, overflow: 'auto', padding: '0 var(--gutter) var(--gutter)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '14px 0 8px' }}>
+        <h3 style={{ margin: 0, textTransform: 'uppercase', letterSpacing: '.5px', fontSize: 13 }}>
+          Saved invoices · {(c.all ?? pg.total).toLocaleString('en-IN')}</h3>
+        {busy && <span className="small">loading…</span>}
+        <div style={{ flex: 1 }} />
+        <SearchBox value={q} onChange={setQ} placeholder="Search supplier, invoice, status…" style={{ width: 260 }} />
+        <FilterButton open={filtersOpen} onToggle={() => setFiltersOpen((o) => !o)} active={activeF} />
+      </div>
+      <FilterPanel open={filtersOpen} active={activeF} onClear={() => setPf({})}
+        hint={activeF ? `${activeF} filter${activeF === 1 ? '' : 's'} active — the counts and every page follow them`
+          : 'Narrow by invoice date, supplier or grand total'}>
+        <DateField label="Invoice date from" width={160} value={pf.date_from || ''} onChange={(v) => setF('date_from', v)} />
+        <DateField label="Invoice date to" width={160} value={pf.date_to || ''} onChange={(v) => setF('date_to', v)} />
+        <div className="field" style={{ width: 240 }}><label>Supplier</label>
+          <input value={pf.supplier || ''} list="invreg-suppliers" placeholder="Any — type part of a name"
+            onChange={(e) => setF('supplier', e.target.value)} />
+          <datalist id="invreg-suppliers">{suppliers.map((n) => <option key={n} value={n} />)}</datalist></div>
+        <div className="field" style={{ width: 130 }}><label>Grand total from (₹)</label>
+          <input type="number" min="0" value={pf.min_total ?? ''} placeholder="Any"
+            onChange={(e) => setF('min_total', e.target.value)} /></div>
+        <div className="field" style={{ width: 130 }}><label>Grand total to (₹)</label>
+          <input type="number" min="0" value={pf.max_total ?? ''} placeholder="Any"
+            onChange={(e) => setF('max_total', e.target.value)} /></div>
+      </FilterPanel>
+      <div className="toolbar" style={{ marginBottom: 8 }}><FilterChips value={scope} onChange={setScope} options={[
+        ['all', 'All', c.all ?? 0, 'Every saved invoice'],
+        ['posted', 'Posted', c.posted ?? 0, 'Booked into stock'],
+        ['draft', 'Draft', c.draft ?? 0, 'Receipt started, not yet posted'],
+        ['short', 'Short', c.short ?? 0, 'Billed but not all delivered — a claim is open'],
+        ['nodoc', 'No scan', c.nodoc ?? 0, 'No uploaded invoice behind it — brought over from the old system, or keyed in'],
+      ]} /></div>
+      <div className="tablewrap">
+        <table className="items reg">
+          <thead><tr>
+            <th style={{ width: 70 }}>Status</th>
+            {INV_REG_COLS.map((col) => <th key={col.k} style={{ width: col.w }}
+              className={col.num ? 'num' : undefined}>{col.h}</th>)}
+            <th style={{ width: 64 }}>Scan</th>
+          </tr></thead>
+          <tbody>{pg.rows.map((r) => (
+            <tr key={r.id} style={{ cursor: 'pointer' }} onClick={() => setOpen(r.id)} title="Open this invoice">
+              <td style={{ fontSize: 11, fontWeight: 600 }}>
+                {r.status === 'posted' ? <span style={{ color: 'var(--ok)' }}>✓ posted</span>
+                  : <span style={{ color: 'var(--muted)' }}>{r.status}</span>}</td>
+              {INV_REG_COLS.map((col) => (
+                <td key={col.k} className={(col.num ? 'num ' : '') + (col.mono ? 'mono' : '')}>
+                  <div className="cellmain">{cell(r, col)}</div>
+                  {col.sub && r[col.sub] && <div className="cellsub">{fmtLoose(r[col.sub]) ?? r[col.sub]}</div>}
+                </td>
+              ))}
+              <td className="small">{r.document_id ? '📄 yes' : '—'}</td>
+            </tr>
+          ))}</tbody>
+        </table>
+      </div>
+      {!busy && pg.rows.length === 0 && <div className="empty" style={{ marginTop: 30 }}>
+        {q ? 'No saved invoice matches that search.' : 'No saved invoices.'}</div>}
+      <Pager {...pager} noun="invoice" />
+    </div>
+  )
+}
+
+
+// ==========================================================================
+//  Invoice Entry — one module, from the bill to the shelf
+//  ------------------------------------------------------------------------
+//  An invoice is one record that moves through stages: it is READ (uploaded or
+//  keyed in) and CHECKED (confirmed), then RECEIVED as a GRN (where it lands,
+//  what each line is, how bundles break into sizes, what was short), POSTED,
+//  and is then STOCK. This module shows that record whole — one list of every
+//  invoice at whatever stage it has reached, and one page per invoice with its
+//  stages top to bottom — instead of three screens that each know one part.
+//  The stages reuse the proven editors unchanged: Review (the invoice), GrnWork
+//  (receiving and posting) and the stock the receipt made (InvoiceStock); the
+//  whole-stock view is Inventory, one click away and linked both ways.
+// ==========================================================================
+const INV_STAGES = [
+  ['review', 'To review', 'Read, not yet checked and confirmed'],
+  ['checked', 'Checked', 'Confirmed — the receipt (GRN) is still to be made'],
+  ['receiving', 'Receiving', 'GRN in draft — being counted, broken down, priced'],
+  ['stock', 'In stock', 'Posted — the goods are in stock'],
+]
+const INV_STAGE_LABEL = Object.fromEntries(INV_STAGES.map(([k, l]) => [k, l]))
+const INV_STAGE_BADGE = { review: 'needs_review', checked: 'confirmed', receiving: 'uploaded', stock: 'posted' }
+
+//: Invoice Entry's table: every invoice, every stage, newest work first.
+const INV_TABLE_COLS = [
+  { k: 'grn_no', h: 'GRN No', w: 96, mono: 1 },
+  { k: 'invoice_number', h: 'Invoice No', w: 110, sub: 'invoice_date', mono: 1 },
+  { k: 'supplier_name', h: 'Supplier', w: 220 },
+  { k: 'warehouse_name', h: 'Warehouse', w: 110 },
+  { k: 'line_count', h: 'Lines', w: 52, num: 1 },
+  { k: 'items', h: 'Items', w: 52, num: 1 },
+  { k: 'taxable_total', h: 'Taxable', w: 96, num: 1, money: 1 },
+  { k: 'tax_total', h: 'Tax', w: 84, num: 1, money: 1 },
+  { k: 'grand_total', h: 'Grand Total', w: 104, num: 1, money: 1 },
+  { k: 'short_value', h: 'Short', w: 84, num: 1, money: 1 },
+  { k: 'posted_at', h: 'Posted On', w: 92, mono: 1 },
+]
+
+function InvoiceTable({ active = true, reloadKey, onOpen, onDeleteDoc, onClearAll }) {
+  const [pg, setPg] = useState({ rows: [], total: 0, page: 1, pages: 1, size: 100, counts: {} })
+  const [page, setPage] = useState(1)
+  const [size, setSize] = useState(100)
+  const [q, setQ] = useState('')
+  const [stage, setStage] = useState('all')
+  const [busy, setBusy] = useState(false)
+  const [filtersOpen, setFiltersOpen] = useState(false)
+  const [pf, setPf] = useState({})
+  const [suppliers, setSuppliers] = useState([])
+  useEffect(() => { if (filtersOpen && !suppliers.length) api.listSuppliers().then((x) => setSuppliers(x.map((y) => y.name).filter(Boolean))).catch(() => {}) }, [filtersOpen])
+  const setF = (k, v) => setPf((f) => ({ ...f, [k]: v }))
+  const activeF = Object.values(pf).filter((v) => v !== '' && v != null).length
+  const panel = JSON.stringify(pf)
+  useEffect(() => { setPage(1) }, [q, stage, panel])
+  useEffect(() => {
+    if (!active) return undefined
+    setBusy(true)
+    const t = setTimeout(() => api.invoicePage({ page, size: size || 2000, q, stage, ...pf })
+      .then((r) => { setPg(r); if (r.page !== page) setPage(r.page) })
+      .catch(() => {}).finally(() => setBusy(false)), q || activeF ? 300 : 0)
+    return () => clearTimeout(t)
+  }, [page, size, q, stage, panel, active, reloadKey])
+  const c = pg.counts || {}
+  const pager = {
+    page, setPage, size, setSize, total: pg.total, pages: pg.pages, slice: pg.rows,
+    from: pg.total === 0 ? 0 : (pg.page - 1) * pg.size + 1, to: Math.min(pg.total, pg.page * pg.size),
+  }
+  const cell = (r, col) => {
+    const v = r[col.k]
+    if (col.k === 'posted_at') return v ? fmtLoose(String(v).slice(0, 10)) ?? String(v).slice(0, 10) : ''
+    if (col.k === 'short_value') return v ? money(v) : ''
+    if (col.money) return v == null ? '' : money(v)
+    if (col.k === 'items') return r.stage === 'stock' ? (v ?? '') : ''
+    if (col.k === 'grn_no' && r.kind === 'doc') return <span className="small">not yet</span>
+    return v ?? ''
+  }
+  return (
+    <div style={{ flex: 1, minWidth: 0, overflow: 'auto', padding: '0 var(--gutter) var(--gutter)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '14px 0 8px' }}>
+        <h3 style={{ margin: 0, textTransform: 'uppercase', letterSpacing: '.5px', fontSize: 13 }}>
+          Invoices · {(c.all ?? pg.total).toLocaleString('en-IN')}</h3>
+        {busy && <span className="small">loading…</span>}
+        <div style={{ flex: 1 }} />
+        {onClearAll && <button className="btn" onClick={onClearAll}
+          title="Delete all documents & transaction data">Clear all</button>}
+        <SearchBox value={q} onChange={setQ} placeholder="Search supplier, invoice, status…" style={{ width: 280 }} />
+        <FilterButton open={filtersOpen} onToggle={() => setFiltersOpen((o) => !o)} active={activeF} />
+      </div>
+      <FilterPanel open={filtersOpen} active={activeF} onClear={() => setPf({})}
+        hint={activeF ? `${activeF} filter${activeF === 1 ? '' : 's'} active — the counts and every page follow them`
+          : 'Narrow by invoice date, supplier or grand total'}>
+        <DateField label="Invoice date from" width={160} value={pf.date_from || ''} onChange={(v) => setF('date_from', v)} />
+        <DateField label="Invoice date to" width={160} value={pf.date_to || ''} onChange={(v) => setF('date_to', v)} />
+        <div className="field" style={{ width: 240 }}><label>Supplier</label>
+          <input value={pf.supplier || ''} list="invtable-suppliers" placeholder="Any — type part of a name"
+            onChange={(e) => setF('supplier', e.target.value)} />
+          <datalist id="invtable-suppliers">{suppliers.map((n) => <option key={n} value={n} />)}</datalist></div>
+        <div className="field" style={{ width: 150 }}><label>Grand total from (₹)</label>
+          <input type="number" min="0" value={pf.min_total ?? ''} placeholder="Any" onChange={(e) => setF('min_total', e.target.value)} /></div>
+        <div className="field" style={{ width: 150 }}><label>Grand total to (₹)</label>
+          <input type="number" min="0" value={pf.max_total ?? ''} placeholder="Any" onChange={(e) => setF('max_total', e.target.value)} /></div>
+      </FilterPanel>
+      <div className="toolbar" style={{ marginBottom: 8 }}><FilterChips value={stage} onChange={setStage} options={[
+        ['all', 'All', c.all ?? 0, 'Every invoice, at every stage'],
+        ...INV_STAGES.map(([k, label, tip]) => [k, label, c[k] ?? 0, tip]),
+        ['short', 'Short', c.short ?? 0, 'Billed but not all delivered — a claim is open'],
+      ]} /></div>
+      <div className="tablewrap">
+        <table className="items reg">
+          <thead><tr>
+            <th style={{ width: 96 }}>Stage</th>
+            {INV_TABLE_COLS.map((col) => <th key={col.k} style={{ width: col.w }}
+              className={col.num ? 'num' : undefined}>{col.h}</th>)}
+            <th style={{ width: 70 }}>Scan</th><th style={{ width: 36 }}></th>
+          </tr></thead>
+          <tbody>{pg.rows.map((r) => (
+            <tr key={r.key} style={{ cursor: 'pointer' }} onClick={() => onOpen(r)}
+              title={`Open this invoice — ${INV_STAGE_LABEL[r.stage] || r.stage}`}>
+              <td><span className={'badge ' + (INV_STAGE_BADGE[r.stage] || '')}>{INV_STAGE_LABEL[r.stage] || r.stage}</span></td>
+              {INV_TABLE_COLS.map((col) => (
+                <td key={col.k} className={(col.num ? 'num ' : '') + (col.mono ? 'mono' : '')}>
+                  <div className="cellmain">{cell(r, col)}</div>
+                  {col.sub && r[col.sub] && <div className="cellsub">{fmtLoose(r[col.sub]) ?? r[col.sub]}</div>}
+                </td>
+              ))}
+              <td className="small">{r.kind === 'doc'
+                ? (r.has_image === false ? '✍ typed' : r.confidence != null ? `📄 ${Math.round(r.confidence * 100)}%` : '📄')
+                : (r.document_id ? '📄 yes' : '—')}</td>
+              <td>{r.kind === 'doc' && onDeleteDoc && (
+                <button className="rowdel" title="Delete this uploaded document"
+                  onClick={(e) => { e.stopPropagation(); onDeleteDoc(r.document_id) }}>×</button>)}</td>
+            </tr>
+          ))}</tbody>
+        </table>
+      </div>
+      {!busy && pg.rows.length === 0 && <div className="empty" style={{ marginTop: 30 }}>
+        {q || activeF ? 'No invoice matches that search.' : 'No invoices yet. Use “Upload invoice” or “New entry” at the top right.'}</div>}
+      <Pager {...pager} noun="invoice" />
+    </div>
+  )
+}
+
+// The stock one invoice made: each product its lines (or their size rows)
+// became, what this invoice brought, what is on hand now, and this invoice's
+// own piece codes — printed from here without touching any other receipt's.
+function InvoiceStock({ purchaseId, toast, onOpenProduct, bare }) {
+  const [st, setSt] = useState(null)
+  const load = useCallback(() => api.purchaseStock(purchaseId).then(setSt)
+    .catch((e) => toast(e.detail || 'Could not read the stock', 'err')), [purchaseId])
+  useEffect(() => { setSt(null); load() }, [load])
+  if (!st) return <div className="empty">Loading…</div>
+  const allIds = st.rows.flatMap((r) => r.unit_ids)
+  const printIds = (ids) => {
+    if (!ids.length) { toast('No piece codes on this invoice to print', 'err'); return }
+    window.open(api.unitLabelsUrl(null, ids), '_blank')
+    setTimeout(load, 1200)
+  }
+  return (
+    <div className={bare ? 'section' : undefined}
+      style={bare ? undefined : { flex: 1, minWidth: 0, overflow: 'auto', padding: '14px var(--gutter) var(--gutter)' }}>
+      {bare && <h4>Stock &amp; Labels</h4>}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
+        <span className="small">{st.rows.length} product{st.rows.length === 1 ? '' : 's'} · {st.pieces} piece code{st.pieces === 1 ? '' : 's'} from this invoice</span>
+        <div style={{ flex: 1 }} />
+        <button className="btn primary" disabled={!allIds.length} onClick={() => printIds(allIds)}
+          title="A label for every piece this invoice brought in — and only those">🖨 Print this invoice's labels ({allIds.length})</button>
+      </div>
+      {st.rows.length === 0 ? <div className="empty">This receipt made no products{st.status !== 'posted' ? ' yet — post it first' : ''}.</div> : (
+        <div className="tablewrap">
+          <table className="items">
+            <thead><tr><th style={{ width: 46 }}>QR</th><th>SKU</th><th>Product / variant</th><th>Category</th>
+              <th className="num">Received</th><th className="num">In stock now</th><th className="num">Piece codes</th><th></th></tr></thead>
+            <tbody>{st.rows.map((r) => (
+              <tr key={r.product_id}>
+                <td style={{ padding: 2 }}><img src={api.qrSvgUrl(r.product_id, 2)} alt={'QR ' + r.sku} loading="lazy"
+                  style={{ width: 34, height: 34, display: 'block', background: '#fff', borderRadius: 3, padding: 1 }} /></td>
+                <td className="mono">{r.sku || '—'}</td>
+                <td><div>{r.name || r.description}</div>
+                  {(r.variant || r.description) && <div className="small" style={{ color: 'var(--muted)' }}>
+                    {[r.variant, r.description !== r.name ? r.description : null].filter(Boolean).join(' · ')}</div>}</td>
+                <td className="mono" style={{ fontSize: 11 }}>{r.category || <span className="badge review">unmapped</span>}</td>
+                <td className="num mono">{r.received} {r.uom}</td>
+                <td className="num mono" style={r.stock_qty < 0 ? { color: 'var(--danger)' } : undefined}>{r.stock_qty} {r.uom}</td>
+                <td className="num mono">{r.unit_ids.length}</td>
+                <td style={{ whiteSpace: 'nowrap' }}>
+                  <button className="btn" disabled={!r.unit_ids.length} onClick={() => printIds(r.unit_ids)}
+                    title="This invoice's labels for this product">🖨 Labels</button>{' '}
+                  {onOpenProduct && <button className="btn" onClick={() => onOpenProduct(r.product_id)}
+                    title="The whole product: all its stock, codes, movements and adjustments">Open →</button>}
+                </td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// One invoice, whole: its progress at the top, then its stages top to bottom —
+// the invoice, receiving and posting it, and the stock it made. The stage that
+// needs work is open; the others fold to a line and open on a click.
+function InvoicePage({ sel, toast, onBack, onChanged, onSelect, onOpenProduct }) {
+  const docId = sel.document_id || null
+  const pid = sel.purchase_id || null
+  const [doc, setDoc] = useState(null)             // {status, …} of the uploaded document
+  const [grn, setGrn] = useState(null)             // the receipt header, for the progress
+  const [grnRead, setGrnRead] = useState(!pid)     // the receipt has been read (or there is none)
+  const loadDoc = useCallback(() => {
+    if (!docId) { setDoc(null); return }
+    api.getDocument(docId).then((d) => setDoc(d.document || d)).catch(() => setDoc(null))
+  }, [docId])
+  const loadGrn = useCallback(() => {
+    if (!pid) { setGrn(null); setGrnRead(true); return }
+    api.getPurchase(pid).then(setGrn).catch(() => setGrn(null)).finally(() => setGrnRead(true))
+  }, [pid])
+  useEffect(() => { loadDoc() }, [loadDoc])
+  useEffect(() => { loadGrn() }, [loadGrn])
+
+  const confirmed = !docId || ['confirmed', 'posted'].includes(doc?.status)
+  const posted = grn?.status === 'posted'
+  // the step reached: posted is every step done — the goods are in stock
+  const stageIdx = posted ? 5 : grn ? 2 : confirmed ? 1 : 0
+  // opens where the work is: a receipt in stock on its stock, one being received
+  // on receiving, anything else on the invoice itself
+  const startTab = posted ? 'stock' : grn ? 'receive' : undefined
+  const [recTab, setRecTab] = useState(null)       // a recorded invoice's tab
+  const changed = () => { loadDoc(); loadGrn(); if (onChanged) onChanged() }
+
+  const title = grn?.supplier_name || doc?.supplier_name || 'Invoice'
+  const invNo = grn?.invoice_number || doc?.invoice_number
+  const total = grn?.grand_total ?? doc?.grand_total
+  const STEPS = ['Read', 'Checked', 'Receiving', 'Posted', 'In stock']
+  const rtab = recTab || (posted ? 'stock' : 'receive')
+  return (
+    <div className="invpage">
+      <div className="invhead">
+        <div className="detailbar" style={{ margin: 0 }}>
+          <button className="btn" onClick={onBack}>← Invoices</button>
+          <h2>{title}</h2>
+          {invNo && <span className="mono small">#{invNo}</span>}
+          {total != null && <span className="small">₹ {money(total)}</span>}
+          {grn?.grn_no && <span className="mono small">· {grn.grn_no}</span>}
+          {!docId && <span className="small">recorded — no uploaded scan</span>}
+        </div>
+        <ol className="stepper">{STEPS.map((l, i) => (
+          <li key={l} className={i < stageIdx ? 'done' : i === stageIdx ? 'now' : ''}>
+            <span className="dot">{i < stageIdx ? '✓' : i + 1}</span>{l}</li>
+        ))}</ol>
+      </div>
+
+      {!grnRead ? <div className="empty">Loading…</div> : docId ? (
+        // the invoice and its receipt are one record: one work area, one tab strip
+        <div className="invwork">
+          <Review docId={docId} toast={toast} onSaved={changed}
+            purchaseId={pid} posted={posted} startTab={startTab}
+            onChanged={changed} onOpenProduct={onOpenProduct}
+            onCreateGrn={(id) => { onSelect({ document_id: docId, purchase_id: id }); if (onChanged) onChanged() }}
+            onGrnDeleted={() => { onSelect({ document_id: docId, purchase_id: null }); if (onChanged) onChanged() }} />
+        </div>
+      ) : (
+        // an invoice recorded without a scan: the same three parts, the same strip
+        <div className="invwork">
+          <div className="editor">
+            <div className="revtabs" role="tablist">
+              {[['invoice', 'Invoice'], ['receive', 'Receive & Post'], ['stock', 'Stock & Labels']].map(([k, label]) => (
+                <button key={k} role="tab" aria-selected={rtab === k} disabled={k === 'stock' && !posted}
+                  className={'revtab' + (rtab === k ? ' on' : '') + (k !== 'invoice' ? ' receipt' : '')}
+                  onClick={() => setRecTab(k)}>{label}</button>
+              ))}
+            </div>
+            {rtab === 'invoice' && <RecordedInvoice id={pid} />}
+            {rtab === 'receive' && <GrnWork selId={pid} toast={toast} embedded onChanged={changed}
+              onDeleted={() => { onBack(); if (onChanged) onChanged() }} />}
+            {rtab === 'stock' && posted && <InvoiceStock purchaseId={pid} toast={toast} onOpenProduct={onOpenProduct} bare />}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function RecordedInvoice({ id, onOpenGrn, onBack }) {
+  const [p, setP] = useState(null)
+  const [err, setErr] = useState('')
+  useEffect(() => {
+    setP(null); setErr('')
+    if (id) api.getPurchase(id).then(setP).catch((e) => setErr(e.detail || 'Could not open this invoice'))
+  }, [id])
+  if (!id) return <div className="empty">
+    Select an invoice from the left. These have no uploaded scan — they were recorded as goods receipts.</div>
+  if (err) return <div className="empty">{err}</div>
+  if (!p) return <div className="empty">Loading…</div>
+  const lines = p.lines || []
+  const field = (label, v) => <div className="field" style={{ minWidth: 150 }}><label>{label}</label>
+    <div style={{ fontWeight: 600, padding: '4px 0' }}>{v ?? '—'}</div></div>
+  return (
+    <div style={{ flex: 1, minWidth: 0, overflow: 'auto', padding: 'var(--gutter)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        {onBack && <button className="btn" onClick={onBack}>← Invoices</button>}
+        <h2 style={{ margin: 0 }}>{p.supplier_name || 'Invoice'}</h2>
+        <span className={'badge ' + p.status}>{p.status}</span>
+        {!p.document_id && <span className="small">no uploaded scan</span>}
+        <div style={{ flex: 1 }} />
+        {onOpenGrn && <button className="btn primary" onClick={() => onOpenGrn(p.id)}>Open in GRN →</button>}
+      </div>
+      <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', margin: '16px 0' }}>
+        {field('Invoice no', p.invoice_number)}
+        {field('Invoice date', fmtLoose(p.invoice_date) ?? p.invoice_date)}
+        {field('GRN no', p.grn_no)}
+        {field('Warehouse', p.warehouse_name)}
+        {field('Taxable', '₹ ' + money(p.taxable_total))}
+        {field('Tax', '₹ ' + money(p.tax_total))}
+        {field('Grand total', '₹ ' + money(p.grand_total))}
+      </div>
+      <div className="tablewrap">
+        <table className="items">
+          <thead><tr><th>#</th><th>Description</th><th>HSN</th><th className="num">Qty</th><th>UOM</th>
+            <th className="num">Rate</th><th className="num">Amount</th></tr></thead>
+          <tbody>{lines.map((l, i) => (
+            <tr key={l.id}><td>{i + 1}</td><td>{l.description}</td><td>{l.hsn || ''}</td>
+              <td className="num mono">{l.qty}</td><td>{l.uom || ''}</td>
+              <td className="num mono">{money(l.rate)}</td><td className="num mono">{money(l.amount)}</td></tr>
+          ))}</tbody>
+        </table>
+      </div>
+      {lines.length === 0 && <p className="empty" style={{ marginTop: 20 }}>No lines on this invoice.</p>}
+    </div>
+  )
+}
+
+// `purchaseId` (null or an id) marks Review as the invoice page's work area: it
+// then also carries the receipt tabs — the GRN's whole job and the stock it made
+// — and `startTab` says which tab the page opens on.
+function Review({ docId, onSaved, onCreateGrn, toast, onBack, purchaseId, posted, startTab,
+                  onChanged, onGrnDeleted, onOpenProduct }) {
+  const inPage = purchaseId !== undefined
   const [doc, setDoc] = useState(null)
   const [data, setData] = useState(null)
   const [flags, setFlags] = useState({})
@@ -1622,7 +2211,11 @@ function Review({ docId, onSaved, onCreateGrn, toast }) {
   // the invoice photograph, foldable. Remembered across documents and sessions
   // (useMinimized persists it) — how much room someone wants for the image is a
   // standing preference about how they work, not a per-invoice decision.
-  const [imgOpen, toggleImg] = useMinimized('rev.image', true)
+  const [imgPref, togglePref] = useMinimized('rev.image', true)
+  // Receiving is a wide grid of the receipt's own, not a check against the
+  // photograph — so on the receipt tabs the image folds to its rail by itself
+  // (one click brings it back), and the remembered setting is left alone.
+  const [imgOnReceipt, setImgOnReceipt] = useState(false)
   // Which pages the browser could not fetch, by index. Tracked rather than left
   // to <img>'s broken-file icon: the icon says nothing, the cause is nearly
   // always one nameable server condition, and it matters WHICH page it was —
@@ -1639,7 +2232,7 @@ function Review({ docId, onSaved, onCreateGrn, toast }) {
 
   useEffect(() => {
     if (!docId) return
-    setTab('party'); setUnread(false); setLostPages({})
+    setTab(startTab || 'party'); setUnread(false); setLostPages({})
     api.getDocument(docId).then((d) => {
       setDoc(d.document)
       setUnread(!d.extraction)
@@ -1858,6 +2451,9 @@ function Review({ docId, onSaved, onCreateGrn, toast }) {
     setSaving(false)
   }
 
+  const onReceipt = inPage && (tab === 'receive' || tab === 'stock')
+  const imgOpen = onReceipt ? imgOnReceipt : imgPref
+  const toggleImg = onReceipt ? () => setImgOnReceipt((v) => !v) : togglePref
   return (
     <div className="main">
       {/* The image and the fields compete for one screen, and which one needs the
@@ -1943,6 +2539,7 @@ function Review({ docId, onSaved, onCreateGrn, toast }) {
       </div>
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
         <div className="editor">
+          {onBack && <div className="detailbar"><button className="btn" onClick={onBack}>← Invoices</button></div>}
           {twin && (
             <div className="warnbox" style={{ marginBottom: 20 }}>
               <h4>Another document carries this invoice number</h4>
@@ -2004,12 +2601,15 @@ function Review({ docId, onSaved, onCreateGrn, toast }) {
               a closed tab is invisible, so each tab carries the count of its own
               fields needing review, and the checks box above stays put. */}
           <div className="revtabs" role="tablist">
-            {REVIEW_TABS.map((t) => {
+            {(inPage ? [...REVIEW_TABS, ...RECEIPT_TABS] : REVIEW_TABS).map((t) => {
               const n = Object.keys(flags).filter(
                 (k) => t.paths.some((p) => k.startsWith(p))).length
+              const off = t.key === 'stock' && !posted
               return (
                 <button key={t.key} role="tab" aria-selected={tab === t.key}
-                  className={'revtab' + (tab === t.key ? ' on' : '') + (n ? ' flagged' : '')}
+                  className={'revtab' + (tab === t.key ? ' on' : '') + (n ? ' flagged' : '')
+                    + (RECEIPT_TABS.includes(t) ? ' receipt' : '')}
+                  disabled={off}
                   onClick={() => setTab(t.key)}
                   title={n ? `${n} field(s) here need review` : t.hint}>
                   {t.label}
@@ -2164,26 +2764,148 @@ function Review({ docId, onSaved, onCreateGrn, toast }) {
             </div>
           </div>
           )}
+
+          {/* the receipt, in the invoice: every GRN operation, on this page */}
+          {inPage && tab === 'receive' && (purchaseId
+            ? <GrnWork selId={purchaseId} toast={toast} embedded
+                onChanged={onChanged} onDeleted={onGrnDeleted} />
+            : (
+              <div className="section receipt-empty">
+                <h4>Receive &amp; Post</h4>
+                <p>Receiving is where this invoice's goods are counted in: the warehouse they land at, each
+                  line's category and unit, what actually arrived and what was short, bundles broken into
+                  sizes, the retail price — then <b>Post</b> puts them in stock.</p>
+                <p className="small">It starts from the invoice's confirmed lines
+                  {doc && !['confirmed', 'posted'].includes(doc.status)
+                    ? ' — this confirms the invoice as it stands first (training the supplier if ticked below).' : '.'}</p>
+                <button className="btn primary" disabled={saving} onClick={createGrn}>
+                  {saving ? 'Working…' : 'Start receiving (create GRN) →'}</button>
+              </div>
+            ))}
+          {inPage && tab === 'stock' && posted && (
+            <InvoiceStock purchaseId={purchaseId} toast={toast} onOpenProduct={onOpenProduct} bare />
+          )}
         </div>
 
-        <div className="actionbar">
+        {!onReceipt && <div className="actionbar">
           <label className="chk"><input type="checkbox" checked={train} onChange={(e) => setTrain(e.target.checked)} />
             Train this supplier's format on save</label>
           <div className="spacer" />
           <a className="btn" href={api.exportUrl(docId, 'csv')} target="_blank" rel="noreferrer">Export CSV</a>
           <button className="btn primary" disabled={saving} onClick={save}>
             {saving ? 'Saving…' : train ? 'Confirm & Train' : 'Confirm'}</button>
-          <button className="btn" style={{ borderColor: 'var(--accent-2)', color: 'var(--accent-2)' }}
-            disabled={saving}
-            title="Confirms the extraction (and trains the supplier if ticked), then builds a GRN"
-            onClick={createGrn}>Create GRN →</button>
-        </div>
+          {inPage && purchaseId
+            ? <button className="btn" style={{ borderColor: 'var(--accent-2)', color: 'var(--accent-2)' }}
+                onClick={() => setTab('receive')}
+                title="This invoice's receipt — warehouse, categories, sizes, shortages, prices, posting">Receive &amp; Post →</button>
+            : <button className="btn" style={{ borderColor: 'var(--accent-2)', color: 'var(--accent-2)' }}
+                disabled={saving}
+                title="Confirms the extraction (and trains the supplier if ticked), then builds a GRN"
+                onClick={createGrn}>Create GRN →</button>}
+        </div>}
       </div>
     </div>
   )
 }
 
 // ---------- suppliers ----------
+// Everything on file about one supplier: who they are, how to reach and pay
+// them, and what they have done with us — then the invoice format the reader
+// has learned from their bills.
+function SupplierDetail({ d }) {
+  const b = d.business || {}
+  const bank = d.bank || {}
+  const dash = (v) => (v == null || v === '' ? '—' : v)
+  const rs = (v) => '₹ ' + money(v || 0)
+  const phones = String(d.phone || '').split(/[,/]/).map((x) => x.trim()).filter(Boolean)
+  const row = (k, v, mono) => <><div className="k">{k}</div><div className={mono ? 'mono' : undefined}>{v}</div></>
+  return (
+    <div className="sup-detail">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <h2 style={{ margin: 0 }}>{d.name}</h2>
+        {d.gstin && <span className="badge confirmed mono">{d.gstin}</span>}
+        {d.profile && <span className="badge posted">invoice format learned</span>}
+      </div>
+
+      {d.business && <div className="stats" style={{ display: 'flex', gap: 12, flexWrap: 'wrap', margin: '18px 0 6px' }}>
+        <Stat label="Invoices" value={(b.invoices || 0).toLocaleString('en-IN')} accent="count" />
+        <Stat label="Purchased (posted)" value={rs(b.purchased)} accent="money" />
+        <Stat label="Outstanding" value={rs(b.outstanding)} accent="money" />
+        <Stat label="Paid" value={rs(b.paid)} accent="money" />
+        <Stat label="Returned" value={rs(b.returned)} accent="back" />
+        <Stat label="Products supplied" value={(b.products || 0).toLocaleString('en-IN')} accent="stock" />
+      </div>}
+
+      <h4 style={{ marginTop: 22 }}>Contact &amp; registration</h4>
+      <div className="kv">
+        {row('GSTIN', dash(d.gstin), true)}
+        {row('PAN', dash(d.pan), true)}
+        {row('State', d.state ? `${d.state}${d.state_code ? ` (${d.state_code})` : ''}` : '—')}
+        {row('Address', dash(d.address))}
+        {row('Phone', phones.length ? phones.map((ph, i) => <span key={ph}>{i ? ', ' : ''}<a href={'tel:' + ph.replace(/\s+/g, '')}>{ph}</a></span>) : '—')}
+        {row('Email', d.email ? <a href={'mailto:' + d.email}>{d.email}</a> : '—')}
+        {(d.aliases || []).length > 0 && row('Also written as', d.aliases.join(' · '))}
+        {row('On file since', d.created_at ? readableDate(d.created_at.slice(0, 10)) : '—')}
+      </div>
+
+      <h4 style={{ marginTop: 22 }}>Bank</h4>
+      {Object.values(bank).some((v) => v && v !== '0') ? (
+        <div className="kv">
+          {row('Bank', dash(bank.name))}
+          {row('Account name', dash(bank.account_name))}
+          {row('Account no', dash(bank.account_no), true)}
+          {row('IFSC', dash(bank.ifsc), true)}
+          {row('Branch', bank.branch && bank.branch !== '0' ? bank.branch : '—')}
+        </div>
+      ) : <p className="small">No bank details on file.</p>}
+
+      {d.business && <>
+      <h4 style={{ marginTop: 22 }}>Purchases</h4>
+      <div className="kv">
+        {row('Invoices', `${(b.invoices || 0).toLocaleString('en-IN')} (${(b.posted || 0).toLocaleString('en-IN')} posted)`)}
+        {row('First invoice', b.first_invoice ? readableDate(b.first_invoice) : '—')}
+        {row('Last invoice', b.last_invoice ? readableDate(b.last_invoice) : '—')}
+        {row('Pending bills', `${(b.pending_bills || 0).toLocaleString('en-IN')} · ${rs(b.outstanding)} outstanding`)}
+        {row('Payments', `${(b.payments || 0).toLocaleString('en-IN')} · ${rs(b.paid)}`)}
+        {row('Returns (debit notes)', `${(b.returns || 0).toLocaleString('en-IN')} · ${rs(b.returned)}`)}
+      </div>
+      {(b.recent || []).length > 0 && (
+        <div className="tablewrap" style={{ marginTop: 10 }}>
+          <table className="items">
+            <thead><tr><th>GRN No</th><th>Invoice No</th><th>Invoice date</th>
+              <th className="num">Grand total</th><th>Status</th></tr></thead>
+            <tbody>{b.recent.map((r) => (
+              <tr key={r.id}><td className="mono">{r.grn_no || '#' + r.id}</td><td className="mono">{r.invoice_number || '—'}</td>
+                <td>{fmtLoose(r.invoice_date) ?? r.invoice_date ?? ''}</td>
+                <td className="num mono">{money(r.grand_total)}</td>
+                <td><span className={'badge ' + r.status}>{r.status}</span></td></tr>
+            ))}</tbody>
+          </table>
+          <div className="small" style={{ marginTop: 4 }}>The latest {b.recent.length} of {(b.invoices || 0).toLocaleString('en-IN')} — every one is under GRN and Invoice Entry.</div>
+        </div>
+      )}
+      </>}
+
+      <h4 style={{ marginTop: 22 }}>Learned invoice format {d.profile ? `(v${d.profile.version})` : ''}</h4>
+      {d.profile ? (
+        <div className="kv">
+          {row('Tax mode', dash(d.profile.tax_mode))}
+          {row('Default rates', JSON.stringify(d.profile.default_tax_rates), true)}
+          {row('Has TDS', d.profile.has_tds ? 'yes' : 'no')}
+          {row('Default UOM', dash(d.profile.uom_default))}
+          {row('Detect by GSTIN', dash(d.profile.detect_gstin), true)}
+          {row('Confirmed samples', d.profile.sample_count)}
+        </div>
+      ) : <p className="small">Not learned yet — it is learned from this supplier's invoices as they are read and confirmed.</p>}
+
+      {(d.documents || []).length > 0 && <>
+        <h4 style={{ marginTop: 22 }}>Uploaded invoices · {d.documents.length}</h4>
+        <div className="kv">{d.documents.slice(0, 20).map((x) => row(x.filename, <span className={'badge ' + x.status}>{x.status.replace('_', ' ')}</span>))}</div>
+      </>}
+    </div>
+  )
+}
+
 function Suppliers({ toast }) {
   const [list, setList] = useState([])
   const [sel, setSel] = useState(null)
@@ -2191,14 +2913,37 @@ function Suppliers({ toast }) {
   const [q, setQ] = useState('')
   useEffect(() => { api.listSuppliers().then(setList) }, [])
   useEffect(() => { if (sel) api.getSupplier(sel).then(setDetail) }, [sel])
+  const flt = useFilters()
+  const { f } = flt
+  const yesNo = (want, has) => !want || (want === 'yes') === !!has
   const supShown = list.filter((s) => matches(s, q, ['name', 'gstin', 'state']))
+    .filter((s) => (!f.state || s.state === f.state)
+      && yesNo(f.gstin, s.gstin) && yesNo(f.trained, s.has_profile)
+      && yesNo(f.docs, s.document_count > 0)
+      && (!f.tax_mode || s.tax_mode === f.tax_mode))
   const supPage = usePaged(supShown, 50)
   return (
     <div className="body">
       <Sidebar id="suppliers" label="Suppliers">
-        <div className="head"><h3>Suppliers · {list.length}</h3></div>
-        <SearchBox value={q} onChange={setQ} placeholder="Search name, GSTIN, state…" />
+        <div className="head"><h3>Suppliers · {flt.active || q
+          ? `${supShown.length.toLocaleString('en-IN')} of ${list.length.toLocaleString('en-IN')}`
+          : list.length.toLocaleString('en-IN')}</h3></div>
+        <SideTools q={q} setQ={setQ} placeholder="Search name, GSTIN, state…" flt={flt} />
+        <FilterPanel open={flt.open} active={flt.active} onClear={flt.clear}>
+          <FilterSelect label="State" value={f.state} onChange={(v) => flt.set('state', v)}
+            options={uniqOf(list, 'state')} />
+          <FilterSelect label="GSTIN" value={f.gstin} onChange={(v) => flt.set('gstin', v)}
+            options={[['yes', 'On file'], ['no', 'Missing']]} />
+          <FilterSelect label="Invoice format" value={f.trained} onChange={(v) => flt.set('trained', v)}
+            options={[['yes', 'Learned (trained)'], ['no', 'Not trained']]} />
+          <FilterSelect label="Uploaded invoices" value={f.docs} onChange={(v) => flt.set('docs', v)}
+            options={[['yes', 'Has uploads'], ['no', 'None']]} />
+          <FilterSelect label="Tax mode" value={f.tax_mode} onChange={(v) => flt.set('tax_mode', v)}
+            options={uniqOf(list, 'tax_mode')} />
+        </FilterPanel>
         <div className="list">
+          {list.length > 0 && supShown.length === 0 && <div className="empty" style={{ marginTop: 30, fontSize: 13 }}>
+            Nothing matches. Clear the search or the filters.</div>}
           {supPage.slice.map((s) => (
             <div key={s.id} className={'sup-row' + (sel === s.id ? ' sel' : '')} onClick={() => setSel(s.id)}>
               <div className="t">{s.name}</div>
@@ -2212,27 +2957,8 @@ function Suppliers({ toast }) {
         <Pager {...supPage} noun="supplier" />
       </Sidebar>
       {detail ? (
-        <div className="sup-detail">
-          <h2 style={{ marginTop: 0 }}>{detail.name}</h2>
-          <div className="kv">
-            <div className="k">GSTIN</div><div className="mono">{detail.gstin || '—'}</div>
-            <div className="k">State</div><div>{detail.state || '—'} ({detail.state_code || '—'})</div>
-            <div className="k">Address</div><div>{detail.address || '—'}</div>
-            <div className="k">Bank</div><div>{detail.bank?.name ? `${detail.bank.name} · A/C ${detail.bank.account_no} · ${detail.bank.ifsc}` : '—'}</div>
-          </div>
-          <h4 style={{ marginTop: 24 }}>Learned format {detail.profile ? `(v${detail.profile.version})` : ''}</h4>
-          {detail.profile ? (
-            <div className="kv">
-              <div className="k">Tax mode</div><div>{detail.profile.tax_mode}</div>
-              <div className="k">Default rates</div><div className="mono">{JSON.stringify(detail.profile.default_tax_rates)}</div>
-              <div className="k">Has TDS</div><div>{detail.profile.has_tds ? 'yes' : 'no'}</div>
-              <div className="k">Default UOM</div><div>{detail.profile.uom_default}</div>
-              <div className="k">Detect by GSTIN</div><div className="mono">{detail.profile.detect_gstin || '—'}</div>
-              <div className="k">Confirmed samples</div><div>{detail.profile.sample_count}</div>
-            </div>
-          ) : <p className="small">No profile yet.</p>}
-        </div>
-      ) : <div className="empty">Select a supplier to see its learned format.</div>}
+        <SupplierDetail d={detail} />
+      ) : <div className="empty">Select a supplier to see its details.</div>}
     </div>
   )
 }
@@ -2281,10 +3007,13 @@ const blankShortage = (qty) => ({ kind: 'short', qty: qty != null ? String(qty) 
 // what the breakdown still has to reach: what ARRIVED, not what was billed
 const receivedQty = (l) => +(l.received_qty != null ? l.received_qty : l.qty) || 0
 
-function Purchases({ selId, setSelId, toast }) {
-  const [list, setList] = useState([])
+// One receipt (GRN) being received: where it lands, what each line is (category,
+// unit, retail price), how bundles break into variants, what was short, and
+// posting it into stock. Used on its own screen and inside Invoice Entry, where
+// it is the "Receive" stage of an invoice. `onChanged` after anything is saved
+// (a list to refresh), `onDeleted` when the draft is deleted.
+function GrnWork({ selId, toast, onChanged, onDeleted, embedded }) {
   const [grn, setGrn] = useState(null)
-  const [q, setQ] = useState('')
   const opts = useProductOptions()                 // attribute option lists
   const [cats, setCats] = useState([])             // category master names
   const [splitFor, setSplitFor] = useState(null)   // line id whose breakdown is open
@@ -2296,8 +3025,6 @@ function Purchases({ selId, setSelId, toast }) {
   const [shortOpts, setShortOpts] = useState({ reasons: [] })
   const [units, setUnits] = useState({ types: [], rules: [] })   // unit master
   const [warehouses, setWarehouses] = useState([])  // where a delivery can land
-  const refresh = useCallback(() => api.listPurchases().then(setList), [])
-  useEffect(() => { refresh() }, [refresh])
   useEffect(() => {
     api.locationTree().then((t) => setWarehouses(
       (t.warehouses || []).filter((w) => w.id && w.active !== false))).catch(() => {})
@@ -2318,6 +3045,7 @@ function Purchases({ selId, setSelId, toast }) {
   useEffect(() => { api.shortageOptions().then(setShortOpts).catch(() => {}) }, [])
   useEffect(() => { setSplitFor(null); setSrows([]); setShortFor(null); setShrows([]) }, [selId])
 
+  const refresh = () => { if (onChanged) onChanged() }
   const reload = async () => { const g = await api.getPurchase(selId); setGrn(g); refresh(); return g }
 
   const post = async () => {
@@ -2416,7 +3144,7 @@ function Purchases({ selId, setSelId, toast }) {
     try {
       await api.deletePurchase(selId)
       toast('✓ GRN deleted', 'ok')
-      setSelId(null); setGrn(null); refresh()
+      setGrn(null); if (onDeleted) onDeleted()
     } catch (e) { toast(e.detail || 'Could not delete the GRN', 'err') }
   }
 
@@ -2685,19 +3413,6 @@ function Purchases({ selId, setSelId, toast }) {
   const unbalanced = (grn?.unbalanced_splits || []).length
   const shortage = grn?.shortages || { claimable_qty: 0, claimable_value: 0, open_qty: 0, open_value: 0 }
   const editable = !!grn && grn.status !== 'posted'
-  // the sidebar's scope filter, with its counts — a chip that doesn't say how
-  // many it holds makes someone click every one of them to find out
-  const [scope, setScope] = useState('all')
-  const inScope = (p) => scope === 'all' ? true
-    : scope === 'short' ? p.short_qty > 0 : p.status === scope
-  const counts = {
-    draft: list.filter((p) => p.status === 'draft').length,
-    posted: list.filter((p) => p.status === 'posted').length,
-    short: list.filter((p) => p.short_qty > 0).length,
-  }
-  const shown = list.filter(inScope)
-    .filter((p) => matches(p, q, ['supplier_name', 'invoice_number', 'status']))
-  const grnPage = usePaged(shown, 50)
   const [pcat, setPcat] = useState({})             // in-progress category per line id
   // Which lines are showing their variant rows. A breakdown of a dozen sizes is
   // a dozen rows under one line, each as tall as its attribute list — enough to
@@ -2732,46 +3447,16 @@ function Purchases({ selId, setSelId, toast }) {
       </td>
     )
   }
+  if (!grn) return embedded ? <div className="empty">Loading the receipt…</div>
+    : <div className="empty">Select a GRN, or create one from a confirmed document.</div>
   return (
-    <div className="body">
-      <Sidebar id="grn" label="GRNs">
-        <div className="head"><h3>GRNs · {shown.length}</h3></div>
-        {list.length > 0 && <>
-          <SearchBox value={q} onChange={setQ} placeholder="Search supplier, invoice, status…" />
-          <div className="toolbar"><FilterChips value={scope} onChange={setScope} options={[
-            ['draft', 'Draft', counts.draft, 'Receipts still being worked on'],
-            ['posted', 'Posted', counts.posted, 'Receipts already in stock'],
-            ['short', 'Short', counts.short, 'Receipts with goods billed but not delivered'],
-            ['all', 'All', list.length, 'Every receipt'],
-          ]} /></div>
-        </>}
-        <div className="list">
-          {list.length === 0 && <div className="empty" style={{ marginTop: 30, fontSize: 13 }}>No GRNs yet. Open a confirmed document and click “Create GRN”.</div>}
-          {list.length > 0 && shown.length === 0 && <div className="empty" style={{ marginTop: 30, fontSize: 13 }}>
-            Nothing matches. {q ? 'Clear the search' : 'Try “All”'} to see the other {list.length} receipt(s).</div>}
-          {grnPage.slice.map((p) => (
-            <div key={p.id} className={'doc-row' + (selId === p.id ? ' sel' : '')} onClick={() => setSelId(p.id)}>
-              <div className="t">{p.supplier_name || 'GRN #' + p.id}</div>
-              <div className="m">
-                <span className={'badge ' + (p.status === 'posted' ? 'confirmed' : 'uploaded')}>{p.status}</span>
-                <span>#{p.invoice_number || '—'}</span>
-                <span style={{ marginLeft: 'auto' }}>₹ {money(p.grand_total)}</span>
-              </div>
-              <div className="m"><span>{p.line_count} lines · {p.new_products} new product(s)</span></div>
-              {p.short_qty > 0 && (
-                <div className="m"><span style={{ color: 'var(--warn)' }}>
-                  ⚠ {p.short_qty} short · ₹ {money(p.short_value)} to claim</span></div>
-              )}
-            </div>
-          ))}
-        </div>
-        <Pager {...grnPage} noun="receipt" />
-      </Sidebar>
-      {grn ? (
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-          <div className="editor">
+        <div className={embedded ? 'grn-embed' : undefined}
+          style={embedded ? undefined : { flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+          <div className={embedded ? 'section' : 'editor'}>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 14 }}>
-              <h2 style={{ margin: 0 }}>{grn.supplier_name}</h2>
+              {embedded
+                ? <h4 style={{ margin: 0 }}>Receive &amp; Post</h4>
+                : <h2 style={{ margin: 0 }}>{grn.supplier_name}</h2>}
               <span className={'badge ' + (grn.status === 'posted' ? 'confirmed' : 'uploaded')}>{grn.status}</span>
             </div>
             <div className="kv" style={{ margin: '12px 0 20px', gridTemplateColumns: '130px 1fr 130px 1fr' }}>
@@ -3296,7 +3981,7 @@ function Purchases({ selId, setSelId, toast }) {
                 <span>{grn.new_products} will be created as new products</span></div>
             </Section>
           </div>
-          <div className="actionbar">
+          <div className={'actionbar' + (embedded ? ' sticky' : '')}>
             <span className="small">{grn.status === 'posted'
               ? shortage.open_qty > 0
                 ? `Posted. ⚠ ${shortage.open_qty} unit(s) short — ₹ ${money(shortage.open_value)} still to claim. Raise it in Returns, or waive it on the row.`
@@ -3316,7 +4001,72 @@ function Purchases({ selId, setSelId, toast }) {
               {grn.status === 'posted' ? 'Posted ✓' : 'Post GRN to Inventory'}</button>
           </div>
         </div>
-      ) : <div className="empty">Select a GRN, or create one from a confirmed document.</div>}
+  )
+}
+
+function Purchases({ selId, setSelId, toast }) {
+  // One page of receipts at a time, searched and filtered by the server
+  // (/api/purchases/page) — the whole list was 35K receipts and 17 MB, fetched
+  // on every visit and again after every change. Same rules, same order.
+  const [list, setList] = useState([])             // this page's receipts
+  const [pg, setPg] = useState({ total: 0, pages: 1, counts: { draft: 0, posted: 0, short: 0, all: 0 } })
+  const [page, setPage] = useState(1)
+  const [size, setSize] = useState(100)
+  const [scope, setScope] = useState('all')        // the sidebar's filter chip
+  const [q, setQ] = useState('')
+  const refresh = useCallback(() => api.pagePurchases({ page, size, q, filter: scope }).then((r) => {
+    setList(r.rows); setPg(r)
+    if (r.page !== page) setPage(r.page)           // the server clamps a page past the end
+  }), [page, size, q, scope])
+  // a new search or chip starts again at page 1
+  useEffect(() => { setPage(1) }, [q, scope])
+  // typing waits a moment before asking, rather than one request per key
+  useEffect(() => { const t = setTimeout(() => { refresh() }, q ? 250 : 0); return () => clearTimeout(t) }, [refresh])
+  // the sidebar's scope filter, with its counts — a chip that doesn't say how
+  // many it holds makes someone click every one of them to find out
+  // counts, filter and search are the server's now (see `refresh`)
+  const counts = pg.counts
+  const grnPage = {
+    page, setPage, size, setSize, total: pg.total, pages: pg.pages, slice: list,
+    from: pg.total === 0 ? 0 : (size === 0 ? 1 : (page - 1) * size + 1),
+    to: size === 0 ? pg.total : Math.min(pg.total, page * size),
+  }
+  return (
+    <div className="body">
+      <Sidebar id="grn" label="GRNs">
+        <div className="head"><h3>GRNs · {pg.total}</h3></div>
+        {counts.all > 0 && <>
+          <SearchBox value={q} onChange={setQ} placeholder="Search supplier, invoice, status…" />
+          <div className="toolbar"><FilterChips value={scope} onChange={setScope} options={[
+            ['draft', 'Draft', counts.draft, 'Receipts still being worked on'],
+            ['posted', 'Posted', counts.posted, 'Receipts already in stock'],
+            ['short', 'Short', counts.short, 'Receipts with goods billed but not delivered'],
+            ['all', 'All', counts.all, 'Every receipt'],
+          ]} /></div>
+        </>}
+        <div className="list">
+          {counts.all === 0 && <div className="empty" style={{ marginTop: 30, fontSize: 13 }}>No GRNs yet. Open a confirmed document and click “Create GRN”.</div>}
+          {counts.all > 0 && pg.total === 0 && <div className="empty" style={{ marginTop: 30, fontSize: 13 }}>
+            Nothing matches. {q ? 'Clear the search' : 'Try “All”'} to see the other {counts.all} receipt(s).</div>}
+          {grnPage.slice.map((p) => (
+            <div key={p.id} className={'doc-row' + (selId === p.id ? ' sel' : '')} onClick={() => setSelId(p.id)}>
+              <div className="t">{p.supplier_name || 'GRN #' + p.id}</div>
+              <div className="m">
+                <span className={'badge ' + (p.status === 'posted' ? 'confirmed' : 'uploaded')}>{p.status}</span>
+                <span>#{p.invoice_number || '—'}</span>
+                <span style={{ marginLeft: 'auto' }}>₹ {money(p.grand_total)}</span>
+              </div>
+              <div className="m"><span>{p.line_count} lines · {p.new_products} new product(s)</span></div>
+              {p.short_qty > 0 && (
+                <div className="m"><span style={{ color: 'var(--warn)' }}>
+                  ⚠ {p.short_qty} short · ₹ {money(p.short_value)} to claim</span></div>
+              )}
+            </div>
+          ))}
+        </div>
+        <Pager {...grnPage} noun="receipt" />
+      </Sidebar>
+      <GrnWork selId={selId} toast={toast} onChanged={refresh} onDeleted={() => setSelId(null)} />
     </div>
   )
 }
@@ -3330,20 +4080,41 @@ const PRODUCT_ATTRS = [
   ['product_type', 'Type'], ['design_no', 'Design No'],
   ['sale_price', 'Sale price'], ['sale_discount_pct', 'Discount %'],
 ]
-function Inventory({ toast }) {
+function Inventory({ toast, openProductId, onOpenInvoice }) {
   const [summary, setSummary] = useState(null)
+  const [sources, setSources] = useState(null)       // the invoices the open product came from
   const [products, setProducts] = useState([])
   const [detail, setDetail] = useState(null)
   const [adjQty, setAdjQty] = useState('')
   const [adjNote, setAdjNote] = useState('')
   const [q, setQ] = useState('')
+  // The list is what this warehouse holds now; a search of 3+ characters asks
+  // the server across every SKU (a real catalogue is far too large to send
+  // whole), and clearing it brings the held list back.
+  const searched = useRef(false)
   const load = useCallback(() => {
-    api.inventorySummary().then(setSummary); api.listProducts().then(setProducts)
+    api.inventorySummary().then(setSummary); api.listProducts({ held: 1 }).then(setProducts)
   }, [])
   useEffect(() => { load() }, [load])
+  useEffect(() => {
+    const term = q.trim()
+    if (term.length < 3) {
+      if (searched.current) { searched.current = false; api.listProducts({ held: 1 }).then(setProducts).catch(() => {}) }
+      return
+    }
+    const t = setTimeout(() => {
+      searched.current = true
+      api.listProducts({ q: term, limit: 500 }).then(setProducts).catch(() => {})
+    }, 400)
+    return () => clearTimeout(t)
+  }, [q])
   const open = (id) => api.getProduct(id).then((d) => {
     setDetail(d); setAdjQty(''); setAdjNote('')
+    setSources(null)
+    api.productSources(id).then(setSources).catch(() => setSources([]))
   })
+  // opened from elsewhere — an invoice's stock, "open product"
+  useEffect(() => { if (openProductId) open(openProductId) }, [openProductId])
   const doAdjust = async () => {
     if (adjQty === '') return
     await api.adjustStock(detail.id, +adjQty, adjNote || 'manual adjustment')
@@ -3475,11 +4246,14 @@ function Inventory({ toast }) {
           <FilterButton open={filtersOpen} onToggle={() => setFiltersOpen((o) => !o)} active={activeFilters} />
           <div className="spacer" />
           <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-            <input value={scan} onChange={(e) => setScan(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') lookup() }}
-              title="Scan a QR, piece label or barcode to jump straight to that product"
-              placeholder="⌗ Scan a code…" style={{ width: 190 }} />
-            <button className="btn" onClick={() => lookup()} title="Open the scanned product">Fetch</button>
+            <div className="scanbox inline" style={{ width: 280 }}
+              title="Scan a QR, piece label or barcode to jump straight to that product">
+              <span className="ico" aria-hidden="true">⌗</span>
+              <input value={scan} onChange={(e) => setScan(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') lookup() }}
+                placeholder="Scan a code…" />
+              <button className="btn" onClick={() => lookup()} title="Open the scanned product">Fetch</button>
+            </div>
             <button className="btn" onClick={printLabels}
               title={`Print a label sheet for ${labelCount} product(s) — set which in Filters`}>
               🖨 Labels ({labelCount})</button>
@@ -3640,7 +4414,7 @@ function Inventory({ toast }) {
                   ? ` · 1 ${units.product.unit_type} = ${units.product.pieces_per_unit} pcs`
                   : ''}
               </span>
-              <button className="btn" onClick={() => setUnits(null)}>✕</button>
+              <button className="btn" onClick={() => setUnits(null)}>×</button>
             </div>
 
             <div className="piece-body">
@@ -3758,6 +4532,23 @@ function Inventory({ toast }) {
                 : <span className="badge review" title="No confident match from the description — set it on the GRN line and re-post">unmapped</span>}</div>
               <div className="k">Supplier</div><div>{detail.supplier_name || '—'}</div>
             </div>
+
+            {/* Where it came from: the receipt (invoice) it was received on — the
+                way back from a product on the shelf to the bill it arrived on. */}
+            <h4 style={{ color: 'var(--muted)', fontSize: 12, textTransform: 'uppercase', margin: '18px 0 8px' }}>
+              Came from invoice{(sources || []).length === 1 ? '' : 's'}</h4>
+            {sources === null ? <p className="small">Loading…</p>
+              : sources.length === 0 ? <p className="small">No receipt on record — stock that predates receipts.</p>
+                : <div className="srclist">{sources.map((x) => (
+                  <div key={x.purchase_id} className="srcrow">
+                    <div style={{ minWidth: 0 }}>
+                      <b>{x.supplier_name || 'Invoice'}</b>
+                      <div className="small">#{x.invoice_number || '—'} · {fmtLoose(x.invoice_date) ?? x.invoice_date ?? ''} · {x.grn_no || 'GRN #' + x.purchase_id} · {x.qty} received</div>
+                    </div>
+                    {onOpenInvoice && <button className="btn" onClick={() => onOpenInvoice(x)}
+                      title="Open this invoice — its lines, receipt and stock">Open →</button>}
+                  </div>
+                ))}</div>}
 
             <h4 style={{ color: 'var(--muted)', fontSize: 12, textTransform: 'uppercase', margin: '18px 0 8px' }}>
               Product attributes</h4>
@@ -3946,7 +4737,7 @@ function ProductCardModal({ product, onClose }) {
         <div className="piece-head">
           <b className="mono">{product.sku || product.code}</b>
           <span>{product.name}</span>
-          <button className="btn" style={{ marginLeft: 'auto' }} onClick={onClose}>✕</button>
+          <button className="btn" style={{ marginLeft: 'auto' }} onClick={onClose}>×</button>
         </div>
         <div className="piece-body" style={{ display: 'flex', gap: 20 }}>
           <div style={{ textAlign: 'center' }}>
@@ -4079,10 +4870,10 @@ function ProductPicker({ products, already, onAdd, onClose }) {
         <div className="piece-head">
           <b>Add products</b>
           <span className="small" style={{ color: 'var(--muted)' }}>{shown.length} in stock</span>
-          <button className="btn" style={{ marginLeft: 'auto' }} onClick={onClose}>✕</button>
+          <button className="btn" style={{ marginLeft: 'auto' }} onClick={onClose}>×</button>
         </div>
         <div className="piece-body">
-          <SearchBox value={q} onChange={setQ} placeholder="Search product / SKU / size / colour…" />
+          <SearchBox value={q} onChange={setQ} placeholder="Search product, SKU, size, colour…" />
           <div className="tablewrap" style={{ marginTop: 10 }}>
             <table className="items entry">
               <thead><tr>
@@ -4166,17 +4957,24 @@ function StockOutward({ toast }) {
     to_warehouse_id: '', to_store_id: '', lines: [] }
   const [form, setForm] = useState(BLANK)
   const [q, setQ] = useState('')
+  const flt = useFilters()
+  const { f } = flt
   // derived AFTER the state it reads — a const referenced above its own
   // declaration is a temporal-dead-zone throw, and in a render that is the whole
   // tab going blank rather than one broken value
   const shown = list.filter((o) => scope === 'all' || o.status === scope)
     .filter((o) => matches(o, q, ['to_destination', 'code', 'status']))
+    .filter((o) => inRange(isoOf(o.date) || localDay(o.posted_at || o.created_at), f.date_from, f.date_to)
+      && (!f.kind || o.kind === f.kind)
+      && (!f.from_wh || o.from_warehouse === f.from_wh)
+      && (!f.dest || o.to_destination === f.dest)
+      && matches(o, f.packed_by, ['packed_by']))
   const outPage = usePaged(shown, 50)
   const [zoom, setZoom] = useState(null)          // a product card, opened large
   const [cards, setCards] = useState({})          // product_id -> full record, for the draft rows
   const [picking, setPicking] = useState(false)   // the tick-sheet over stock is open
   const refresh = useCallback(() => api.listOutwards().then(setList), [])
-  useEffect(() => { refresh(); api.listProducts().then(setProducts) }, [refresh])
+  useEffect(() => { refresh(); api.listProducts({ held: 1 }).then(setProducts) }, [refresh])
   useEffect(() => {
     api.locationTree().then((t) => {
       const warehouses = (t.warehouses || []).filter((w) => w.id && w.active !== false)
@@ -4299,7 +5097,22 @@ function StockOutward({ toast }) {
         <div className="head"><h3>Outwards · {list.length}</h3>
           <button className="btn primary" style={{ padding: '4px 10px' }} onClick={() => { setCreating(true); setSel(null) }}>+ New</button></div>
         {list.length > 0 && <>
-          <SearchBox value={q} onChange={setQ} placeholder="Search destination, code, status…" />
+          <SideTools q={q} setQ={setQ} placeholder="Search destination, code, status…" flt={flt} />
+          <FilterPanel open={flt.open} active={flt.active} onClear={flt.clear}
+            hint={flt.active ? `${flt.active} filter${flt.active === 1 ? '' : 's'} active · ${shown.length} shown`
+              : 'Narrow by date, type, source or destination'}>
+            <DateField label="Date from" value={f.date_from || ''} onChange={(v) => flt.set('date_from', v)} />
+            <DateField label="Date to" value={f.date_to || ''} onChange={(v) => flt.set('date_to', v)} />
+            <FilterSelect label="Type" value={f.kind} onChange={(v) => flt.set('kind', v)}
+              options={[['store', 'To a store'], ['transfer', 'Warehouse transfer'], ['dispatch', 'Somewhere else']]} />
+            <FilterSelect label="From warehouse" value={f.from_wh} onChange={(v) => flt.set('from_wh', v)}
+              options={uniqOf(list, 'from_warehouse')} />
+            <FilterSelect label="Destination" value={f.dest} onChange={(v) => flt.set('dest', v)}
+              options={uniqOf(list, 'to_destination')} />
+            <div className="field"><label>Packed by</label>
+              <input value={f.packed_by || ''} placeholder="Any — type part of a name"
+                onChange={(e) => flt.set('packed_by', e.target.value)} /></div>
+          </FilterPanel>
           <div className="toolbar"><FilterChips value={scope} onChange={setScope} options={[
             ['draft', 'Draft', list.filter((o) => o.status === 'draft').length, 'Prepared, nothing dispatched yet'],
             ['posted', 'Sent', list.filter((o) => o.status === 'posted').length, 'Dispatched, not yet accepted'],
@@ -4309,7 +5122,7 @@ function StockOutward({ toast }) {
         </>}
         <div className="list">
           {list.length > 0 && shown.length === 0 && <div className="empty" style={{ marginTop: 30, fontSize: 13 }}>
-            Nothing matches. Try “All” or clear the search.</div>}
+            Nothing matches. Try “All”, or clear the search and filters.</div>}
           {outPage.slice.map((o) => (
             <div key={o.id} className={'doc-row' + (sel === o.id && !creating ? ' sel' : '')} onClick={() => { setSel(o.id); setCreating(false) }}>
               <div className="t">{o.to_destination || o.code}</div>
@@ -4528,8 +5341,21 @@ function StockInward({ toast }) {
   const [q, setQ] = useState('')
   const [zoom, setZoom] = useState(null)
   const [hit, setHit] = useState(null)             // the line a scan just landed on
-  const inwPage = usePaged(
-    list.filter((o) => matches(o, q, ['to_destination', 'code', 'status'])), 50)
+  const flt = useFilters()
+  const { f } = flt
+  // which date the range reads — not itself a filter, so it is kept out of the
+  // panel's count and survives "Clear all"
+  const [dateBy, setDateBy] = useState('dispatched')
+  const dateOf = (o) => (dateBy === 'received'
+    ? isoOf(o.received_date) || localDay(o.received_at)
+    : isoOf(o.date) || localDay(o.posted_at || o.created_at))
+  const inwShown = list.filter((o) => matches(o, q, ['to_destination', 'code', 'status']))
+    .filter((o) => inRange(dateOf(o), f.date_from, f.date_to)
+      && (!f.kind || o.kind === f.kind)
+      && (!f.from_wh || o.from_warehouse === f.from_wh)
+      && (!f.dest || o.to_destination === f.dest)
+      && (!f.short || (f.short === 'yes' ? o.shortfall > 0 : o.status === 'received' && !(o.shortfall > 0))))
+  const inwPage = usePaged(inwShown, 50)
 
   const refresh = useCallback(() => api.listOutwards(scope).then(setList), [scope])
   useEffect(() => { refresh() }, [refresh])
@@ -4576,18 +5402,37 @@ function StockInward({ toast }) {
     <div className="body">
       <Sidebar id="inward" label="Stock Inward">
         <div className="head"><h3>Stock Inward · {list.length}</h3></div>
-        <div style={{ display: 'flex', gap: 6, padding: '0 12px 8px' }}>
-        </div>
+        {list.length > 0 && <SideTools q={q} setQ={setQ} placeholder="Search destination, code, status…" flt={flt} />}
+        <FilterPanel open={flt.open} active={flt.active} onClear={flt.clear}
+          hint={flt.active ? `${flt.active} filter${flt.active === 1 ? '' : 's'} active · ${inwShown.length} shown`
+            : 'Narrow by date, source, destination or shortfall'}>
+          <div className="field"><label>Date range by</label>
+            <select value={dateBy} onChange={(e) => setDateBy(e.target.value)}>
+              <option value="dispatched">Dispatch date</option>
+              <option value="received">Received date</option>
+            </select></div>
+          <DateField label="Date from" value={f.date_from || ''} onChange={(v) => flt.set('date_from', v)} />
+          <DateField label="Date to" value={f.date_to || ''} onChange={(v) => flt.set('date_to', v)} />
+          <FilterSelect label="Type" value={f.kind} onChange={(v) => flt.set('kind', v)}
+            options={[['transfer', 'Warehouse transfer'], ['store', 'To a store'], ['dispatch', 'Somewhere else']]} />
+          <FilterSelect label="From warehouse" value={f.from_wh} onChange={(v) => flt.set('from_wh', v)}
+            options={uniqOf(list, 'from_warehouse')} />
+          <FilterSelect label="Destination" value={f.dest} onChange={(v) => flt.set('dest', v)}
+            options={uniqOf(list, 'to_destination')} />
+          <FilterSelect label="Shortfall" value={f.short} onChange={(v) => flt.set('short', v)}
+            options={[['yes', 'Received short'], ['no', 'Received in full']]} />
+        </FilterPanel>
         <div className="toolbar"><FilterChips value={scope}
           onChange={(k) => { setScope(k); setSel(null); setDetail(null) }} options={[
             ['posted', 'Awaiting', null, 'Dispatched and waiting to be counted in'],
             ['received', 'Received', null, 'Already accepted'],
             ['all', 'All', null, 'Every transfer'],
           ]} /></div>
-        {list.length > 0 && <SearchBox value={q} onChange={setQ} placeholder="Search destination, code…" />}
         <div className="list">
           {list.length === 0 && <div className="empty" style={{ marginTop: 30, fontSize: 13 }}>
             {scope === 'posted' ? 'Nothing in transit — dispatched transfers appear here to be received.' : 'Nothing here yet.'}</div>}
+          {list.length > 0 && inwShown.length === 0 && <div className="empty" style={{ marginTop: 30, fontSize: 13 }}>
+            Nothing matches. Clear the search or the filters.</div>}
           {inwPage.slice.map((o) => (
             <div key={o.id} className={'doc-row' + (sel === o.id ? ' sel' : '')} onClick={() => open(o.id)}>
               <div className="t">{o.to_destination || o.code}</div>
@@ -4688,7 +5533,8 @@ function StockInward({ toast }) {
 // shown in a strip or on a dashboard.
 function Stat({ label, value, accent }) {
   return (
-    <div className={'stat' + (accent ? ' t-' + accent : '')}>
+    <div className={'stat' + (accent ? ' t-' + accent : '')}
+      style={{ '--len': Math.max(6, String(value ?? '').length) }}>
       <div className="lbl">{label}</div>
       {/* same length-aware step-down the dashboard tiles use */}
       <div className={'val' + (longValue(value) ? ' long' : '')}>{value}</div>
@@ -4824,9 +5670,86 @@ function Payments({ toast }) {
 }
 
 // ---------- purchase returns ----------
+// Returns → + New: which posted invoice the debit note is against. Read from the
+// server a page at a time (/api/purchases/page, posted only) — the old picker
+// loaded every GRN there has ever been (35K, 17 MB) into one table.
+function ReturnInvoicePicker({ onPick, onCancel }) {
+  const [pg, setPg] = useState({ rows: [], total: 0, page: 1, pages: 1, size: 50 })
+  const [page, setPage] = useState(1)
+  const [size, setSize] = useState(50)
+  const [q, setQ] = useState('')
+  const [busy, setBusy] = useState(true)
+  // narrowed on the server (/api/purchases/page), the same panel Saved invoices has
+  const flt = useFilters()
+  const { f } = flt
+  const [suppliers, setSuppliers] = useState([])
+  useEffect(() => { if (flt.open && !suppliers.length) api.listSuppliers().then((s) => setSuppliers(s.map((x) => x.name).filter(Boolean))).catch(() => {}) }, [flt.open])
+  const panel = JSON.stringify(f)
+  useEffect(() => { setPage(1) }, [q, panel])
+  useEffect(() => {
+    setBusy(true)
+    const t = setTimeout(() => api.pagePurchases({
+      page, size: size || 2000, q, filter: 'posted',
+      ...Object.fromEntries(Object.entries(f).filter(([, v]) => v !== '' && v != null)),
+    })
+      .then((r) => { setPg(r); if (r.page !== page) setPage(r.page) })
+      .catch(() => {}).finally(() => setBusy(false)), q || flt.active ? 250 : 0)
+    return () => clearTimeout(t)
+  }, [page, size, q, panel])
+  const pager = {
+    page, setPage, size, setSize, total: pg.total, pages: pg.pages, slice: pg.rows,
+    from: pg.total === 0 ? 0 : (pg.page - 1) * pg.size + 1, to: Math.min(pg.total, pg.page * pg.size),
+  }
+  return (
+    <div className="editor">
+      <div className="detailbar">
+        <button className="btn" onClick={onCancel}>← Back</button>
+        <h2>New Purchase Return — pick a reference invoice</h2>
+        <div style={{ flex: 1 }} />
+        <SearchBox value={q} onChange={setQ} placeholder="Search supplier, invoice, status…" style={{ width: 280 }} />
+        <FilterButton open={flt.open} onToggle={flt.toggle} active={flt.active} />
+      </div>
+      <FilterPanel open={flt.open} active={flt.active} onClear={flt.clear}
+        hint={flt.active ? `${flt.active} filter${flt.active === 1 ? '' : 's'} active — every page follows them`
+          : 'Narrow by invoice date, supplier or grand total'}>
+        <DateField label="Invoice date from" width={160} value={f.date_from || ''} onChange={(v) => flt.set('date_from', v)} />
+        <DateField label="Invoice date to" width={160} value={f.date_to || ''} onChange={(v) => flt.set('date_to', v)} />
+        <div className="field" style={{ width: 240 }}><label>Supplier</label>
+          <input value={f.supplier || ''} list="retpick-suppliers" placeholder="Any — type part of a name"
+            onChange={(e) => flt.set('supplier', e.target.value)} />
+          <datalist id="retpick-suppliers">{suppliers.map((n) => <option key={n} value={n} />)}</datalist></div>
+        <div className="field" style={{ width: 150 }}><label>Grand total from (₹)</label>
+          <input type="number" min="0" value={f.min_total ?? ''} placeholder="Any" onChange={(e) => flt.set('min_total', e.target.value)} /></div>
+        <div className="field" style={{ width: 150 }}><label>Grand total to (₹)</label>
+          <input type="number" min="0" value={f.max_total ?? ''} placeholder="Any" onChange={(e) => flt.set('max_total', e.target.value)} /></div>
+      </FilterPanel>
+      <table className="items"><thead><tr><th>Supplier</th><th>Invoice</th><th>Date</th>
+        <th style={{ textAlign: 'right' }}>Grand total</th>
+        <th style={{ textAlign: 'right' }}>Short</th><th></th></tr></thead>
+        <tbody>{pg.rows.map(p => (
+          <tr key={p.id}><td>{p.supplier_name}</td><td className="mono">{p.invoice_number}</td>
+            <td>{fmtDate(p.invoice_date)}</td><td style={{ textAlign: 'right' }}>₹ {money(p.grand_total)}</td>
+            <td style={{ textAlign: 'right', color: p.short_qty ? 'var(--warn)' : 'var(--muted)' }}
+              title={p.short_qty ? `${p.short_qty} unit(s) counted short or damaged at receiving` : ''}>
+              {p.short_qty ? `${p.short_qty} · ₹ ${money(p.short_value)}` : '—'}</td>
+            <td style={{ whiteSpace: 'nowrap' }}>
+              {p.short_qty > 0 && (
+                <button className="btn" style={{ padding: '3px 10px', marginRight: 5 }}
+                  title="Debit note for the goods that never arrived — quantities already counted at the dock"
+                  onClick={() => onPick(p.id, true)}>Claim shortage →</button>
+              )}
+              <button className="btn" style={{ padding: '3px 10px' }} onClick={() => onPick(p.id)}>Return →</button></td></tr>
+        ))}</tbody>
+      </table>
+      {!busy && pg.rows.length === 0 && <div className="empty" style={{ marginTop: 20 }}>
+        {q || flt.active ? 'No posted invoice matches that search.' : 'No posted invoices.'}</div>}
+      <Pager {...pager} noun="invoice" />
+    </div>
+  )
+}
+
 function Returns({ toast }) {
   const [list, setList] = useState([])
-  const [purchases, setPurchases] = useState([])
   const [picking, setPicking] = useState(false)
   const [scope, setScope] = useState('all')
   const [detail, setDetail] = useState(null)
@@ -4838,7 +5761,7 @@ function Returns({ toast }) {
   const refresh = useCallback(() => api.listReturns().then(setList), [])
   useEffect(() => { refresh() }, [refresh])
 
-  const openPicker = () => { api.listPurchases().then(p => setPurchases(p.filter(x => x.status === 'posted'))); setPicking(true); setDetail(null) }
+  const openPicker = () => { setPicking(true); setDetail(null) }
   // Received lines come back at 0 — how many go back is still a decision. Shortage
   // lines come back at the quantity counted at the dock, because that one isn't:
   // the pieces are missing and by how many was settled when the boxes were opened.
@@ -4865,8 +5788,15 @@ function Returns({ toast }) {
     } catch (e) { toast('Post failed: ' + (e.detail || e.message), 'err') }
   }
   const editable = detail && detail.status !== 'posted'
+  const flt = useFilters()
+  const { f } = flt
   const shown = list.filter((r) => scope === 'all' || r.status === scope)
     .filter((r) => matches(r, q, ['supplier_name', 'invoice_number', 'code', 'status']))
+    .filter((r) => inRange(isoOf(r.date) || localDay(r.posted_at || r.created_at), f.date_from, f.date_to)
+      && inRange(isoOf(r.invoice_date), f.inv_from, f.inv_to)
+      && (!f.supplier || r.supplier_name === f.supplier)
+      && (f.min_total == null || f.min_total === '' || +r.total >= +f.min_total)
+      && (f.max_total == null || f.max_total === '' || +r.total <= +f.max_total))
   const retPage = usePaged(shown, 50)
   const draftTotal = detail ? detail.lines.reduce((s, l) => s + (+qtys[l.id] || 0) * (l.rate || 0), 0) : 0
 
@@ -4876,7 +5806,23 @@ function Returns({ toast }) {
         <div className="head"><h3>Returns · {list.length}</h3>
           <button className="btn primary" style={{ padding: '4px 10px' }} onClick={openPicker}>+ New</button></div>
         {list.length > 0 && <>
-          <SearchBox value={q} onChange={setQ} placeholder="Search supplier, invoice, code…" />
+          <SideTools q={q} setQ={setQ} placeholder="Search supplier, invoice, code…" flt={flt} />
+          <FilterPanel open={flt.open} active={flt.active} onClear={flt.clear}
+            hint={flt.active ? `${flt.active} filter${flt.active === 1 ? '' : 's'} active · ${shown.length} shown`
+              : 'Narrow by date, supplier or amount'}>
+            <DateField label="Debit note from" value={f.date_from || ''} onChange={(v) => flt.set('date_from', v)} />
+            <DateField label="Debit note to" value={f.date_to || ''} onChange={(v) => flt.set('date_to', v)} />
+            <DateField label="Invoice date from" value={f.inv_from || ''} onChange={(v) => flt.set('inv_from', v)} />
+            <DateField label="Invoice date to" value={f.inv_to || ''} onChange={(v) => flt.set('inv_to', v)} />
+            <FilterSelect label="Supplier" value={f.supplier} onChange={(v) => flt.set('supplier', v)}
+              options={uniqOf(list, 'supplier_name')} />
+            <div className="field"><label>Amount from (₹)</label>
+              <input type="number" min="0" value={f.min_total ?? ''} placeholder="Any"
+                onChange={(e) => flt.set('min_total', e.target.value)} /></div>
+            <div className="field"><label>Amount to (₹)</label>
+              <input type="number" min="0" value={f.max_total ?? ''} placeholder="Any"
+                onChange={(e) => flt.set('max_total', e.target.value)} /></div>
+          </FilterPanel>
           <div className="toolbar"><FilterChips value={scope} onChange={setScope} options={[
             ['draft', 'Draft', list.filter((r) => r.status === 'draft').length, 'Debit notes not yet posted'],
             ['posted', 'Posted', list.filter((r) => r.status === 'posted').length, 'Raised against the supplier'],
@@ -4885,7 +5831,7 @@ function Returns({ toast }) {
         </>}
         <div className="list">
           {list.length > 0 && shown.length === 0 && <div className="empty" style={{ marginTop: 30, fontSize: 13 }}>
-            Nothing matches. Try “All” or clear the search.</div>}
+            Nothing matches. Try “All”, or clear the search and filters.</div>}
           {retPage.slice.map((r) => (
             <div key={r.id} className={'doc-row' + (detail?.id === r.id && !picking ? ' sel' : '')} onClick={() => openReturn(r.id)}>
               <div className="t">{r.supplier_name}</div>
@@ -4898,27 +5844,7 @@ function Returns({ toast }) {
         <Pager {...retPage} noun="return" />
       </Sidebar>
       {picking ? (
-        <div className="editor">
-          <h2 style={{ marginTop: 0 }}>New Purchase Return — pick a reference invoice</h2>
-          <table className="items"><thead><tr><th>Supplier</th><th>Invoice</th><th>Date</th>
-            <th style={{ textAlign: 'right' }}>Grand total</th>
-            <th style={{ textAlign: 'right' }}>Short</th><th></th></tr></thead>
-            <tbody>{purchases.map(p => (
-              <tr key={p.id}><td>{p.supplier_name}</td><td className="mono">{p.invoice_number}</td>
-                <td>{fmtDate(p.invoice_date)}</td><td style={{ textAlign: 'right' }}>₹ {money(p.grand_total)}</td>
-                <td style={{ textAlign: 'right', color: p.short_qty ? 'var(--warn)' : 'var(--muted)' }}
-                  title={p.short_qty ? `${p.short_qty} unit(s) counted short or damaged at receiving` : ''}>
-                  {p.short_qty ? `${p.short_qty} · ₹ ${money(p.short_value)}` : '—'}</td>
-                <td style={{ whiteSpace: 'nowrap' }}>
-                  {p.short_qty > 0 && (
-                    <button className="btn" style={{ padding: '3px 10px', marginRight: 5 }}
-                      title="Debit note for the goods that never arrived — quantities already counted at the dock"
-                      onClick={() => startReturn(p.id, true)}>Claim shortage →</button>
-                  )}
-                  <button className="btn" style={{ padding: '3px 10px' }} onClick={() => startReturn(p.id)}>Return →</button></td></tr>
-            ))}</tbody>
-          </table>
-        </div>
+        <ReturnInvoicePicker onPick={startReturn} onCancel={() => setPicking(false)} />
       ) : detail ? (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
           <div className="editor">
@@ -5261,6 +6187,33 @@ function AskReading({ read, onDismiss }) {
   )
 }
 
+// Reports as last shown, already parsed, for the session: going back to one is
+// instant — no fetch, no re-reading a 100 MB answer — and it is then refreshed
+// behind. Keyed by account, warehouse, report and filters; the least recently
+// viewed go first once the kept reports pass REPORT_MEMO_ROWS rows in all.
+const REPORT_MEMO_ROWS = 1500000
+const reportMemo = new Map()
+let reportMemoOwner = null
+const reportMemoKey = (k, params) => {
+  if (reportMemoOwner !== session.get()) { reportMemo.clear(); reportMemoOwner = session.get() }
+  return `${warehouse.get()?.id || ''}|${k}|${JSON.stringify(params)}`
+}
+const reportMemoGet = (mk) => {
+  const v = reportMemo.get(mk)
+  if (v) { reportMemo.delete(mk); reportMemo.set(mk, v) }
+  return v
+}
+const reportMemoPut = (mk, v) => {
+  if (!v || !Array.isArray(v.rows)) return
+  reportMemo.delete(mk); reportMemo.set(mk, v)
+  let n = 0
+  for (const x of reportMemo.values()) n += x.rows.length
+  while (n > REPORT_MEMO_ROWS && reportMemo.size > 1) {
+    const [oldKey, old] = reportMemo.entries().next().value
+    reportMemo.delete(oldKey); n -= old.rows.length
+  }
+}
+
 function Reports() {
   const [cat, setCat] = useState([])
   const [groups, setGroups] = useState([])
@@ -5275,25 +6228,76 @@ function Reports() {
   const [asked, setAsked] = useState(null)      // the interpretation, while it stands
   const [asking, setAsking] = useState(false)
   const [askMeta, setAskMeta] = useState(null)  // engine + example questions
+  // The Store's reports (Sales, Settlement, Tax, Customer…) — the shop runs and
+  // draws them, with its own filters and export; this screen lists them beside
+  // the warehouse's and shows the one picked.
+  const [store, setStore] = useState({ available: false, groups: [], reports: [] })
+  const [storeKey, setStoreKey] = useState(null)
   useEffect(() => {
-    api.reportGroups().then(setGroups).catch(() => {})
-    api.reportCatalogue().then((c) => { setCat(c); if (c[0]) pick(c[0].key) })
-    api.reportAskExamples().then(setAskMeta).catch(() => {})
+    swr(() => api.storeReportCatalogue(), setStore).catch(() => {})
+    swr(() => api.reportGroups(), setGroups).catch(() => {})
+    let first = true                              // pick the first report once, not on the refresh
+    swr(() => api.reportCatalogue(), (c) => { setCat(c); if (first && c[0]) { first = false; pick(c[0].key) } })
+    swr(() => api.reportAskExamples(), setAskMeta).catch(() => {})
   }, [])
   const entry = cat.find((r) => r.key === key)
   // a filter only counts if the selected report declares it — switching from a
   // date-ranged report to one without dates must not keep filtering silently
   const active = (f = filters, e = entry) =>
     Object.fromEntries(Object.entries(f).filter(([k, v]) => v && (e?.params || []).includes(k)))
+  // Remembered reports show at once and are refreshed behind (api.swr). Only the
+  // answer to the LATEST request is applied: clicking through reports quickly
+  // must never let a slower answer for one you have left replace the one on screen.
+  const latest = useRef(0)
   const load = (k, f) => {
-    setBusy(true)
     const e = cat.find((r) => r.key === k) || entry
-    return api.runReport(k, active(f, e)).then(setRep).finally(() => setBusy(false))
+    const params = active(f, e)
+    const mk = reportMemoKey(k, params)
+    const mine = ++latest.current
+    const apply = (r) => { reportMemoPut(mk, r); if (latest.current === mine) setRep(r) }
+    const done = () => { if (latest.current === mine) setBusy(false) }
+    const had = reportMemoGet(mk)
+    if (had) {                                   // on screen now; the server's answer replaces it
+      setRep(had); setBusy(false)
+      return readCache.fresh(() => api.runReport(k, params)).then(apply).catch(() => {}).finally(done)
+    }
+    setBusy(true)
+    return swr(() => api.runReport(k, params), apply).finally(done)
   }
   // Picking a report by hand, or touching a filter, means the question no longer
   // describes what is on screen — so the reading goes rather than sitting there
   // captioning a table it no longer refers to.
-  const pick = (k) => { setKey(k); setRep(null); setQ(''); setAsked(null); load(k, filters) }
+  const pick = (k) => { setStoreKey(null); setKey(k); setRep(null); setQ(''); setAsked(null); load(k, filters) }
+  // Store reports opened here stay loaded — each is the shop's own page in a
+  // frame, and re-opening one used to run the report again from the start.
+  // The last STORE_KEEP are kept, most recently viewed first; ↻ reloads one.
+  const STORE_KEEP = 6
+  const [storeKept, setStoreKept] = useState([])
+  const [storeReload, setStoreReload] = useState({})       // key -> reload count
+  const [storeAt, setStoreAt] = useState({})               // key -> when it was loaded
+  // The frames stay in the order they were opened: moving a frame in the page
+  // makes the browser load it again, which is the very thing this avoids. How
+  // recently each was viewed is kept apart, and only decides which one goes.
+  const storeSeen = useRef({})
+  const pickStore = (k) => {
+    setStoreKey(k); setAsked(null)
+    storeSeen.current[k] = Date.now()
+    setStoreKept((list) => {
+      if (list.includes(k)) return list
+      let next = [...list, k]
+      while (next.length > STORE_KEEP) {
+        const oldest = next.reduce((a, b) => ((storeSeen.current[a] || 0) <= (storeSeen.current[b] || 0) ? a : b))
+        next = next.filter((x) => x !== oldest)
+      }
+      return next
+    })
+    setStoreAt((m) => (m[k] ? m : { ...m, [k]: new Date() }))
+  }
+  const reloadStore = (k) => {
+    setStoreReload((m) => ({ ...m, [k]: (m[k] || 0) + 1 }))
+    setStoreAt((m) => ({ ...m, [k]: new Date() }))
+  }
+  const storeEntry = store.reports.find((r) => r.key === storeKey)
   const setFilter = (p, v) => {
     const next = { ...filters, [p]: v }
     setFilters(next)
@@ -5341,10 +6345,16 @@ function Reports() {
     }
     setAsking(false)
   }
-  const rows = rep ? rep.rows.filter((row) => !q || rep.columns.some((c) => String(row[c] ?? '').toLowerCase().includes(q.toLowerCase()))) : []
+  // worked out when the report or the search changes, not on every render — a
+  // stock report is 400K rows
+  const rows = useMemo(() => !rep ? [] : !q ? rep.rows
+    : rep.rows.filter((row) => rep.columns.some((c) => String(row[c] ?? '').toLowerCase().includes(q.toLowerCase()))), [rep, q])
   // a stock or transport report over a year runs to thousands of rows
   const repPage = usePaged(rows, 100)
-  const grouped = cat.reduce((a, r) => { (a[r.group] = a[r.group] || []).push(r); return a }, {})
+  const [rq, setRq] = useState('')
+  const rqn = rq.trim().toLowerCase()
+  const grouped = cat.filter((r) => !rqn || r.name.toLowerCase().includes(rqn))
+    .reduce((a, r) => { (a[r.group] = a[r.group] || []).push(r); return a }, {})
   const order = groups.length ? groups : Object.entries(REPORT_GROUPS).map(([k2, n]) => ({ key: k2, name: n }))
   const dateParams = (entry?.params || []).filter((p) => PARAM_LABEL[p])
   // A report's columns are whatever the report returns, so a cell is formatted
@@ -5359,7 +6369,8 @@ function Reports() {
   return (
     <div className="body">
       <Sidebar id="reports" label="Reports">
-        <div className="head"><h3>Reports · {cat.length}</h3></div>
+        <div className="head"><h3>Reports · {cat.length + store.reports.length}</h3></div>
+        <SearchBox value={rq} onChange={setRq} placeholder="Search reports…" />
         <div className="list" style={{ padding: '6px 0' }}>
           {order.filter((g) => grouped[g.key]?.length).map((g) => (
             <div key={g.key}>
@@ -5370,15 +6381,64 @@ function Reports() {
                 // A question nothing answered leaves no report on screen, so
                 // nothing in this list is highlighted either — a highlight with
                 // no table next to it reads as "this is what you are looking at".
-                <div key={r.key} className={'doc-row' + (key === r.key && !miss ? ' sel' : '')}
+                <div key={r.key} className={'doc-row' + (key === r.key && !miss && !storeKey ? ' sel' : '')}
                   style={{ padding: '8px 14px' }} onClick={() => pick(r.key)}>
-                  <div className="t" style={{ fontWeight: key === r.key && !miss ? 700 : 400 }}>{r.name}</div>
+                  <div className="t" style={{ fontWeight: key === r.key && !miss && !storeKey ? 700 : 400 }}>{r.name}</div>
                 </div>
               ))}
             </div>
           ))}
+          {store.groups.length > 0 && (
+            <div style={{ padding: '14px 14px 2px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase',
+              letterSpacing: '.5px', borderTop: '1px solid var(--line)', marginTop: 8 }}>
+              Store reports <span style={{ opacity: 0.6, fontWeight: 400 }}>· from the shop</span></div>
+          )}
+          {store.groups.map((g) => {
+            const list = store.reports.filter((r) => r.group === g.key
+              && (!rqn || r.label.toLowerCase().includes(rqn)))
+            if (!list.length) return null
+            return (
+              <div key={'store:' + g.key}>
+                <div style={{ padding: '10px 14px 4px', fontSize: 11, textTransform: 'uppercase', color: 'var(--muted)', letterSpacing: '.5px' }}>
+                  {g.name} <span style={{ opacity: 0.6 }}>({list.length})</span>
+                </div>
+                {list.map((r) => (
+                  <div key={r.key} className={'doc-row' + (storeKey === r.key ? ' sel' : '')}
+                    style={{ padding: '8px 14px', opacity: r.unavailable ? 0.55 : 1 }} onClick={() => pickStore(r.key)}
+                    title={r.unavailable || undefined}>
+                    <div className="t" style={{ fontWeight: storeKey === r.key ? 700 : 400 }}>{r.label}</div>
+                  </div>
+                ))}
+              </div>
+            )
+          })}
         </div>
       </Sidebar>
+      {storeKept.length > 0 && (
+        <div style={{ flex: 1, display: storeKey ? 'flex' : 'none', flexDirection: 'column', minHeight: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px var(--gutter)', borderBottom: '1px solid var(--line)' }}>
+            <h2 style={{ margin: 0 }}>{storeEntry?.label || 'Store report'}</h2>
+            <span className="small">{storeEntry?.group_label} · run by the Store
+              {storeKey && storeAt[storeKey] && <> · loaded {storeAt[storeKey].toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}</>}</span>
+            <div style={{ flex: 1 }} />
+            <button className="btn" onClick={() => storeKey && reloadStore(storeKey)}
+              title="Run this report again for the latest figures">↻ Refresh</button>
+          </div>
+          {/* The shop's own page for each report — its filters, its table and its
+              CSV export, exactly as Store → Store Reports shows it. Same origin,
+              so the shop's sign-in is the one the Store screens already use.
+              Every kept report stays mounted and only the chosen one is shown,
+              so going back to one is instant and keeps its filters. */}
+          {storeKept.map((k) => (
+            <iframe key={k + ':' + (storeReload[k] || 0)}
+              title={store.reports.find((r) => r.key === k)?.label || 'Store report'}
+              src={'/pos/reports/r/' + encodeURIComponent(k)}
+              style={{ flex: 1, border: 0, width: '100%', minHeight: 0, background: 'var(--bg)',
+                display: k === storeKey ? 'block' : 'none' }} />
+          ))}
+        </div>
+      )}
+      {!storeKey && (
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
         <AskBar value={ask} onChange={setAsk} onAsk={runAsk} busy={asking}
           engine={askMeta?.engine} />
@@ -5473,6 +6533,7 @@ function Reports() {
           </div>
         ) : <div className="empty">Loading report…</div>}
       </div>
+      )}
     </div>
   )
 }
@@ -5893,10 +6954,8 @@ const LR_SEARCH_FIELDS = [
 function LRSearchPanel({ onResults, onClear, toast, lists }) {
   const [f, setF] = useState({})
   const set = (k, v) => setF((x) => ({ ...x, [k]: v }))
-  const run = async () => {
-    try { onResults(await api.lrSearch(f)) }
-    catch { toast('Search failed', 'err') }
-  }
+  // hands the filters up: the register asks the server for them a page at a time
+  const run = () => onResults(Object.fromEntries(Object.entries(f).filter(([, v]) => v)))
   const clear = () => { setF({}); onClear() }
   // "all" is the absence of a filter, not a filter — counting it would show 2
   // active on a panel nobody has touched
@@ -6359,9 +7418,18 @@ function PurchaseOrdersView({ toast }) {
       })).catch(() => {})
   }, [])
 
+  const flt = useFilters()
+  const { f } = flt
   const shown = rows
     .filter((r) => status === 'all' || r.status === status)
     .filter((r) => matches(r, query, ['po_no', 'supplier_name', 'item', 'brand', 'purchaser']))
+    .filter((r) => inRange(isoOf(r.po_date), f.date_from, f.date_to)
+      && (!f.supplier || r.supplier_name === f.supplier)
+      && (!f.purchaser || r.purchaser === f.purchaser)
+      && (!f.agent || r.agent === f.agent)
+      && (!f.brand || r.brand === f.brand)
+      && (f.min_total == null || f.min_total === '' || +r.total >= +f.min_total)
+      && (f.max_total == null || f.max_total === '' || +r.total <= +f.max_total))
   const page = usePaged(shown, 25)
 
   const openEdit = async (r) => {
@@ -6447,13 +7515,35 @@ function PurchaseOrdersView({ toast }) {
               ['confirmed', 'Confirmed', count('confirmed'), PO_STATUS_HINT.confirmed],
               ['cancelled', 'Cancelled', count('cancelled'), PO_STATUS_HINT.cancelled],
             ]} />
+            <div className="spacer" />
+            <FilterButton open={flt.open} onToggle={flt.toggle} active={flt.active} />
           </div>
+          <FilterPanel open={flt.open} active={flt.active} onClear={flt.clear}
+            hint={flt.active ? `${flt.active} filter${flt.active === 1 ? '' : 's'} active · ${shown.length} order${shown.length === 1 ? '' : 's'} shown`
+              : 'Narrow by PO date, supplier, purchaser, agent, brand or total'}>
+            <DateField label="PO date from" width={160} value={f.date_from || ''} onChange={(v) => flt.set('date_from', v)} />
+            <DateField label="PO date to" width={160} value={f.date_to || ''} onChange={(v) => flt.set('date_to', v)} />
+            <FilterSelect label="Supplier" style={{ width: 220 }} value={f.supplier}
+              onChange={(v) => flt.set('supplier', v)} options={uniqOf(rows, 'supplier_name')} />
+            <FilterSelect label="Purchaser" style={{ width: 160 }} value={f.purchaser}
+              onChange={(v) => flt.set('purchaser', v)} options={uniqOf(rows, 'purchaser')} />
+            <FilterSelect label="Agent" style={{ width: 160 }} value={f.agent}
+              onChange={(v) => flt.set('agent', v)} options={uniqOf(rows, 'agent')} />
+            <FilterSelect label="Brand" style={{ width: 150 }} value={f.brand}
+              onChange={(v) => flt.set('brand', v)} options={uniqOf(rows, 'brand')} />
+            <div className="field" style={{ width: 130 }}><label>Total from (₹)</label>
+              <input type="number" min="0" value={f.min_total ?? ''} placeholder="Any"
+                onChange={(e) => flt.set('min_total', e.target.value)} /></div>
+            <div className="field" style={{ width: 130 }}><label>Total to (₹)</label>
+              <input type="number" min="0" value={f.max_total ?? ''} placeholder="Any"
+                onChange={(e) => flt.set('max_total', e.target.value)} /></div>
+          </FilterPanel>
 
           {rows.length === 0 && <div className="empty" style={{ marginTop: 24 }}>
             No purchase orders yet. Click “New order” to raise the first one —
             goods are booked in against a confirmed order.</div>}
           {rows.length > 0 && shown.length === 0 && <div className="empty" style={{ marginTop: 24 }}>
-            Nothing matches. Try “All” or clear the search.</div>}
+            Nothing matches. Try “All”, or clear the search and filters.</div>}
 
           {shown.length > 0 && (
             <div style={{ overflowX: 'auto' }}>
@@ -6671,7 +7761,7 @@ function PriceChanger({ toast, role }) {
         <span className="small pagesub">
           What things sell for. Every change is recorded and can be put back.</span>
         <div style={{ flex: 1 }} />
-        <button className="btn" onClick={loadRevisions}>↻ History</button>
+        <button className="btn" onClick={() => readCache.refresh(loadRevisions)}>↻ History</button>
       </div>
 
       <div className="screenbody">
@@ -6942,7 +8032,7 @@ function PriceChanger({ toast, role }) {
 const AUDIT_TONE = { available: 'ok', not_available: 'danger', unknown: 'warn' }
 const AUDIT_BADGE = { available: 'confirmed', not_available: 'cancelled', unknown: 'pending' }
 
-function StockAuditView({ toast }) {
+function StockAuditView({ toast, head }) {
   const [session, setSession] = useState(undefined)   // undefined = not asked yet
   const [past, setPast] = useState([])
   const [viewing, setViewing] = useState(null)        // a closed count being read
@@ -7004,7 +8094,7 @@ function StockAuditView({ toast }) {
   return (
     <div className="screen">
       <div className="pagehead">
-        <h2>Warehouse Stock Audit</h2>
+        {head || <h2>Warehouse Stock Audit</h2>}
         {/* Short enough to survive `.pagesub`, which clips rather than wraps —
             a sentence that ends in an ellipsis says less than a shorter one. */}
         <span className="small pagesub">
@@ -7020,14 +8110,14 @@ function StockAuditView({ toast }) {
         {session && !viewing && (
           <Section id="audit-scan" title={`${session.code} · counting${session.warehouse ? ' · ' + session.warehouse : ''}`}>
             <div className="row" style={{ display: 'flex', gap: 10, alignItems: 'flex-end' }}>
-              <div className="field" style={{ flex: 1, maxWidth: 420 }}>
-                <label>Scan or type a tag</label>
+              <div className="scanbox inline" style={{ flex: 1, maxWidth: 520 }}>
+                <span className="ico" aria-hidden="true">⌗</span>
                 <input ref={box} value={code} autoFocus
-                  placeholder="product QR, piece code, carton label, barcode or SKU"
+                  placeholder="Scan a QR, piece code, carton label, barcode or SKU…"
                   onChange={(e) => setCode(e.target.value)}
                   onKeyDown={(e) => { if (e.key === 'Enter') submit() }} />
+                <button className="btn primary" onClick={() => submit()}>Record</button>
               </div>
-              <button className="btn primary" onClick={() => submit()}>Record</button>
             </div>
             {last && (
               // The verdict on the reading just taken, coloured AND worded — the
@@ -7060,12 +8150,11 @@ function StockAuditView({ toast }) {
           </div>
         )}
 
+        {viewing && <div className="detailbar">
+          <button className="btn" onClick={() => setViewing(null)}>← Back to the count</button></div>}
         {shown && (
           <Section id="audit-report"
-            title={`${viewing ? viewing.code + ' · closed' : 'Running report'} · ${t.scanned || 0} scanned`}
-            actions={viewing
-              ? <button className="btn" onClick={() => setViewing(null)}>Back</button>
-              : null}>
+            title={`${viewing ? viewing.code + ' · closed' : 'Running report'} · ${t.scanned || 0} scanned`}>
             <div className="toolbar">
               <FilterChips value={filter} onChange={setFilter} options={[
                 ['all', 'All', t.scanned || 0, 'Every reading in this count'],
@@ -7161,6 +8250,54 @@ function StockAuditView({ toast }) {
 }
 
 // ==========================================================================
+//  Stock Audit — one module for both counts of a warehouse's racks
+//  ------------------------------------------------------------------------
+//  The two audits are two questions about the same shelves, so they are one
+//  module: SHELF CHECK asks "is it here?" one tag at a time and never moves
+//  stock; QUANTITY COUNT asks "how many?" over a chosen set of stock and ends in
+//  a variance that is approved and then corrects the books. Which one is chosen
+//  in the heading, where the title was — each keeps its own counting, register
+//  and history (they are different records on the server), and each stays
+//  mounted once opened, so switching never loses a count in progress.
+// ==========================================================================
+const AUDIT_KINDS = [
+  ['shelf', '🔍', 'Shelf check', 'Is it here? Scan tags against the books — a presence check. Never changes stock.'],
+  ['qty', '🧮', 'Quantity count', 'How many are there? Count against the books, approve the variance, and correct stock.'],
+]
+
+function StockAuditHub({ toast, role, kind, setKind }) {
+  const [seen, setSeen] = useState(() => ({ [kind]: true }))
+  useEffect(() => { setSeen((m) => (m[kind] ? m : { ...m, [kind]: true })) }, [kind])
+  // which kinds have a count in progress — shown on the switch, so a count left
+  // open under the other kind is not forgotten
+  const [inProgress, setInProgress] = useState({})
+  useEffect(() => {
+    api.auditCurrent().then((x) => setInProgress((m) => ({ ...m, shelf: x ? x.code : null }))).catch(() => {})
+    api.psaCurrent().then((x) => setInProgress((m) => ({ ...m, qty: x && x.status === 'counting' ? x.code : null }))).catch(() => {})
+  }, [kind])
+  const head = (
+    <div className="auditkind" role="tablist" aria-label="Kind of count">
+      <h2>Stock Audit</h2>
+      {AUDIT_KINDS.map(([k, ico, label, tip]) => (
+        <button key={k} role="tab" aria-selected={kind === k} title={tip}
+          className={'auditkind-b' + (kind === k ? ' on' : '')} onClick={() => setKind(k)}>
+          <span aria-hidden="true">{ico}</span> {label}
+          {inProgress[k] && <span className="auditkind-open" title={`${inProgress[k]} is in progress`}>● {inProgress[k]}</span>}
+        </button>
+      ))}
+    </div>
+  )
+  return (
+    <>
+      {seen.shelf && <div style={{ display: kind === 'shelf' ? 'contents' : 'none' }}>
+        <StockAuditView toast={toast} head={head} /></div>}
+      {seen.qty && <div style={{ display: kind === 'qty' ? 'contents' : 'none' }}>
+        <PhysicalAuditView toast={toast} role={role} head={head} /></div>}
+    </>
+  )
+}
+
+// ==========================================================================
 //  Physical Stock Audit — counting the warehouse by quantity
 //  ------------------------------------------------------------------------
 //  The OTHER audit, and the reason both exist is that they answer different
@@ -7236,8 +8373,16 @@ const PRODUCT_FILTER_COLUMNS = {
 // mounts a fresh one — and a <select> that is remounted loses focus mid-use. The
 // screen re-renders on every keystroke in the scan box, which is exactly when
 // somebody is least able to afford the rail resetting under them.
-function PsaDropdown({ name, label, value, options, onChange }) {
+//: Past this many choices a dropdown is a search box. Design runs to 100K+
+//: values; a <select> holding them all froze the screen for seconds when it was
+//: drawn, and again on every change anywhere on the panel.
+const PSA_LONG_LIST = 5000
+
+// Memoised on what it shows: `onChange` is a fresh closure every render and
+// does the same thing each time, so it is not a reason to redraw the list.
+const PsaDropdown = React.memo(function PsaDropdown({ name, label, value, options, onChange }) {
   const list = options || []
+  if (list.length > PSA_LONG_LIST) return <PsaLongPick name={name} label={label} value={value} list={list} onChange={onChange} />
   return (
     <div className="field">
       <label>{label}</label>
@@ -7248,6 +8393,37 @@ function PsaDropdown({ name, label, value, options, onChange }) {
         <option value="">{list.length ? 'Any' : '— none recorded —'}</option>
         {list.map((v) => <option key={v} value={v}>{v}</option>)}
       </select>
+    </div>
+  )
+}, (a, b) => a.value === b.value && a.options === b.options && a.label === b.label)
+
+// A long list as type-to-find: the first 100 values containing what is typed,
+// offered under the box. The filter is still one exact value off the list —
+// the server narrows on equality, as it did from the dropdown — so a value typed
+// that is not on these shelves is said to be so rather than counted as nothing.
+function PsaLongPick({ name, label, value, list, onChange }) {
+  const [text, setText] = useState(value || '')
+  useEffect(() => { setText(value || '') }, [value])
+  const want = text.trim().toLowerCase()
+  const hits = useMemo(() => {
+    if (!want) return []
+    const out = []
+    for (const v of list) { if (v.toLowerCase().includes(want)) { out.push(v); if (out.length >= 100) break } }
+    return out
+  }, [list, want])
+  const known = useMemo(() => new Set(list), [list])
+  const send = (v) => onChange({ target: { type: 'text', value: v } })
+  const pick = (v) => { setText(v); if (v !== (value || '')) send(v) }
+  return (
+    <div className="field">
+      <label>{label}</label>
+      <input value={text} list={'psa-' + name} placeholder={`Any — type to find (${list.length.toLocaleString('en-IN')})`}
+        title={`Narrow to one ${label.toLowerCase()} — ${list.length.toLocaleString('en-IN')} on these shelves. Type part of it and pick.`}
+        onChange={(e) => { setText(e.target.value); if (e.target.value === '' || known.has(e.target.value)) send(e.target.value) }}
+        onBlur={() => pick(text.trim())} />
+      <datalist id={'psa-' + name}>{hits.map((v) => <option key={v} value={v} />)}</datalist>
+      {text.trim() && !known.has(text.trim()) && (
+        <div className="small" style={{ color: 'var(--warn)' }}>Not on these shelves — pick one from the list</div>)}
     </div>
   )
 }
@@ -7277,7 +8453,7 @@ function PsaTotal({ label, value, sub, tone }) {
   )
 }
 
-function PhysicalAuditView({ toast, role }) {
+function PhysicalAuditView({ toast, role, head }) {
   const [options, setOptions] = useState(null)
   const [filters, setFilters] = useState({})
   const [audit, setAudit] = useState(undefined)   // undefined = not asked yet
@@ -7491,7 +8667,7 @@ function PhysicalAuditView({ toast, role }) {
   return (
     <div className="screen">
       <div className="pagehead">
-        <h2>Physical Stock Audit</h2>
+        {head || <h2>Physical Stock Audit</h2>}
         <span className="small pagesub">
           How many are there, against how many the books say.</span>
         <div style={{ flex: 1 }} />
@@ -7674,7 +8850,7 @@ function PhysicalAuditView({ toast, role }) {
                 {open && (
                   <div className="field psascan">
                     <input ref={box} value={code} autoFocus
-                      placeholder="Scan or type a tag — each read adds one"
+                      placeholder="Scan a tag — each read adds one…"
                       onChange={(e) => setCode(e.target.value)}
                       onKeyDown={(e) => { if (e.key === 'Enter') submitCode() }}
                       title="A QR, a per-piece code, a supplier barcode or a UAN. Scanning ADDS one; typing into a row's Count box states a total." />
@@ -7684,7 +8860,7 @@ function PhysicalAuditView({ toast, role }) {
                   placeholder="Search these rows…" style={{ maxWidth: 240 }} />
                 <div style={{ flex: 1 }} />
                 {viewing && <button className="btn" onClick={() => setViewing(null)}>
-                  Back to the open count</button>}
+                  {audit?.status === 'counting' ? '← Back to the open count' : '← Back'}</button>}
               </div>
 
               <div className="psagrid">
@@ -7897,9 +9073,19 @@ function LREntryView({ toast }) {
   const [docId, setDocId] = useState(null)
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
-  const [saved, setSaved] = useState([])
-  const refresh = useCallback(() => api.lrList().then(setSaved), [])
+  // The register is read from the server a page at a time (100 by default) —
+  // it runs to tens of thousands of consignments, and reading the newest 500
+  // left everything older unreachable except by searching. `filters` are the
+  // Search panel's (null = the register); the search is paged the same way.
+  const [filters, setFilters] = useState(null)
+  const [pg, setPg] = useState({ rows: [], total: 0, page: 1, pages: 1, size: 100 })
+  const [page, setPage] = useState(1)
+  const [size, setSize] = useState(100)
+  const refresh = useCallback(() => api.lrPage({ page, size: size || 2000, ...(filters ? { ...filters, search: true } : {}) })
+    .then((r) => { setPg(r); if (r.page !== page) setPage(r.page) }), [page, size, filters])
   useEffect(() => { refresh() }, [refresh])
+  const saved = pg.rows
+  const setSaved = (fn) => setPg((p) => ({ ...p, rows: fn(p.rows) }))
   // A consignment scanned on the warehouse phone is written to this same
   // register, and the person who scanned it is on a dock, not at this desk — so
   // the desk must not have to reload the page to learn a lorry arrived. Polled
@@ -7936,14 +9122,16 @@ function LREntryView({ toast }) {
   useEffect(() => { loadOpts() }, [loadOpts])
 
   const [searching, setSearching] = useState(false)   // search panel open
-  const [found, setFound] = useState(null)       // search results, null = not filtered
-  const shown = found ? found.rows : saved
-  // the register, and the rows just read off a page — both grow without limit,
-  // and both are read a screenful at a time
-  // 25, matching the invoice's line-items table rather than the 50 this had:
-  // the register is a wide table and the pager stays hidden below 25 rows
-  // anyway, so a page of 50 meant the control appeared only past 51 entries.
-  const savedPage = usePaged(shown, 25)
+  // search results: this page of them, with the count and totals of ALL matches
+  const found = filters && pg.totals ? pg : null
+  const setFound = (f) => { setFilters(f); setPage(1) }   // f: filters, or null
+  const shown = saved
+  // the server's page, dressed as the Pager expects
+  const savedPage = {
+    page, setPage, size, setSize, total: pg.total, pages: pg.pages, slice: saved,
+    from: pg.total === 0 ? 0 : (pg.page - 1) * pg.size + 1,
+    to: Math.min(pg.total, pg.page * pg.size),
+  }
   const extractPage = usePaged(rows, 50)
   const openNew = () => { setForm({}); setRows([]) }
   const openEdit = async (r) => {
@@ -8024,8 +9212,9 @@ function LREntryView({ toast }) {
       <div className="pagehead">
         <h2>LR Entry</h2>
         <div style={{ flex: 1 }} />
-        <button className="btn" onClick={() => setSearching((s) => !s)}
-          title="Find entries by LR / invoice number, supplier, date, rack…">🔍 Search</button>
+        <FilterButton open={searching} onToggle={() => setSearching((s) => !s)}
+          active={filters ? Object.values(filters).filter((v) => v && v !== 'all').length : 0}
+          title="Find entries by LR / invoice number, supplier, transport, date…" />
         <button className="btn" onClick={openNew}>📄 New entry</button>
         <label className="btn primary uploadbtn">{busy ? 'Reading…' : 'Import LR image / PDF'}
           <input type="file" accept="image/*,.pdf" onChange={onFile} disabled={busy} /></label>
@@ -8042,8 +9231,7 @@ function LREntryView({ toast }) {
         {found && (
           <div className="warnbox clean" style={{ marginBottom: 14 }}>
             <h4 style={{ border: 'none', margin: 0 }}>
-              {found.count} matching entr{found.count === 1 ? 'y' : 'ies'}
-              {found.shown < found.count ? ` (showing ${found.shown})` : ''} · Σ pieces <b>{found.totals.qty}</b>
+              {found.total} matching entr{found.total === 1 ? 'y' : 'ies'} · Σ pieces <b>{found.totals?.qty}</b>
               {' · '}Σ bundles <b>{found.totals.bundle}</b>{' · '}Σ boxes <b>{found.totals.boxes}</b>
               {' · '}Σ goods value <b>₹ {money(found.totals.amount)}</b>
               {' · '}Σ freight <b>₹ {money(found.totals.freight_amount)}</b>
@@ -8063,7 +9251,7 @@ function LREntryView({ toast }) {
             </h4>
           </div>
         )}
-        {rows.length === 0 && saved.length === 0 && form === null && (
+        {rows.length === 0 && !filters && pg.total === 0 && form === null && (
           <div className="empty" style={{ marginTop: 40 }}>
             Import an LR register page to auto-extract its rows, or press <b>New entry</b> to key one in.
           </div>
@@ -8140,7 +9328,7 @@ function LREntryView({ toast }) {
           </>
         )}
         {shown.length > 0 && (
-          <Section id="lr.saved" title={`${found ? 'Search results' : 'Saved LR entries'} · ${shown.length}`} summary={`${shown.length} row(s)`}>
+          <Section id="lr.saved" title={`${found ? 'Search results' : 'Saved LR entries'} · ${pg.total.toLocaleString('en-IN')}`} summary={`${pg.total} row(s)`}>
             <div className="tablewrap">
               <table className="items reg">
                 <thead><tr>
@@ -8816,7 +10004,7 @@ function MasterScreen({ mkey, onBack, toast }) {
   return (
     <div className="screen">
       <div className="pagehead">
-        <button className="btn" onClick={onBack}>‹ Masters</button>
+        <button className="btn" onClick={onBack}>← Masters</button>
         <h2>{def.label}</h2>
         <span className="small pagesub">{def.sub}</span>
         <div style={{ flex: 1 }} />
@@ -8830,7 +10018,7 @@ function MasterScreen({ mkey, onBack, toast }) {
           <MasterDictate def={def} data={data} toast={toast} onFills={applyFills} />
         )}
         {form !== null && !def.singleton && (
-          <button className="btn" onClick={() => setForm(null)}>✕ Close</button>
+          <button className="btn" onClick={() => setForm(null)}>× Close</button>
         )}
       </div>
 
@@ -8940,7 +10128,7 @@ function MasterPane({ title, sub, onBack, children }) {
           bare text — the same screen furniture appearing and disappearing as
           you moved between modules. */}
       <div className="pagehead">
-        <button className="btn" onClick={onBack}>‹ Masters</button>
+        <button className="btn" onClick={onBack}>← Masters</button>
         <h2>{title}</h2>
         {sub && <span className="small pagesub">{sub}</span>}
       </div>
@@ -9010,12 +10198,10 @@ function Masters({ toast }) {
       return (
         <MasterPane title={label} sub={`${cats ? cats.count : 0} codes`} onBack={back}>
           <div style={{ display: 'flex', gap: 10, marginBottom: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-            <select value={section} onChange={(e) => setSection(e.target.value)}
-              style={{ background: 'var(--panel-2)', color: 'var(--text)', border: '1px solid var(--line)', borderRadius: 8, padding: '8px' }}>
-              <option value="">All sections</option>
-              {(cats?.sections || []).map((s) => <option key={s} value={s}>{s}</option>)}
-            </select>
-            <SearchBox value={q} onChange={setQ} placeholder="Search category…" style={{ width: 240 }} />
+            <SearchBox value={q} onChange={setQ} placeholder="Search category…" style={{ width: 280 }} />
+            <FilterChips value={section} onChange={setSection} options={[
+              ['', 'All sections', null, 'Every section'],
+              ...(cats?.sections || []).map((x) => [x, x, null, `Only ${x}`])]} />
             <span className="small" style={{ color: 'var(--muted)' }}>{shown.length} shown</span>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(230px, 100%), 1fr))', gap: 8 }}>
@@ -9442,7 +10628,7 @@ function LabelDesigner({ toast, role }) {
         ? 'restart'
         : `The field catalogue could not be read (${e.message || 'the request failed'}).`))
     loadTemplates().catch(() => {})
-    api.listProducts().then(setProducts).catch(() => {})
+    api.listProducts({ held: 1 }).then(setProducts).catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadTemplates])
 
@@ -10017,7 +11203,7 @@ function LabelPrinting({ toast }) {
       e.status === 404
         ? 'This server was started before Label Printing existed — restart the ESSA server and reload.'
         : 'Could not load the templates', 'err'))
-    api.listProducts().then(setProducts).catch(() => {})
+    api.listProducts({ held: 1 }).then(setProducts).catch(() => {})
     // once, on mount — see the same note in LabelDesigner: `toast` changes
     // identity every render, and this effect's failure path raises one
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -10055,7 +11241,33 @@ function LabelPrinting({ toast }) {
     ? Math.max(0.6, Math.min(8, (proofW - 12) / tpl.width_mm))
     : 8
 
-  const visible = products.filter((p) => matches(p, q, ['sku', 'description', 'size', 'color', 'category', 'supplier_name', 'barcode']))
+  // Newest first by default: a delivery just received is what is waiting for its
+  // tags, and it used to sit wherever its description fell alphabetically among
+  // six thousand others. `created_at` is when the product came into stock; the id
+  // breaks ties (and orders a server too old to send created_at).
+  const [sort, setSort] = useState('newest')
+  const sorted = useMemo(() => {
+    const byNew = (a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')) || b.id - a.id
+    const txt = (k) => (a, b) => String(a[k] || '').localeCompare(String(b[k] || '')) || byNew(a, b)
+    const cmp = sort === 'name' ? (a, b) => String(a.name || a.description || '')
+      .localeCompare(String(b.name || b.description || '')) || byNew(a, b)
+      : sort === 'sku' ? txt('sku') : sort === 'oldest' ? (a, b) => byNew(b, a) : byNew
+    return [...products].sort(cmp)
+  }, [products, sort])
+
+  const flt = useFilters()
+  const { f } = flt
+  // "Added" windows count back from today, in whole local days
+  const addedFrom = f.added === 'today' ? daysAgo(0) : f.added === '7' ? daysAgo(7) : f.added === '30' ? daysAgo(30) : ''
+  const visible = sorted.filter((p) => matches(p, q, ['sku', 'description', 'size', 'color', 'category', 'supplier_name', 'barcode']))
+    .filter((p) => (!f.supplier || p.supplier_name === f.supplier)
+      && (!f.category || p.category === f.category)
+      && (!f.brand || p.brand === f.brand)
+      && (!f.size || p.size === f.size)
+      && (!f.color || p.color === f.color)
+      && inRange(localDay(p.created_at), addedFrom || f.date_from, f.date_to)
+      && (!f.printable || (f.printable === 'yes' ? p.can_print !== false : p.can_print === false))
+      && (!f.stock || (f.stock === 'in' ? +p.stock_qty > 0 : !(+p.stock_qty > 0))))
   const page = usePaged(visible, 50)
   const ids = Object.keys(picked).map(Number)
   // a per-piece run prints one label per garment, so its count is the live piece
@@ -10163,12 +11375,16 @@ function LabelPrinting({ toast }) {
       </div>
       <div className="lprintwrap">
         <div>
-          <div className="toolbar">
+          {/* Bottom-aligned: the labelled fields are taller than the search box
+              and the buttons, and centring them left every control at a
+              different height. */}
+          <div className="toolbar lprinttools">
             {/* supplier was always searchable here — it just never said so */}
-            <SearchBox value={q} onChange={setQ} placeholder="Search product / SKU / size / colour / supplier…"
-              style={{ width: 320 }} />
-            <div className="field" style={{ width: 280, margin: 0 }}><label>Template</label>
-              <select value={tplId} onChange={(e) => setTplId(+e.target.value)}>
+            <SearchBox value={q} onChange={setQ} placeholder="Search product, SKU, size, colour, supplier…"
+              style={{ width: 300 }} />
+            <div className="field" style={{ minWidth: 240, maxWidth: 360, margin: 0 }}><label>Template</label>
+              <select value={tplId} onChange={(e) => setTplId(+e.target.value)}
+                title={tpl ? `${tpl.name} (${tpl.width_mm}×${tpl.height_mm} mm)` : undefined}>
                 {templates.length === 0 && <option value={0}>No active template</option>}
                 {templates.map((t) => (
                   <option key={t.id} value={t.id}>
@@ -10176,6 +11392,14 @@ function LabelPrinting({ toast }) {
                   </option>
                 ))}
               </select></div>
+            <div className="field" style={{ width: 150, margin: 0 }}><label>Sort</label>
+              <select value={sort} onChange={(e) => setSort(e.target.value)}>
+                <option value="newest">Newest first</option>
+                <option value="oldest">Oldest first</option>
+                <option value="name">Product A–Z</option>
+                <option value="sku">SKU</option>
+              </select></div>
+            <FilterButton open={flt.open} onToggle={flt.toggle} active={flt.active} />
             <div className="spacer" />
             {/* Everything the search matched, across every page — the thing you
                 want after filtering to one supplier or one design. Separate
@@ -10185,12 +11409,43 @@ function LabelPrinting({ toast }) {
             {visible.length > page.slice.length && (
               <button className="btn" onClick={selectAllMatching}
                 disabled={allMatching}
-                title={`Select every product the current search matched (${visible.length})`}>
-                Select all {visible.length}{q ? ' matching' : ''}
+                title={`Select every product the current search and filters matched (${visible.length})`}>
+                Select all {visible.length}{q || flt.active ? ' matching' : ''}
               </button>
             )}
             <button className="btn" onClick={() => setPicked({})} disabled={!ids.length}>Clear selection</button>
           </div>
+          <FilterPanel open={flt.open} active={flt.active} onClear={flt.clear}
+            hint={flt.active ? `${flt.active} filter${flt.active === 1 ? '' : 's'} active · ${visible.length.toLocaleString('en-IN')} product${visible.length === 1 ? '' : 's'} match`
+              : 'Narrow by when it was added, supplier, category, brand, size, colour or printability'}>
+            <FilterSelect label="Added" style={{ width: 150 }} value={f.added}
+              onChange={(v) => {
+                flt.set('added', v)
+                // a window replaces the custom range, which is hidden while one is set
+                if (v) { flt.set('date_from', ''); flt.set('date_to', '') }
+              }} anyLabel="Any time"
+              options={[['today', 'Today'], ['7', 'Last 7 days'], ['30', 'Last 30 days']]} />
+            {!f.added && <>
+              <DateField label="Added from" width={160} value={f.date_from || ''} onChange={(v) => flt.set('date_from', v)} />
+              <DateField label="Added to" width={160} value={f.date_to || ''} onChange={(v) => flt.set('date_to', v)} />
+            </>}
+            <FilterSelect label="Supplier" style={{ width: 220 }} value={f.supplier}
+              onChange={(v) => flt.set('supplier', v)} options={uniqOf(products, 'supplier_name')} />
+            <FilterSelect label="Category" style={{ width: 180 }} value={f.category}
+              onChange={(v) => flt.set('category', v)} options={uniqOf(products, 'category')} />
+            <FilterSelect label="Brand" style={{ width: 150 }} value={f.brand}
+              onChange={(v) => flt.set('brand', v)} options={uniqOf(products, 'brand')} />
+            <FilterSelect label="Size" style={{ width: 110 }} value={f.size}
+              onChange={(v) => flt.set('size', v)} options={uniqOf(products, 'size')} />
+            <FilterSelect label="Colour" style={{ width: 140 }} value={f.color}
+              onChange={(v) => flt.set('color', v)} options={uniqOf(products, 'color')} />
+            <FilterSelect label="Printable" style={{ width: 150 }} value={f.printable}
+              onChange={(v) => flt.set('printable', v)}
+              options={[['yes', 'Can print'], ['no', 'Cannot print']]} />
+            <FilterSelect label="Stock" style={{ width: 130 }} value={f.stock}
+              onChange={(v) => flt.set('stock', v)}
+              options={[['in', 'In stock'], ['out', 'Out of stock']]} />
+          </FilterPanel>
 
           {perPiece && <div className="infobox" style={{ marginBottom: 12 }}>
             <b>{tpl.name}</b> prints one label per garment, each carrying that piece's own
@@ -10217,6 +11472,7 @@ function LabelPrinting({ toast }) {
                   is NOT a label field: what prints is whatever the template lays
                   out, and no template is touched by this column. */}
               <th>Supplier</th>
+              <th title="When the product came into stock — the list is newest first">Added</th>
               <th style={{ textAlign: 'right' }}>Stock</th>
               <th style={{ textAlign: 'right', width: 110 }}>{perPiece ? 'Pieces' : 'Labels'}</th>
             </tr></thead>
@@ -10241,6 +11497,7 @@ function LabelPrinting({ toast }) {
                     <td>{p.color || '—'}</td>
                     <td title={p.supplier_name ? `Received from ${p.supplier_name}` : 'No supplier recorded against this item'}>
                       {p.supplier_name || '—'}</td>
+                    <td style={{ whiteSpace: 'nowrap' }}>{fmtDate(localDay(p.created_at))}</td>
                     <td className="num">{p.stock_qty}</td>
                     <td style={{ textAlign: 'right' }}>
                       {!on ? '—' : perPiece ? (p.live_units || 0)
@@ -10364,9 +11621,12 @@ function NotificationBell({ onOpen, tick }) {
     .catch((e) => setErr(e.status === 404 ? 'restart' : '')), [])
   useEffect(() => { poll() }, [poll, tick])
   useEffect(() => {
-    const t = setInterval(() => { if (document.visibilityState === 'visible') poll() }, 60000)
-    document.addEventListener('visibilitychange', poll)
-    return () => { clearInterval(t); document.removeEventListener('visibilitychange', poll) }
+    // Only while the page can be seen — including on the visibility change
+    // itself, which fires on HIDING the tab as well as on coming back to it
+    const visible = () => { if (document.visibilityState === 'visible') poll() }
+    const t = setInterval(visible, 60000)
+    document.addEventListener('visibilitychange', visible)
+    return () => { clearInterval(t); document.removeEventListener('visibilitychange', visible) }
   }, [poll])
 
   const unread = counts?.unread || 0
@@ -10402,7 +11662,7 @@ function NotificationPanel({ go, user, toast, onClose, onChanged }) {
               title="Who is meant to be watching these, and on what number">People</button>
           </div>
           <button className="btn" style={{ marginLeft: 'auto' }} onClick={onClose}
-            title="Close">✕</button>
+            title="Close">×</button>
         </div>
         <div className="piece-body" style={{ maxHeight: '68vh', overflow: 'auto' }}>
           {err && <div className="warnbox" style={{ marginBottom: 12 }}>
@@ -10674,7 +11934,7 @@ function DeadStock({ toast, go, intent, onIntentUsed }) {
           Stock that has stopped moving, what it is worth to clear, and whether the clearance worked
         </div>
         <div style={{ flex: 1 }} />
-        <button className="btn" onClick={loadSummary} disabled={busy}
+        <button className="btn" onClick={() => readCache.refresh(loadSummary)} disabled={busy}
           title="Re-read the stock, the till and the ledger">{busy ? 'Reading…' : '↻ Refresh'}</button>
       </div>
 
@@ -10807,7 +12067,7 @@ function DsRegister({ toast, status, setStatus, onChanged }) {
       <Section id="ds-register" title="Dead Stock Register"
         summary={data ? `${rows.length} line(s)` : 'reading…'}
         actions={<>
-          <SearchBox value={q} onChange={setQ} placeholder="SKU, product, category, supplier…" />
+          <SearchBox value={q} onChange={setQ} placeholder="Search SKU, product, category, supplier…" />
           <FilterButton open={open} onToggle={() => setOpen((o) => !o)} active={active} />
         </>}>
         <div className="toolbar" style={{ marginBottom: 10 }}>
@@ -10987,7 +12247,7 @@ function DsAddToClearance({ rows, actions, onClose, onDone, toast }) {
     <div className="piece-wrap" onClick={onClose}>
       <div className="piece-card" style={{ maxWidth: 560 }} onClick={(e) => e.stopPropagation()}>
         <div className="piece-head"><b>Add to a clearance worksheet</b>
-          <button className="btn" style={{ marginLeft: 'auto' }} onClick={onClose}>✕</button></div>
+          <button className="btn" style={{ marginLeft: 'auto' }} onClick={onClose}>×</button></div>
         <div className="piece-body">
           <div className="small" style={{ color: 'var(--text-2)', marginBottom: 12 }}>
             {rows.length} line(s) · {Math.round(totals.qty * 1000) / 1000} pcs ·
@@ -11058,9 +12318,12 @@ function DsWorksheets({ toast }) {
   if (open) {
     const t = open.totals
     return (
+      <>
+      <div className="detailbar">
+        <button className="btn" onClick={() => { setOpen(null); load() }}>← All worksheets</button>
+      </div>
       <Section id="ds-sheet" title={open.name}
-        summary={`${open.status} · ${open.line_count} line(s)`}
-        actions={<button className="btn" onClick={() => { setOpen(null); load() }}>‹ All worksheets</button>}>
+        summary={`${open.status} · ${open.line_count} line(s)`}>
         <div className="dgrid" style={{ marginBottom: 14 }}>
           <DashTile label="Products" value={t.qty + ' pcs'} accent="stock" sub={`${open.line_count} line(s) in the campaign`} />
           <DashTile label="Stock cost" value={rupees(t.stock_cost)} accent="money" sub="what these pieces cost us" />
@@ -11131,6 +12394,7 @@ function DsWorksheets({ toast }) {
         {!open.lines?.length && <div className="empty" style={{ marginTop: 24 }}>
           No lines yet — open the Register, select what to clear and add it here.</div>}
       </Section>
+      </>
     )
   }
 
@@ -11626,7 +12890,7 @@ function ItemLocator({ toast }) {
           <label>Scan a tag, or type a code</label>
           <div style={{ display: 'flex', gap: 8 }}>
             <input ref={box} value={code} style={{ flex: 1, fontSize: 15 }}
-              placeholder="Product QR, piece code, carton label, barcode or SKU"
+              placeholder="Scan a QR, piece code, carton label, barcode or SKU…"
               onChange={(e) => setCode(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') look() }} />
             <button className="btn primary" disabled={busy || !code.trim()}
@@ -12127,6 +13391,8 @@ function Users({ toast, me }) {
   const [err, setErr] = useState('')
   const blank = { username: '', password: '', role: 'user', full_name: '' }
   const [form, setForm] = useState(blank)
+  const [uq, setUq] = useState('')
+  const [urole, setUrole] = useState('')
 
   const load = useCallback(() => {
     setBusy(true)
@@ -12218,6 +13484,16 @@ function Users({ toast, me }) {
         {busy && !rows.length && <div className="empty" style={{ margin: '10px 0' }}>Loading…</div>}
 
         {rows.length > 0 && (
+          <div className="toolbar" style={{ gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
+            <SearchBox value={uq} onChange={setUq} placeholder="Search username, name…" style={{ width: 280 }} />
+            <FilterChips value={urole} onChange={setUrole} options={[
+              ['', 'All', rows.length, 'Every account'],
+              ...Object.keys(ROLE_LABEL).filter((r) => rows.some((u) => u.role === r))
+                .map((r) => [r, ROLE_LABEL[r], rows.filter((u) => u.role === r).length, `Only ${ROLE_LABEL[r]} accounts`]),
+            ]} />
+          </div>
+        )}
+        {rows.length > 0 && (
           <div className="tablewrap">
             <table className="items">
               <thead><tr>
@@ -12225,7 +13501,8 @@ function Users({ toast, me }) {
                 <th style={{ width: 100 }}>Last signed in</th><th style={{ width: 90 }}>Added</th>
                 <th style={{ width: 200 }}></th>
               </tr></thead>
-              <tbody>{rows.map((u) => (
+              <tbody>{rows.filter((u) => (!urole || u.role === urole)
+                && matches(u, uq, ['username', 'full_name', 'role'])).map((u) => (
                 <tr key={u.id} style={u.active ? undefined : { opacity: 0.55 }}>
                   <td><b>{u.username}</b>{isMe(u) && <span className="small" style={{ color: 'var(--text-2)' }}> · you</span>}</td>
                   <td className="small">{u.full_name || '—'}</td>
@@ -13012,7 +14289,7 @@ function Locations({ toast }) {
           and the tills standing on them
         </div>
         <div style={{ flex: 1 }} />
-        <button className="btn" onClick={load}>↻ Refresh</button>
+        <button className="btn" onClick={() => readCache.refresh(load)}>↻ Refresh</button>
         <button className="btn primary" onClick={() => setEdit({ kind: 'warehouse' })}>
           + New warehouse</button>
       </div>
@@ -13476,7 +14753,7 @@ const CC_SERIES = [
   ['movement', 'Stock movement', 'Units in and out of the warehouses'],
 ]
 
-function CommandCenter({ go, toast, user, role, onEnter }) {
+function CommandCenter({ go, toast, user, role, onEnter, active = true }) {
   const [ov, setOv] = useState(null)
   const [day, setDay] = useState('')
   const [scope, setScope] = useState(null)        // one warehouse, or every one
@@ -13490,14 +14767,16 @@ function CommandCenter({ go, toast, user, role, onEnter }) {
 
   const load = useCallback(() => {
     setBusy(true)
-    return api.commandOverview(day || undefined, scope || undefined)
-      .then((r) => { setOv(r); setErr('') })
+    // remembered figures at once, then the server's (api.swr)
+    return swr(() => api.commandOverview(day || undefined, scope || undefined),
+      (r) => { setOv(r); setErr('') })
       .catch((e) => setErr(e.status === 404 || e.status === 405
         ? 'restart'
         : (e.detail || 'The Command Center could not be read')))
       .finally(() => setBusy(false))
   }, [day, scope])
   useEffect(() => { load() }, [load])
+  useReshow(active, load)
 
   if (err === 'restart') return (
     <div className="screen scrolls">
@@ -13571,7 +14850,7 @@ function CommandCenter({ go, toast, user, role, onEnter }) {
         <input type="date" value={day} max={ov?.day} style={{ width: 150 }}
           title="Look at another business day" onChange={(e) => setDay(e.target.value)} />
         {day && <button className="btn" onClick={() => setDay('')}>Today</button>}
-        <button className="btn" onClick={load} disabled={busy}>{busy ? 'Reading…' : 'Refresh'}</button>
+        <button className="btn" onClick={() => readCache.refresh(load)} disabled={busy}>{busy ? 'Reading…' : 'Refresh'}</button>
       </div>
 
       <div className="screenbody">
@@ -13927,34 +15206,39 @@ function AuditTrail({ go }) {
   useEffect(() => { load() }, [load])
 
   const set = (k, v) => setF((old) => ({ ...old, [k]: v }))
+  const [filtersOpen, setFiltersOpen] = useState(false)
+  const activeF = ['user', 'screen', 'date_from', 'date_to'].filter((k) => f[k]).length
   return (
     <div className="screen scrolls">
       <div className="pagehead">
         <h2>📝 Audit Trail</h2>
         <div className="pagesub">Every change, who made it and where — newest first</div>
-        <select className="sel" value={f.user} onChange={(e) => set('user', e.target.value)}
-          title="One person's actions" style={{ minWidth: 140 }}>
-          <option value="">Everyone</option>
-          {meta.people.map((p) => <option key={p} value={p}>{p}</option>)}
-        </select>
-        <select className="sel" value={f.screen} onChange={(e) => set('screen', e.target.value)}
-          title="One module" style={{ minWidth: 150 }}>
-          <option value="">Every module</option>
-          {meta.modules.map((m) => <option key={m.key} value={m.key}>{m.label}</option>)}
-        </select>
-        <select className="sel" value={f.outcome} onChange={(e) => set('outcome', e.target.value)}
-          title="Refused attempts only">
-          <option value="">Done and refused</option>
-          <option value="ok">Done</option>
-          <option value="refused">Refused</option>
-          <option value="failed">Failed sign-ins</option>
-        </select>
-        <input type="date" value={f.date_from} style={{ width: 140 }}
-          title="From this business day" onChange={(e) => set('date_from', e.target.value)} />
-        <input type="date" value={f.date_to} style={{ width: 140 }}
-          title="To this business day" onChange={(e) => set('date_to', e.target.value)} />
-        <input value={f.q} placeholder="Search the trail…" style={{ width: 180 }}
-          onChange={(e) => set('q', e.target.value)} />
+        <div style={{ flex: 1 }} />
+        <SearchBox value={f.q} onChange={(v) => set('q', v)} placeholder="Search the trail…" style={{ width: 280 }} />
+        <FilterButton open={filtersOpen} onToggle={() => setFiltersOpen((o) => !o)} active={activeF} />
+      </div>
+      <div style={{ padding: '0 var(--gutter)' }}>
+        <FilterPanel open={filtersOpen} active={activeF}
+          onClear={() => setF((o) => ({ ...o, user: '', screen: '', date_from: '', date_to: '' }))}>
+          <div className="field" style={{ width: 180 }}><label>Person</label>
+            <select value={f.user} onChange={(e) => set('user', e.target.value)}>
+              <option value="">Everyone</option>
+              {meta.people.map((x) => <option key={x} value={x}>{x}</option>)}
+            </select></div>
+          <div className="field" style={{ width: 200 }}><label>Module</label>
+            <select value={f.screen} onChange={(e) => set('screen', e.target.value)}>
+              <option value="">Every module</option>
+              {meta.modules.map((m) => <option key={m.key} value={m.key}>{m.label}</option>)}
+            </select></div>
+          <DateField label="From" width={160} value={f.date_from} onChange={(v) => set('date_from', v)} />
+          <DateField label="To" width={160} value={f.date_to} onChange={(v) => set('date_to', v)} />
+        </FilterPanel>
+        <div className="toolbar" style={{ marginTop: 8 }}><FilterChips value={f.outcome} onChange={(v) => set('outcome', v)} options={[
+          ['', 'Done and refused', null, 'Every recorded action'],
+          ['ok', 'Done', null, 'Actions that went through'],
+          ['refused', 'Refused', null, 'Attempts the account was not allowed'],
+          ['failed', 'Failed sign-ins', null, 'Sign-ins that failed'],
+        ]} /></div>
       </div>
 
       <div className="screenbody">
@@ -14018,7 +15302,7 @@ function AuditTrail({ go }) {
 //  tiles, a table and two charts that fetched each part separately would open
 //  in N round trips.
 // ==========================================================================
-function CentralDashboard({ toast, go, onEnter }) {
+function CentralDashboard({ toast, go, onEnter, active = true }) {
   const [ov, setOv] = useState(null)
   const [err, setErr] = useState(null)
   const [scope, setScope] = useState(null)      // warehouse id, or null for all
@@ -14026,19 +15310,18 @@ function CentralDashboard({ toast, go, onEnter }) {
   const [busy, setBusy] = useState(false)
 
   const [sales, setSales] = useState(null)
-  const load = useCallback(() => api.locationOverview(days, scope)
-    .then((r) => { setOv(r); setErr(null) })
+  const load = useCallback(() => swr(() => api.locationOverview(days, scope),
+    (r) => { setOv(r); setErr(null) })
     .catch((e) => setErr(e.status === 404 ? 'restart' : (e.detail || e.message))),
   [days, scope])
   useEffect(() => { load() }, [load])
   // Fetched on its own, and its failure is its own. The shop is a second
   // database; if it is switched off this section says so while everything above
   // it still draws.
-  useEffect(() => {
-    api.storeSales(days, scope)
-      .then(setSales)
-      .catch((e) => setSales({ available: false, reason: e.detail || e.message }))
-  }, [days, scope])
+  const loadSales = useCallback(() => swr(() => api.storeSales(days, scope), setSales)
+      .catch((e) => setSales({ available: false, reason: e.detail || e.message })), [days, scope])
+  useEffect(() => { loadSales() }, [loadSales])
+  useReshow(active, () => { load(); loadSales() })
 
   const rebuild = async () => {
     setBusy(true)
@@ -14095,7 +15378,7 @@ function CentralDashboard({ toast, go, onEnter }) {
           <option value={30}>Last 30 days</option>
           <option value={90}>Last 90 days</option>
         </select>
-        <button className="btn" onClick={load}>Refresh</button>
+        <button className="btn" onClick={() => readCache.refresh(load)}>Refresh</button>
       </div>
 
       <div className="screenbody">
@@ -15003,6 +16286,15 @@ function Catalogues({ toast }) {
 // ==========================================================================
 const COMPANY_ONLY = new Set(['command', 'audit', 'central', 'locations'])
 
+//: Screens that live as tabs inside Invoice Entry: screen key -> its tab there.
+//: They leave the side menu, and anything that opens one — a dashboard tile,
+//: "Open in GRN", Ctrl+K, a remembered last screen — lands on that tab. Only
+//: for someone who may open Invoice Entry: without it they keep the screen of
+//: their own, in the menu, as before.
+const IN_INVOICE_ENTRY = { purchases: 'grn', inventory: 'inventory' }
+//: …and screens that are a KIND inside Stock Audit: screen key -> its kind there.
+const IN_STOCK_AUDIT = { physical_audit: 'qty' }
+
 //: The whole company-level menu. Anything not here needs a warehouse first.
 const COMPANY_LEVEL = new Set(['command', 'audit', 'central', 'locator', 'reports',
                                'locations', 'users'])
@@ -15047,7 +16339,7 @@ const MODULES = [
   // how many are there against how many the books say, with the shortage or
   // excess and an approval before anything moves. One word for both would send
   // people to the wrong screen.
-  { key: 'stock_audit', icon: '📋', label: 'Warehouse Stock Audit', blurb: 'Scan a rack — is each item where the books say? (a store floor is counted under POS)' },
+  { key: 'stock_audit', icon: '📋', label: 'Stock Audit', blurb: 'Shelf check (is it here?) and quantity count (how many — and correct the books), in one place. A store floor is counted under POS.' },
   // The second warehouse audit, and beside the first because the pair are chosen
   // between rather than found separately. They are two questions about the same
   // racks: that one asks IS IT HERE, one tag at a time, and answers with a
@@ -15163,7 +16455,11 @@ const POS_USER_KEYS = new Set(['pos:counter', 'pos:reports'])
 
 // One frame, keyed on the path so choosing another screen from the menu loads
 // it rather than leaving the frame on whatever it had drifted to.
-function PosScreen({ screen, available, error, warehouse: wh }) {
+function PosScreen({ screen, available, error, warehouse: wh, active = true }) {
+  // Kept open as a dashboard (App's stash): shown again, it reloads itself in
+  // place — the browser keeps the old page painted until the new one is ready.
+  const frame = useRef(null)
+  useReshow(active, () => { try { frame.current?.contentWindow?.location.reload() } catch { /* not ours */ } })
   if (available === false) return (
     <div className="empty" style={{ margin: 40, maxWidth: 620 }}>
       <p><b>The POS module is not loaded.</b></p>
@@ -15181,7 +16477,7 @@ function PosScreen({ screen, available, error, warehouse: wh }) {
     + (wh?.id ? (screen.path.includes('?') ? '&' : '?') + 'wh=' + wh.id : '')
   return (
     <div className="posframe">
-      <iframe key={screen.path + ':' + (wh?.id || '')} src={src}
+      <iframe ref={frame} key={screen.path + ':' + (wh?.id || '')} src={src}
         title={'POS — ' + screen.label} />
     </div>
   )
@@ -15318,8 +16614,8 @@ function NavSidebar({ kind, context, items, tab, go, online, foot, drawer, onClo
       {drawer && (
         <div className="navdrawer-head">
           <div className="th-brand">
-            <span className="th-logo" aria-hidden="true">E</span>
-            <div className="brand">Essa <span>· ERP</span><small style={{ display: 'block' }}>{kind}</small></div>
+            <span className="th-logo" aria-hidden="true">W</span>
+            <div className="brand">Warexx <span>· ERP</span><small style={{ display: 'block' }}>{kind}</small></div>
           </div>
           <button className="th-icon" onClick={onClose} aria-label="Close navigation menu">
             <Icon name="x" size={20} /></button>
@@ -15492,6 +16788,15 @@ function Grid({ ticks, max }) {
       })}
     </g>
   )
+}
+
+// A generous average glyph width for .vizname (12px, mostly capitals) in
+// viewBox units, and a label cut to `n` characters — SVG text cannot ellipsize
+// itself, so the cut is made before it is drawn.
+const CH_W = 7.4
+const clip = (s, n) => {
+  const t = String(s ?? '')
+  return t.length > n ? t.slice(0, Math.max(1, n - 1)).trimEnd() + '…' : t
 }
 
 // x labels thin out rather than overlap — a collided axis is unreadable, and
@@ -15686,8 +16991,14 @@ function HBars({ rows, unit, ordinal }) {
   const [hover, setHover] = useState(null)
   const max = Math.max(...rows.map((r) => r.value), 0) || 1
   const H = Math.max(120, rows.length * 34 + 20)
-  const LW = 140                                  // room for the name
-  const barW = VB.w - LW - 80
+  // Room for the name, sized to the longest one and capped at a third of the
+  // chart. It was a fixed 140, and a supplier called "SRI MARIYAMMAN
+  // TEXTILES(ELAMPILLAI)" ran off the card's left edge; past the cap a name is
+  // cut with an ellipsis and read in full on hover and in the table.
+  const longest = Math.max(0, ...rows.map((r) => String(r.label ?? '').length))
+  const LW = Math.round(Math.min(VB.w / 3, Math.max(110, longest * CH_W + 18)))
+  const fit = Math.floor((LW - 18) / CH_W)
+  const barW = VB.w - LW - 64
   const ORD = ['var(--viz-ord-1)', 'var(--viz-ord-2)', 'var(--viz-ord-3)', 'var(--viz-ord-4)']
   return (
     <div className="vizplot">
@@ -15701,7 +17012,8 @@ function HBars({ rows, unit, ordinal }) {
           const fill = ordinal ? ORD[Math.min(i, ORD.length - 1)] : SEQ
           return (
             <g key={r.label} onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}>
-              <text x={LW - 10} y={y + 15} textAnchor="end" className="vizname">{r.label}</text>
+              <text x={LW - 10} y={y + 15} textAnchor="end" className="vizname">
+                <title>{r.label}</title>{clip(r.label, fit)}</text>
               <path fill={fill} d={roundedRight(LW, y, w, 20, 4)} />
               <text x={LW + w + 8} y={y + 15} className="vizlabel">{compact(r.value)}</text>
               <rect x={0} y={y - 6} width={VB.w} height={32} fill="transparent" />
@@ -15768,7 +17080,8 @@ function Donut({ rows, unit }) {
             <rect x="-6" y="-12" width="380" height="26" fill="transparent" />
             <rect x="0" y="-7" width="12" height="12" rx="3"
               fill={row.other ? 'var(--viz-other)' : VIZ[i % VIZ.length]} />
-            <text x="20" y="3" className="vizname">{row.label}</text>
+            {/* cut short of the value column it would otherwise run into */}
+            <text x="20" y="3" className="vizname"><title>{row.label}</title>{clip(row.label, 28)}</text>
             <text x="330" y="3" textAnchor="end" className="vizlabel">
               {compact(row.value)} · {(frac * 100).toFixed(frac < 0.01 ? 2 : 0)}%
             </text>
@@ -15793,7 +17106,8 @@ function Donut({ rows, unit }) {
 function DashTile({ label, value, sub, tone, accent, hint, onClick }) {
   return (
     <button className={'dtile' + (accent ? ' t-' + accent : '') + (tone ? ' ' + tone : '')}
-      onClick={onClick} title={hint || `Open ${label}`}>
+      onClick={onClick} title={hint || `Open ${label}`}
+      style={{ '--len': Math.max(6, String(value ?? '').length) }}>
       <span className="lbl">{label}</span>
       <span className={'val' + (longValue(value) ? ' long' : '')}>{value}</span>
       <span className="sub">{sub || ' '}</span>
@@ -15810,7 +17124,7 @@ function DashboardCharts({ money }) {
   const [c, setC] = useState(null)
   const [err, setErr] = useState('')
   useEffect(() => {
-    api.dashboardCharts().then(setC).catch((e) => setErr(
+    swr(() => api.dashboardCharts(), setC).catch((e) => setErr(
       // The frontend is read off disk and refreshes with the browser, but routes
       // are registered when Python starts. A backend left running from before
       // this endpoint existed serves the new screen and 404s its calls — a
@@ -15999,7 +17313,7 @@ function DashDeadStock({ sum, open }) {
   )
 }
 
-function Dashboard({ modules, go, company, docs, refreshDocs, user, openDeadStock, here }) {
+function Dashboard({ modules, go, company, docs, refreshDocs, user, openDeadStock, here, active = true }) {
   const [d, setD] = useState(null)
   const [partial, setPartial] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -16013,50 +17327,86 @@ function Dashboard({ modules, go, company, docs, refreshDocs, user, openDeadStoc
     try { localStorage.setItem('essa_dash_view', v) } catch { /* private mode */ }
   }
 
-  // allSettled, not all: an inventory scan that fails must not blank the six
-  // figures that loaded. What is missing is said out loud instead.
+  // One call for every figure (routers/dashboard.summary): the server reads the
+  // same lists this screen used to fetch whole and hands back only what the
+  // tiles show. A part this account may not read, or one that failed, comes back
+  // null — reported, not blanked, exactly as a refused call was: an inventory
+  // scan that fails must not blank the six figures that loaded.
+  //
+  // A server started before that endpoint existed answers 404; the screen then
+  // reads the ten lists itself, as it always did, and reduces them to the same
+  // shape — so a stale backend costs speed, not the dashboard.
+  const loadFromLists = () => Promise.allSettled([
+    api.listPurchases(), api.inventorySummary(), api.listOutwards('posted'),
+    api.listOutwards('draft'), api.pendingBills(), api.listReturns(),
+    api.lrList(), api.listSuppliers(), api.notifications(), api.deadStockSummary(),
+  ]).then((r) => {
+    const v = (i, f) => (r[i].status === 'fulfilled' ? f(r[i].value) : null)
+    return {
+      grns: v(0, (grns) => {
+        const drafts = grns.filter((g) => g.status === 'draft')
+        return { draft_count: drafts.length, draft_value: sum(drafts, (g) => g.grand_total),
+                 posted_count: grns.filter((g) => g.status === 'posted').length,
+                 short_lines: sum(grns, (g) => g.short_lines),
+                 short_value: sum(grns, (g) => g.short_value), recent: grns.slice(0, 6) }
+      }),
+      stock: v(1, (x) => x),
+      transit: v(2, (rows) => ({ count: rows.length, qty: sum(rows, (o) => o.total_qty) })),
+      out_drafts: v(3, (rows) => ({ count: rows.length })),
+      bills: v(4, (rows) => ({ count: rows.length, payable: sum(rows, (b) => b.outstanding),
+                               overdue: rows.filter((b) => (b.days || 0) > 30).length })),
+      returns: v(5, (rows) => ({ draft_count: rows.filter((x) => x.status === 'draft').length })),
+      lr: v(6, (rows) => ({ count: rows.length, pending: rows.filter((e) => !e.received_by).length,
+                            unlinked: rows.filter((e) => !e.matched).length })),
+      suppliers: v(7, (rows) => ({ count: rows.length })),
+      notifs: v(8, (x) => x),
+      dead: v(9, (x) => x),
+    }
+  })
   const load = useCallback(() => {
     setBusy(true)
-    return Promise.allSettled([
-      api.listPurchases(), api.inventorySummary(), api.listOutwards('posted'),
-      api.listOutwards('draft'), api.pendingBills(), api.listReturns(),
-      api.lrList(), api.listSuppliers(), api.notifications(), api.deadStockSummary(),
-    ]).then((r) => {
-      const v = (i, fb) => (r[i].status === 'fulfilled' ? r[i].value : fb)
-      setPartial(r.some((x) => x.status === 'rejected'))
-      setD({
-        grns: v(0, []), stock: v(1, {}), transit: v(2, []), outDrafts: v(3, []),
-        bills: v(4, []), returns: v(5, []), lr: v(6, []), suppliers: v(7, []),
-        // The same feed the bell reads. One call rather than a second pass for
-        // the dead-stock tile: the notices already carry it, and two reads of
-        // one queue is two chances to print two different numbers for it.
-        notifs: v(8, { notices: [], counts: {} }),
-        // the same read the module opens on — KPIs, age bands and the clearance
-        // trend, so the section below is the module's own arithmetic and not a
-        // second calculation of it that could disagree
-        dead: v(9, null),
+    const show = (s) => {
+      setPartial(Object.values(s).some((x) => x == null))
+      setD(s)
+    }
+    // remembered figures at once, then the server's (api.swr)
+    return swr(() => api.dashboardSummary(), show)
+      .catch((e) => (e?.status === 404 || e?.status === 405 ? loadFromLists().then(show) : Promise.reject(e)))
+      .catch(() => {
+        setPartial(true)
+        setD({})
       })
-    }).finally(() => setBusy(false))
+      .finally(() => setBusy(false))
   }, [])
   useEffect(() => { load() }, [load])
+  useReshow(active, load)
 
   if (!d) return <div className="empty" style={{ marginTop: 120 }}>Loading the dashboard…</div>
 
   const toReview = docs.filter((x) => x.status === 'needs_review').length
-  const grnDrafts = d.grns.filter((g) => g.status === 'draft')
-  const grnPosted = d.grns.filter((g) => g.status === 'posted')
-  const shortLines = sum(d.grns, (g) => g.short_lines)
-  const shortValue = sum(d.grns, (g) => g.short_value)
-  const lrPending = d.lr.filter((e) => !e.received_by).length
-  const lrUnlinked = d.lr.filter((e) => !e.matched).length
-  const payable = sum(d.bills, (b) => b.outstanding)
-  const overdue = d.bills.filter((b) => (b.days || 0) > 30)
-  const retDrafts = d.returns.filter((r) => r.status === 'draft').length
-  const pendingDetail = d.stock.pending_detail || 0
-  const transitQty = sum(d.transit, (o) => o.total_qty)
+  // A part that did not load reads as empty — a blank tile, flagged above
+  const grns = d.grns || { draft_count: 0, draft_value: 0, posted_count: 0,
+                           short_lines: 0, short_value: 0, recent: [] }
+  const stock = d.stock || {}
+  const transit = d.transit || { count: 0, qty: 0 }
+  const outDrafts = d.out_drafts?.count || 0
+  const bills = d.bills || { count: 0, payable: 0, overdue: 0 }
+  const lr = d.lr || { count: 0, pending: 0, unlinked: 0 }
+  // The same feed the bell reads. The dead-stock tile comes off it rather than a
+  // second pass: two reads of one queue is two chances to print two numbers.
+  const notifs = d.notifs || { notices: [], counts: {} }
+  const shortLines = grns.short_lines
+  const shortValue = grns.short_value
+  const lrPending = lr.pending
+  const lrUnlinked = lr.unlinked
+  const payable = bills.payable
+  const overdue = bills.overdue
+  const retDrafts = d.returns?.draft_count || 0
+  const pendingDetail = stock.pending_detail || 0
+  const transitQty = transit.qty
   // dead + critical: both are past the line, and a headline that left out the
   // worst rows would be the one figure nobody could reconcile against the module
-  const notices = d.notifs?.notices || []
+  const notices = notifs.notices || []
   const deadBands = notices.filter((n) => n.key === 'deadstock.dead' || n.key === 'deadstock.critical')
   const deadLines = sum(deadBands, (n) => n.count)
   const deadValue = sum(deadBands, (n) => n.value)
@@ -16067,13 +17417,13 @@ function Dashboard({ modules, go, company, docs, refreshDocs, user, openDeadStoc
       accent: 'count',
       sub: toReview ? 'read, but something did not reconcile' : 'nothing waiting',
       hint: 'Open Invoice Entry — documents extracted but not yet confirmed' },
-    { key: 'purchases', label: 'GRNs in draft', value: grnDrafts.length, tone: grnDrafts.length ? 'warn' : '',
+    { key: 'purchases', label: 'GRNs in draft', value: grns.draft_count, tone: grns.draft_count ? 'warn' : '',
       accent: 'count',
-      sub: grnDrafts.length ? `₹ ${money(sum(grnDrafts, (g) => g.grand_total))} not yet in stock` : 'all receipts posted',
+      sub: grns.draft_count ? `₹ ${money(grns.draft_value)} not yet in stock` : 'all receipts posted',
       hint: 'Open GRN — receipts counted but not posted, so the goods are not stock yet' },
-    { key: 'inward', label: 'Transfers in transit', value: d.transit.length, tone: d.transit.length ? 'warn' : '',
+    { key: 'inward', label: 'Transfers in transit', value: transit.count, tone: transit.count ? 'warn' : '',
       accent: 'move',
-      sub: d.transit.length ? `${transitQty} pcs dispatched, not accepted` : 'nothing on the road',
+      sub: transit.count ? `${transitQty} pcs dispatched, not accepted` : 'nothing on the road',
       hint: 'Open Stock Inward — dispatched transfers no destination has checked in' },
     { key: 'lr', label: 'Consignments not received', value: lrPending, tone: lrPending ? 'warn' : '',
       accent: 'move',
@@ -16084,8 +17434,8 @@ function Dashboard({ modules, go, company, docs, refreshDocs, user, openDeadStoc
       sub: shortLines ? `₹ ${money(shortValue)} billed and not delivered` : 'no open claims',
       hint: 'Open GRN — goods billed that the boxes did not hold, not yet waived or claimed' },
     { key: 'payments', label: 'Payable to suppliers', value: '₹ ' + money(payable),
-      tone: overdue.length ? 'warn' : '', accent: 'money',
-      sub: d.bills.length ? `${d.bills.length} bill${d.bills.length === 1 ? '' : 's'}${overdue.length ? ` · ${overdue.length} over 30 days` : ''}` : 'nothing outstanding',
+      tone: overdue ? 'warn' : '', accent: 'money',
+      sub: bills.count ? `${bills.count} bill${bills.count === 1 ? '' : 's'}${overdue ? ` · ${overdue} over 30 days` : ''}` : 'nothing outstanding',
       hint: 'Open Payments — unpaid supplier invoices' },
     { key: 'deadstock', label: 'Dead stock', value: deadLines,
       tone: deadLines ? 'warn' : '', accent: 'stock',
@@ -16097,7 +17447,7 @@ function Dashboard({ modules, go, company, docs, refreshDocs, user, openDeadStoc
   const open = attention.filter((a) => a.tone === 'warn').length
 
   const recentDocs = docs.slice(0, 6)
-  const recentGrns = d.grns.slice(0, 6)
+  const recentGrns = grns.recent || []
 
   return (
     <div className="screen scrolls">
@@ -16120,7 +17470,7 @@ function Dashboard({ modules, go, company, docs, refreshDocs, user, openDeadStoc
             className={'seg' + (view === 'graphical' ? ' on' : '')} onClick={() => setView('graphical')}
             title="The same warehouse as trends and shares over time">📈 Charts</button>
         </div>
-        <button className="btn" onClick={() => { refreshDocs(); load() }} disabled={busy}
+        <button className="btn" onClick={() => readCache.refresh(() => { refreshDocs(); load() })} disabled={busy}
           title="Re-read every figure on this screen">{busy ? 'Refreshing…' : '↻ Refresh'}</button>
       </div>
 
@@ -16140,9 +17490,9 @@ function Dashboard({ modules, go, company, docs, refreshDocs, user, openDeadStoc
             in full, where there is room to read the sentence under each line. */}
         <Section id="dash-notices" title="Notifications"
           summary={notices.length
-            ? `${d.notifs.counts.unread || 0} unread of ${notices.length}`
+            ? `${notifs.counts.unread || 0} unread of ${notices.length}`
             : 'nothing open'}
-          actions={(d.notifs.counts?.unread || 0) > 0 ? (
+          actions={(notifs.counts?.unread || 0) > 0 ? (
             <button className="btn" onClick={() => api.notificationsReadAll(user).then(load)}>
               Mark all read</button>
           ) : null}>
@@ -16178,13 +17528,13 @@ function Dashboard({ modules, go, company, docs, refreshDocs, user, openDeadStoc
         {d.dead && <DashDeadStock sum={d.dead} open={openDeadStock} />}
 
         <Section id="dash-stock" title="Stock at a glance"
-          summary={`${d.stock.product_count || 0} records · ₹ ${money(d.stock.total_stock_value)}`}>
+          summary={`${stock.product_count || 0} records · ₹ ${money(stock.total_stock_value)}`}>
           <div className="dgrid">
-            <DashTile label="Stock value" value={'₹ ' + money(d.stock.total_stock_value)}
+            <DashTile label="Stock value" value={'₹ ' + money(stock.total_stock_value)}
               accent="money" sub="at purchase cost, posted receipts only" onClick={() => go('inventory')}
               hint="Open Inventory — only records a posted GRN created are counted" />
-            <DashTile label="Pieces on hand" value={(d.stock.total_units || 0).toLocaleString('en-IN')}
-              accent="stock" sub={`${d.stock.product_count || 0} inventory records`} onClick={() => go('inventory')} />
+            <DashTile label="Pieces on hand" value={(stock.total_units || 0).toLocaleString('en-IN')}
+              accent="stock" sub={`${stock.product_count || 0} inventory records`} onClick={() => go('inventory')} />
             <DashTile label="Awaiting physical detail" value={pendingDetail}
               accent="count" tone={pendingDetail ? 'warn' : ''}
               sub={pendingDetail ? 'colour, size and fit not recorded yet' : 'every item detailed'}
@@ -16194,9 +17544,9 @@ function Dashboard({ modules, go, company, docs, refreshDocs, user, openDeadStoc
               accent="back" tone={retDrafts ? 'warn' : ''}
               sub={retDrafts ? 'debit notes not yet raised' : 'no open debit notes'}
               onClick={() => go('returns')} />
-            <DashTile label="Outward drafts" value={d.outDrafts.length}
-              accent="move" tone={d.outDrafts.length ? 'warn' : ''}
-              sub={d.outDrafts.length ? 'packed but not dispatched' : 'nothing packed'}
+            <DashTile label="Outward drafts" value={outDrafts}
+              accent="move" tone={outDrafts ? 'warn' : ''}
+              sub={outDrafts ? 'packed but not dispatched' : 'nothing packed'}
               onClick={() => go('outward')} />
             <DashTile label="LR rows without an invoice" value={lrUnlinked}
               accent="count" sub={lrUnlinked ? 'no invoice matched to them yet' : 'every row is linked'}
@@ -16204,12 +17554,12 @@ function Dashboard({ modules, go, company, docs, refreshDocs, user, openDeadStoc
               onClick={() => go('lr')} />
           </div>
           <div className="items-foot">
-            <span>Posted GRNs <b>{grnPosted.length}</b></span>
-            <span>Suppliers <b>{d.suppliers.length}</b></span>
+            <span>Posted GRNs <b>{grns.posted_count}</b></span>
+            <span>Suppliers <b>{d.suppliers?.count || 0}</b></span>
             <span>Documents <b>{docs.length}</b></span>
-            <span>LR entries <b>{d.lr.length}</b></span>
-            {d.stock.excluded_products > 0 && <span title="Records not traceable to a posted GRN — debris, or kept at zero after an unpost. They are not stock, so they are not valued.">
-              Excluded from stock <b>{d.stock.excluded_products}</b></span>}
+            <span>LR entries <b>{lr.count}</b></span>
+            {stock.excluded_products > 0 && <span title="Records not traceable to a posted GRN — debris, or kept at zero after an unpost. They are not stock, so they are not valued.">
+              Excluded from stock <b>{stock.excluded_products}</b></span>}
           </div>
         </Section>
 
@@ -16389,7 +17739,28 @@ export default function App() {
     try { localStorage.setItem('essa_open_tabs', JSON.stringify(next)) }
     catch { /* private mode */ }
   }
-  const setTab = (t) => {
+  // ← Back: the screens visited in THIS building, newest last. Kept per
+  // warehouse for the same reason the tab strip is — going back must never walk
+  // somebody out of Karur into the screen they had open at Erode. Memory only:
+  // a reload starts the trail again, as a browser's own back list would.
+  const backTrail = useRef({})
+  // Stock Audit's kind of count, remembered across visits
+  const [auditKind, setAuditKindState] = useState(() => {
+    try { return localStorage.getItem('essa_audit_kind') || 'shelf' } catch { return 'shelf' }
+  })
+  const setAuditKind = (k) => {
+    setAuditKindState(k)
+    try { localStorage.setItem('essa_audit_kind', k) } catch { /* private mode */ }
+  }
+  const setTab = (t, how) => {
+    const inside = foldsIntoInvoiceEntry(t)
+    if (inside) { openDocSub(inside); t = 'documents' }
+    if (IN_STOCK_AUDIT[t]) { setAuditKind(IN_STOCK_AUDIT[t]); t = 'stock_audit' }
+    if (t !== tab && !how?.back) {
+      const trail = (backTrail.current[whKey] = backTrail.current[whKey] || [])
+      trail.push(tab)
+      if (trail.length > 40) trail.shift()
+    }
     setTabState(t)
     try { localStorage.setItem('essa_tab', t) } catch { /* private mode */ }
     // Opening a keep-alive screen adds it to THIS warehouse's strip. Everything
@@ -16398,6 +17769,32 @@ export default function App() {
     // nobody will return to.
     if (keepAlive(t) && !openTabs.includes(t)) rememberOpen([...openTabs, t])
   }
+  const backTarget = (() => {
+    const trail = backTrail.current[whKey] || []
+    for (let i = trail.length - 1; i >= 0; i--) if (trail[i] !== tab) return trail[i]
+    return null
+  })()
+  const goBack = () => {
+    const trail = backTrail.current[whKey] || []
+    while (trail.length) {
+      const prev = trail.pop()
+      if (prev !== tab) { setTab(prev, { back: true }); return }
+    }
+  }
+  // Alt+← as well, the key every browser uses for Back — taken here so it goes
+  // back a screen instead of leaving the app. Not while typing in a field.
+  const goBackRef = useRef(goBack)
+  goBackRef.current = goBack
+  useEffect(() => {
+    const onKey = (e) => {
+      if (!e.altKey || e.key !== 'ArrowLeft') return
+      const el = document.activeElement
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return
+      e.preventDefault(); goBackRef.current()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
   // `alive` — which tabs are mounted right now — is computed BELOW, beside
   // `modules`: deciding it needs the role and the grant map, and reading a
   // `const` above its declaration is a TDZ throw, not undefined. See the note on
@@ -16467,13 +17864,6 @@ export default function App() {
   const [dsIntent, setDsIntent] = useState(null)
   const openDeadStock = (intent) => { setDsIntent(intent || null); setTab('deadstock') }
   const [scanning, setScanning] = useState(null)   // {url, name} while extracting
-  const [docQuery, setDocQuery] = useState('')
-  const [docScope, setDocScope] = useState('all')
-  // scope chip + search, applied together — the same pairing every list uses
-  const shownDocs = docs
-    .filter((d) => docScope === 'all' || d.status === docScope)
-    .filter((d) => matches(d, docQuery, ['supplier_name', 'filename', 'invoice_number', 'status']))
-  const docPage = usePaged(shownDocs, 50)
   const [authed, setAuthed] = useState(false)
   const [authChecked, setAuthChecked] = useState(false)
   const [user, setUser] = useState('')
@@ -16505,18 +17895,28 @@ export default function App() {
   const homeTab = canCommand ? 'command' : canCentral ? 'central' : 'pickwh'
   // The warehouse and the open tab are remembered separately and can come back
   // contradicting each other, so the tab is corrected, not just the menu.
-  useEffect(() => {
-    if (here && COMPANY_ONLY.has(tab)) { setTab('dashboard'); return }
-    if (!here && tab !== 'pickwh' && !COMPANY_LEVEL.has(tab)) setTab(homeTab)
-    if (!here && tab === 'central' && !canCentral) setTab('pickwh')
+  //
+  // Corrected DURING render rather than in an effect: an effect runs after the
+  // wrong screen has mounted, and by then it has fired its own calls — after a
+  // logout that was the whole warehouse Dashboard loading on its way to the
+  // Command Center. Setting this component's own state while rendering makes
+  // React re-render before anything below is committed.
+  const settleTab = (t) => {
+    if (here && COMPANY_ONLY.has(t)) return 'dashboard'
+    let next = t
+    if (!here && t !== 'pickwh' && !COMPANY_LEVEL.has(t)) next = homeTab
+    if (!here && t === 'central' && !canCentral) next = 'pickwh'
     // The same for the Command Center: a terminal left on it by the owner must
     // not greet an admin with a screen the server will refuse.
-    if (!here && tab === 'command' && !canCommand) setTab(homeTab)
-    if (!here && tab === 'audit' && !canCentral) setTab(homeTab)
+    if (!here && t === 'command' && !canCommand) next = homeTab
+    if (!here && t === 'audit' && !canCentral) next = homeTab
     // A remembered Store tab this account is no longer given — the last person
     // at this terminal was an admin, or the access was narrowed since.
-    if (here && storeUser && String(tab).startsWith('pos:') && !POS_USER_KEYS.has(tab)) setTab(storeHome)
-  }, [here, tab, canCentral, canCommand, homeTab, storeUser, storeHome])
+    if (here && storeUser && String(t).startsWith('pos:') && !POS_USER_KEYS.has(t)) next = storeHome
+    return next
+  }
+  const settledTab = settleTab(tab)
+  if (settledTab !== tab) setTab(settledTab)
 
   // The stores this warehouse supplies, so the menu can call them by the names
   // somebody gave them. Re-read when the warehouse changes — a store belongs to
@@ -16573,6 +17973,28 @@ export default function App() {
     session.clear(); setAuthed(false); setSel(null); setTab('dashboard')
   }
   const gotoPurchase = (id) => { setSelPurchase(id); setTab('purchases') }
+  // Invoice Entry carries the GRN and Inventory screens as tabs of its own, so
+  // the invoice, the receipt it became and the stock it made are one screen
+  // apart. Each is mounted the first time it is opened and kept, so moving
+  // between them loses nothing typed or selected.
+  // Invoice Entry has two views of the same goods: the INVOICES (each opens
+  // as one page — invoice, receiving, stock) and the PRODUCTS they made (all
+  // stock, codes, labels, adjustments). `sel` / `selPurchase` are the open
+  // invoice's document and receipt; either may be absent.
+  const [invLens, setInvLens] = useState('invoices')
+  const [invSeen, setInvSeen] = useState({ invoices: true })
+  const [invProduct, setInvProduct] = useState(null)      // {id} to open in Products
+  const [invReload, setInvReload] = useState(0)
+  const openDocSub = (k) => {
+    const lens = k === 'inventory' ? 'products' : 'invoices'
+    setInvLens(lens); setInvSeen((m) => (m[lens] ? m : { ...m, [lens]: true }))
+  }
+  const openInvoice = (docId, purchaseId) => {
+    setSel(docId || null); setSelPurchase(purchaseId || null); openDocSub('grn')
+  }
+  // "Open in GRN" / a GRN link from elsewhere: that receipt's invoice page
+  const openGrnHere = (id) => { setSel(null); setSelPurchase(id); openDocSub('grn') }
+  const openProductHere = (id) => { setInvProduct({ id, at: Date.now() }); openDocSub('inventory') }
 
   // The way in for a bill that never was a photograph. It creates the document
   // and selects it, which drops straight into the same review form an upload
@@ -16582,7 +18004,7 @@ export default function App() {
     try {
       const res = await api.createManualDocument()
       await refresh()
-      setSel(res.document.id)
+      openInvoice(res.document.id, null); setInvReload((n) => n + 1)
       toast('✓ Blank invoice — key it in and Confirm', 'ok')
     } catch (err) {
       // A backend started before this endpoint existed 404s here while serving
@@ -16608,7 +18030,7 @@ export default function App() {
     try {
       const res = await api.upload(files)
       await refresh()
-      setSel(res.document.id)
+      openInvoice(res.document.id, null); setInvReload((n) => n + 1)
       toast(res.supplier_recognised
         ? `✓ Recognised ${res.document.supplier_name}${res.profile_used ? ' (using trained format)' : ''}`
         : '✓ Extracted — supplier not recognised, review & train', 'ok')
@@ -16626,19 +18048,19 @@ export default function App() {
   }
 
   const delOne = async (e, id) => {
-    e.stopPropagation()
+    if (e) e.stopPropagation()
     if (!window.confirm('Delete this document and its extraction?')) return
     try {
       await api.deleteDocument(id)
       if (sel === id) setSel(null)
-      await refresh(); toast('Document deleted', 'ok')
+      await refresh(); setInvReload((n) => n + 1); toast('Document deleted', 'ok')
     } catch (err) { toast(err.detail || 'Delete failed', 'err') }
   }
   const clearAll = async () => {
     if (!window.confirm('Clear ALL transaction data — documents, LR entries, GRNs, inventory, outwards, returns and payments?\nThis cannot be undone.')) return
     const wipeMasters = window.confirm('Also wipe the MASTERS (suppliers, trained formats, agents, transporters)?\n\nOK = fully empty database (only the category master stays).\nCancel = keep suppliers & trained formats.')
     const res = await api.clearAllDocuments(wipeMasters)
-    setSel(null); await refresh()
+    setSel(null); setSelPurchase(null); await refresh(); setInvReload((n) => n + 1)
     toast(wipeMasters ? '✓ Database emptied — only category master kept' : '✓ Transactions cleared — suppliers & training kept', 'ok')
     return res
   }
@@ -16683,6 +18105,13 @@ export default function App() {
   //  tabs back, freshly loaded, which is what "reopen a module" means; what
   //  does not survive the trip is their STATE, and it never could — the content
   //  is keyed on the warehouse and remounts when it changes.
+  // GRN / Inventory -> their tab inside Invoice Entry, when both are allowed
+  function foldsIntoInvoiceEntry (k) {
+    const sub = IN_INVOICE_ENTRY[k]
+    return sub && modules.some((m) => m.key === 'documents') && modules.some((m) => m.key === k) ? sub : null
+  }
+  // a remembered last screen (or an old tab strip) naming one of them
+  useEffect(() => { if (foldsIntoInvoiceEntry(tab) || IN_STOCK_AUDIT[tab]) setTab(tab) }, [tab, modules.length])
   const availableHere = (k) => {
     // The shop is reached from inside the warehouse that supplies it.
     if (String(k).startsWith('pos:')) return !!here && posItems.some((p) => p && p.key === k)
@@ -16694,13 +18123,36 @@ export default function App() {
   //: here, plus the active screen whatever it is. The active one is always in
   //: the list, so it always renders; that is what lets a non-keep-alive screen
   //: (Reports) show normally while two kept tabs sit hidden behind it.
-  const alive = Array.from(new Set([...openTabs.filter(availableHere), tab]))
+  const alive = Array.from(new Set([...openTabs.filter((k) => availableHere(k) && !foldsIntoInvoiceEntry(k) && !IN_STOCK_AUDIT[k]), tab]))
   // The open tab is remembered across sessions, so the person who signs in at
   // this terminal is not always the one who left it on Payments. One guard in
   // front of the whole chain rather than a check inside each branch: a screen
   // added later is covered by its MODULES entry alone, and cannot be forgotten.
   const wanted = MODULES.find((m) => m.key === tab)
   const denied = wanted && wanted.min && !atLeast(role, wanted.min) ? wanted : null
+
+  // ---- the four dashboards, kept open once visited ------------------------
+  // Command Center, Central, and per warehouse its Dashboard and Store
+  // Dashboard. Once opened, each stays mounted (hidden when another screen is
+  // up), OUTSIDE the warehouse-keyed tree below — so switching between them
+  // is showing a pane, not rebuilding a screen and asking the server again.
+  // Each refreshes itself in the background when it is shown again (see
+  // useReshow), and only then: a hidden warehouse dashboard never asks the
+  // server anything while another building's context is current. Forgotten on
+  // sign-out and whenever the account or its role changes.
+  const stashKey = (k) => (k === 'command' || k === 'central') ? k
+    : ((k === 'dashboard' || k === 'pos:home') && here?.id) ? `${k}@${here.id}` : null
+  const activeStash = denied ? null : stashKey(tab)
+  const [stash, setStash] = useState([])
+  const stashList = activeStash && !stash.some((x) => x.key === activeStash)
+    ? [...stash, { key: activeStash, tab, wh: here }] : stash
+  useEffect(() => {
+    if (activeStash && !stash.some((x) => x.key === activeStash)) {
+      setStash((st) => [...st.filter((x) => x.key !== activeStash), { key: activeStash, tab, wh: here }].slice(-STASH_MAX))
+    }
+  }, [activeStash])
+  useEffect(() => { setStash([]) }, [user, role, authed])
+  const inStash = (k) => !denied && !!stashKey(k)
 
   // What this warehouse's selling side is actually CALLED. A store is created
   // with a name — "Taqua shop Tirupur 1" — and that name is the one the person
@@ -16771,7 +18223,7 @@ export default function App() {
   const navItems = ws === 'store'
     ? posItems.map((p) => (p && p.key === 'pos:counter' ? { ...p, badge: 'POS' } : p))
     : here
-      ? [DASHBOARD, null, ...modules]
+      ? [DASHBOARD, null, ...modules.filter((m) => !foldsIntoInvoiceEntry(m.key) && !IN_STOCK_AUDIT[m.key])]
       // The two whole-company screens are hoisted to the top, in altitude order:
       // the Command Center is the business, the Central Dashboard is its stock.
       : [...modules.filter((m) => m.key === 'command' || m.key === 'central'),
@@ -16812,8 +18264,8 @@ export default function App() {
         <button className="th-icon th-menu" onClick={() => setNavOpen(true)}
           aria-label="Open navigation menu" title="Menu"><Icon name="menu" size={20} /></button>
         <div className="th-brand">
-          <span className="th-logo" aria-hidden="true">E</span>
-          <div className="brand">Essa <span>· Enterprise ERP</span>
+          <span className="th-logo" aria-hidden="true">W</span>
+          <div className="brand">Warexx <span>· Enterprise ERP</span>
             <small>{companyName} — multi-warehouse inventory &amp; retail supply chain</small></div>
         </div>
         <div className="spacer" />
@@ -16861,6 +18313,10 @@ export default function App() {
           warehouse they are inside will post a receipt into the wrong building. */}
       <div className="ctxbar">
         <div className="ctx-left">
+          <button className="ctx-back" onClick={goBack} disabled={!backTarget}
+            title={backTarget ? `Back to ${labelFor(backTarget)} (Alt+←)` : 'Nothing to go back to yet'}
+            aria-label={backTarget ? `Back to ${labelFor(backTarget)}` : 'Back'}>
+            <span aria-hidden="true">←</span> Back</button>
           <div className="wsseg" role="tablist" aria-label="Workspace">
             <button role="tab" aria-selected={wsShown === 'central'} className={wsShown === 'central' ? 'on' : ''}
               onClick={() => goWs('central')}
@@ -16925,22 +18381,14 @@ export default function App() {
               Reports they are a gesture with no obvious home.
 
               So they appear where they mean something: inside a warehouse, on the
-              Invoice Entry screen. Hidden rather than disabled — a permanently
+              Invoice Entry screen — in its own bar, beside Invoices / Products
+              (see the 'documents' screen). Hidden rather than disabled — a permanently
               greyed button on nine screens out of ten is furniture nobody reads.
 
               "New entry" sits beside the upload, not instead of it, and quieter
               than it: reading a photograph is still the way this screen is meant
               to be used, and typing a bill out is the fallback for the one that
               has no usable picture. */}
-          {here && tab === 'documents' && <>
-            <button className="btn" onClick={onNewEntry}
-              title={`Key an invoice in by hand for ${here.name} — for one with no scan, or dictated over the phone`}>
-              <Icon name="plus" size={14} /> New entry</button>
-            <label className="btn primary uploadbtn"
-              title={`One invoice for ${here.name}. Pick both pages together if it is printed on more than one.`}>
-              <Icon name="upload" size={14} /> Upload invoice
-              <input type="file" accept="image/*,.pdf" multiple onChange={onUpload} /></label>
-          </>}
         </div>
       </div>
 
@@ -16957,6 +18405,11 @@ export default function App() {
           each refetches its own data under the new context — the alternative is
           asking fifty components to notice a change, and the one that forgets
           quietly shows the warehouse you just left. */}
+      {stashList.map((x) => (
+        <div key={x.key} className="tabpane" hidden={x.key !== activeStash}>
+          {stashedScreen(x, x.key === activeStash)}
+        </div>
+      ))}
       <React.Fragment key={'wh-' + (here?.id || 'all')}>
       {denied ? (
         <div className="body"><div className="empty" style={{ margin: 'auto', maxWidth: 420, lineHeight: 1.7 }}>
@@ -16983,10 +18436,10 @@ export default function App() {
         // one-screen-at-a-time case byte-for-byte what it has always been, so
         // multi-tab cannot regress the layout of a warehouse that never opens a
         // second one.
-        alive.map((k) => (
+        alive.filter((k) => !inStash(k)).map((k) => (
           <div key={k} className="tabpane" hidden={k !== tab}>{screenFor(k)}</div>
         ))
-      ) : screenFor(tab)}
+      ) : inStash(tab) ? null : screenFor(tab)}
       </React.Fragment>
       </main>
       </div>
@@ -17019,6 +18472,16 @@ export default function App() {
   //  screen it always did. Taking a parameter is what lets an open-but-inactive
   //  tab be rendered at all.
   // ==========================================================================
+  function stashedScreen(x, on) {
+    if (x.tab === 'command') return <CommandCenter go={setTab} toast={toast} user={user} role={role}
+      onEnter={enterWarehouse} active={on} />
+    if (x.tab === 'central') return <CentralDashboard toast={toast} go={setTab} onEnter={enterWarehouse} active={on} />
+    if (x.tab === 'dashboard') return <Dashboard modules={modules} go={setTab} company={status?.company?.name}
+      docs={docs} refreshDocs={refresh} user={user} openDeadStock={openDeadStock} here={x.wh} active={on} />
+    if (x.tab === 'pos:home') return <PosScreen screen={POS_HOME} available={status?.pos?.available}
+      error={status?.pos?.error} warehouse={x.wh} active={on} />
+    return null
+  }
   function screenFor(k) {
     // A `pos:` tab is a screen of the shop rather than one of ours, and is
     // served in a frame — so it is answered before the warehouse chain.
@@ -17039,52 +18502,53 @@ export default function App() {
       ) : k === 'lr' ? (
         <div className="body"><LREntryView toast={toast} /></div>
       ) : k === 'documents' ? (
-        <div className="body">
-          <Sidebar id="documents" label="Documents">
-            <div className="head"><h3>Documents · {docs.length}</h3>
-              {/* Emptying every transaction table is irreversible and global,
-                  so it is a super admin's button even though this screen is
-                  the floor's. The server refuses it for anyone else too. */}
-              {docs.length > 0 && isSuper && <button className="btn" style={{ padding: '3px 9px', fontSize: 11 }}
-                onClick={clearAll} title="Delete all documents & transaction data">Clear all</button>}</div>
-            {docs.length > 0 && <>
-              <SearchBox value={docQuery} onChange={setDocQuery}
-                placeholder="Search supplier, invoice, status…" />
-              <div className="toolbar"><FilterChips value={docScope} onChange={setDocScope} options={[
-                ['needs_review', 'To review', docs.filter((d) => d.status === 'needs_review').length, 'Read, but something did not reconcile'],
-                ['confirmed', 'Confirmed', docs.filter((d) => d.status === 'confirmed').length, 'Corrected and saved'],
-                ['posted', 'Posted', docs.filter((d) => d.status === 'posted').length, 'Already booked into stock'],
-                ['all', 'All', docs.length, 'Every document'],
-              ]} /></div>
-            </>}
-            <div className="list">
-              {docs.length === 0 && <div className="empty" style={{ marginTop: 30, fontSize: 13 }}>
-                No documents. Click “Upload invoice” to read one from a scan,
-                or “New entry” to key one in by hand.</div>}
-              {docs.length > 0 && shownDocs.length === 0 && <div className="empty" style={{ marginTop: 30, fontSize: 13 }}>
-                Nothing matches. Try “All” or clear the search.</div>}
-              {docPage.slice.map((d) => (
-                <div key={d.id} className={'doc-row' + (sel === d.id ? ' sel' : '')} onClick={() => setSel(d.id)}>
-                  <div className="t" style={{ display: 'flex', alignItems: 'center' }}>
-                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.supplier_name || d.filename}</span>
-                    <button className="rowdel" title="Delete document" onClick={(e) => delOne(e, d.id)}>×</button>
-                  </div>
-                  <div className="m">
-                    <span className={'badge ' + d.status}>{d.status.replace('_', ' ')}</span>
-                    <span>#{d.invoice_number || '—'}</span>
-                    {/* a hand-keyed row says so instead of wearing a red 0% —
-                        see the same swap on the review panel's header */}
-                    {d.has_image === false
-                      ? <span style={{ marginLeft: 'auto' }} title="Keyed in by hand — there is no scan behind this one">✍ typed</span>
-                      : <span style={{ marginLeft: 'auto' }} className={'conf ' + confClass(d.confidence)}>{d.confidence != null ? Math.round(d.confidence * 100) + '%' : ''}</span>}
-                  </div>
-                  <div className="m"><span>₹ {money(d.grand_total)}</span></div>
-                </div>
-              ))}
-            </div>
-            <Pager {...docPage} noun="document" />
-          </Sidebar>
-          <Review docId={sel} onSaved={refresh} onCreateGrn={gotoPurchase} toast={toast} />
+        <div className="screen">
+        {/* The two views of this module's goods. Not two screens: an invoice
+            opens as one page (invoice → receiving → stock), and its stock is
+            one click from its products, and back. */}
+        <div className="subtabs" role="tablist" aria-label="Invoice Entry view">
+          {[['invoices', '🧾', 'Invoices', 'documents'], ['products', '📦', 'Products', 'inventory']]
+            .filter(([, , , screen]) => modules.some((m) => m.key === screen)).map(([key, ico, label]) => (
+            <button key={key} role="tab" aria-selected={invLens === key}
+              className={'subtab' + (invLens === key ? ' on' : '')}
+              onClick={() => openDocSub(key === 'products' ? 'inventory' : 'grn')}>
+              <span aria-hidden="true">{ico}</span> {label}</button>
+          ))}
+          {/* making an invoice belongs with the invoices, not up in the
+              global header — see the note above the context bar */}
+          {here && <div className="subtab-actions">
+            <button className="btn" onClick={onNewEntry}
+              title={`Key an invoice in by hand for ${here.name} — for one with no scan, or dictated over the phone`}>
+              <Icon name="plus" size={14} /> New entry</button>
+            <label className="btn primary uploadbtn"
+              title={`One invoice for ${here.name}. Pick both pages together if it is printed on more than one.`}>
+              <Icon name="upload" size={14} /> Upload invoice
+              <input type="file" accept="image/*,.pdf" multiple onChange={onUpload} /></label>
+          </div>}
+        </div>
+        <div className="subpane" style={{ display: invLens === 'invoices' ? 'flex' : 'none' }}>
+          {(sel || selPurchase) && (
+            <InvoicePage key={`${sel || ''}:${selPurchase || ''}`}
+              sel={{ document_id: sel, purchase_id: selPurchase }} toast={toast}
+              onBack={() => { setSel(null); setSelPurchase(null) }}
+              onChanged={() => { refresh(); setInvReload((n) => n + 1) }}
+              onSelect={(x) => { setSel(x.document_id || null); setSelPurchase(x.purchase_id || null) }}
+              onOpenProduct={openProductHere} />
+          )}
+          <div style={{ display: sel || selPurchase ? 'none' : 'flex', flex: 1, minWidth: 0, minHeight: 0 }}>
+            <InvoiceTable active={tab === 'documents' && invLens === 'invoices' && !sel && !selPurchase}
+              reloadKey={invReload}
+              onOpen={(r) => openInvoice(r.document_id, r.purchase_id)}
+              onDeleteDoc={(id) => delOne(null, id)}
+              onClearAll={isSuper ? clearAll : null} />
+          </div>
+        </div>
+        {invSeen.products && (
+          <div className="subpane" style={{ display: invLens === 'products' ? 'flex' : 'none' }}>
+            <Inventory toast={toast} openProductId={invProduct?.id} key={'inv'}
+              onOpenInvoice={(x) => openInvoice(x.document_id, x.purchase_id)} />
+          </div>
+        )}
         </div>
       ) : k === 'purchases' ? (
         <Purchases selId={selPurchase} setSelId={setSelPurchase} toast={toast} />
@@ -17098,7 +18562,7 @@ export default function App() {
       ) : k === 'locator' ? (
         <ItemLocator toast={toast} />
       ) : k === 'stock_audit' ? (
-        <StockAuditView toast={toast} />
+        <StockAuditHub toast={toast} role={role} kind={auditKind} setKind={setAuditKind} />
       ) : k === 'physical_audit' ? (
         // `role` because Apply — the only act here that moves stock — is admin,
         // and the button says so rather than failing on a press.

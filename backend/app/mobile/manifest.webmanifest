@@ -1,11 +1,11 @@
 {
-  "name": "ESSA AI",
-  "short_name": "ESSA AI",
+  "name": "Warexx",
+  "short_name": "Warexx",
   "description": "Detail products into inventory from your phone",
   "start_url": "/m",
   "scope": "/m",
   "display": "standalone",
-  "orientation": "portrait",
+  "orientation": "any",
   "background_color": "#F7F9F7",
   "theme_color": "#0B3D2E",
   "icons": [

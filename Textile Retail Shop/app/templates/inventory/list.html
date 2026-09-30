@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
+{% from "_pager.html" import pager with context %}
+<div class="d-print-none">{{ pager(page) }}</div>
 <div class="page-head">
   <h4><i class="bi bi-box-seam"></i> Inventory</h4>
   <div>
@@ -76,4 +78,5 @@
   .qr-cell { display:inline-block; line-height:0; }
   .qr-cell svg { width:72px; height:72px; }
 </style>
+<div class="d-print-none">{{ pager(page) }}</div>
 {% endblock %}

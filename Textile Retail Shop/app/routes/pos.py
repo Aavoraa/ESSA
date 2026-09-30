@@ -4,6 +4,7 @@ from flask_login import login_required, current_user
 from datetime import datetime
 from itsdangerous import URLSafeSerializer
 from app import db
+from app.datefilter import day_from, day_to
 from app import (billing_numbers, cancellation, drawer, places, promotions, transfers,
                  vouchers, warehouse_items)
 from app.utils import role_required
@@ -172,11 +173,13 @@ def counter():
     listing, not a capability — and it removed a query that loaded the entire
     catalogue on every page load.
     """
-    customers = Customer.query.order_by(Customer.name).all()
+    # No customer list: counter.html never reads one (a customer is found by
+    # phone at the counter), and loading all 150K of them on every open of the
+    # till was most of its load time.
     staff = User.query.filter(User.active.is_(True)).order_by(User.full_name).all()
     company, location, storey, till = _chosen()
     return render_template("pos/counter.html",
-                           customers=customers, staff=staff,
+                           staff=staff,
                            places=places.picker_options(),
                            chosen_company=company, chosen_location=location,
                            chosen_floor=storey, chosen_counter=till,
@@ -777,8 +780,8 @@ def invoice_list():
         try: return datetime.strptime(d, "%Y-%m-%d").date()
         except: return None
     df = parse(date_from); dt = parse(date_to)
-    if df: query = query.filter(func.date(Invoice.invoice_date) >= df)
-    if dt: query = query.filter(func.date(Invoice.invoice_date) <= dt)
+    if df: query = query.filter(day_from(Invoice.invoice_date, df))
+    if dt: query = query.filter(day_to(Invoice.invoice_date, dt))
     if cashier: query = query.filter(Invoice.cashier_id == cashier)
     if payment: query = query.filter(Invoice.payment_method == payment)
     # On the prefix the bill was BUILT with, not on the text of its number: a

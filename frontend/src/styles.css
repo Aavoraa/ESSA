@@ -382,6 +382,15 @@ a { color: var(--accent); text-underline-offset: 2px; }
 .ctx-right .mono { font-size: var(--fs-xs); }
 .ctx-right .sep { color: var(--line); }
 .ctx-right .btn { font-size: var(--fs-sm); }
+/* ← Back to the previous screen — the same height and weight as the workspace
+   switch beside it, so the bar reads as one row of controls */
+.ctx-back { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto;
+  height: 34px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--panel); color: var(--text); font-size: var(--fs-sm); font-weight: 600;
+  white-space: nowrap; cursor: pointer; transition: background .1s, border-color .1s; }
+.ctx-back:hover:not(:disabled) { background: var(--brand-50); border-color: var(--brand-300); }
+.ctx-back:disabled { opacity: .45; cursor: default; }
+.ctx-back > span { font-size: 15px; line-height: 1; }
 .wsseg { display: inline-flex; padding: 2px; border-radius: 8px; background: var(--bg);
   border: 1px solid var(--line); flex: 0 0 auto; }
 .wsseg button { display: inline-flex; align-items: center; gap: 6px; border: none;
@@ -1729,46 +1738,88 @@ tr.overrole td { opacity: .5; }
 .scan-ellipsis::after { content: ''; animation: dots 1.4s steps(4, end) infinite; }
 @keyframes dots { 0% { content: ''; } 25% { content: '.'; } 50% { content: '..'; } 75% { content: '...'; } }
 
-/* ---------- login ---------- */
-.login-wrap { position: fixed; inset: 0; z-index: 200; display: flex; flex-direction: column;
-  align-items: center; justify-content: center; gap: var(--sp-5); overflow: hidden;
-  background: radial-gradient(1200px 800px at 50% 28%, #FFFFFF, #E9F1EC 72%); }
-.login-bg { position: absolute; inset: 0; pointer-events: none; background:
-  radial-gradient(600px 420px at 20% 80%, rgba(11,61,46,.10), transparent),
-  radial-gradient(600px 420px at 80% 20%, rgba(47,143,104,.12), transparent);
-  animation: bgfloat 8s ease-in-out infinite alternate; }
-@keyframes bgfloat { from { transform: translateY(-12px); } to { transform: translateY(12px); } }
-.login-logo { z-index: 3; transition: transform .8s ease; filter: drop-shadow(0 6px 28px rgba(11,61,46,.25)); }
-.login-logo.intro svg { animation: logospin 2.1s cubic-bezier(.15,.7,.2,1) forwards; }
-.login-logo.form { transform: translateY(4px) scale(.8); }
-.login-logo.form svg { animation: floaty 4s ease-in-out infinite; }
-@keyframes logospin { 0% { transform: rotate(0deg) scale(.55); opacity: .3; } 55% { opacity: 1; } 100% { transform: rotate(1080deg) scale(1); } }
-@keyframes floaty { 0%,100% { transform: rotate(1080deg) translateY(0); } 50% { transform: rotate(1080deg) translateY(-6px); } }
-.smoke { position: absolute; z-index: 2; width: 240px; height: 240px; border-radius: 50%;
-  background: radial-gradient(circle, rgba(156,203,180,.45), rgba(156,203,180,0) 65%);
-  filter: blur(16px); opacity: 0; pointer-events: none; }
-.smoke-0 { left: calc(50% - 200px); top: 46%; animation: puff 1.5s ease-out forwards; }
-.smoke-1 { left: calc(50% + 20px);  top: 43%; animation: puff 1.7s .10s ease-out forwards; }
-.smoke-2 { left: calc(50% - 70px);  top: 56%; animation: puff 1.6s .05s ease-out forwards; }
-.smoke-3 { left: calc(50% - 140px); top: 39%; animation: puff 1.8s .12s ease-out forwards; }
-.smoke-4 { left: calc(50% + 70px);  top: 53%; animation: puff 1.6s .08s ease-out forwards; }
-@keyframes puff { 0% { opacity: 0; transform: scale(.4) translateY(24px); }
-  25% { opacity: .75; } 100% { opacity: 0; transform: scale(1.7) translateY(-44px); } }
-.login-card { position: relative; z-index: 4; width: 360px; background: var(--panel);
-  border: 1px solid var(--line); border-radius: var(--radius-lg); padding: var(--sp-6) var(--sp-5);
-  box-shadow: var(--shadow-3); animation: reveal .9s .18s both cubic-bezier(.2,.7,.2,1); }
-@keyframes reveal { from { opacity: 0; filter: blur(18px); transform: translateY(20px) scale(.94); }
-  to { opacity: 1; filter: blur(0); transform: none; } }
-.login-card .btn.primary { min-height: 40px; font-size: var(--fs-md); }
-.login-brand { font-size: 24px; font-weight: 700; letter-spacing: -.02em;
-  text-align: center; color: var(--text); display: flex; align-items: center;
-  justify-content: center; gap: 10px; }
-.login-brand .th-logo { width: 36px; height: 36px; font-size: 18px; color: #fff; font-weight: 700; }
-.login-brand span { color: var(--accent); font-weight: 500; }
-.login-sub { color: var(--muted); font-size: var(--fs-sm); text-align: center; margin: 6px 0 var(--sp-5); }
-.login-card .field { margin-bottom: var(--sp-3); }
-.login-card .field input { padding: 10px 12px; }
-.login-err { color: var(--danger); font-size: var(--fs-sm); margin: 2px 0 var(--sp-2); text-align: center; }
+/* ---------- login ----------
+   Two halves: the product on the left in the chrome's green, the sign-in on
+   the right on white. No intro animation — the form is there the moment the
+   page is, because a login that makes people wait two seconds to type is a
+   login they notice every morning. Below 900px the brand half steps aside. */
+.login-wrap { position: fixed; inset: 0; z-index: 200; display: grid;
+  grid-template-columns: minmax(380px, 44%) 1fr; background: #F6F8F7; overflow: auto; }
+.login-side { position: relative; display: flex; flex-direction: column; justify-content: space-between;
+  padding: 44px 52px; color: #E8F2EC; overflow: hidden;
+  background:
+    radial-gradient(700px 500px at 110% -10%, rgba(47,143,104,.45), transparent 60%),
+    radial-gradient(600px 480px at -20% 110%, rgba(47,143,104,.30), transparent 60%),
+    linear-gradient(160deg, #0B3D2E 0%, #082C21 100%); }
+/* a faint grid, the one texture — enough to stop a flat green reading as empty */
+.login-side::before { content: ''; position: absolute; inset: 0; pointer-events: none; opacity: .07;
+  background-image: linear-gradient(#fff 1px, transparent 1px), linear-gradient(90deg, #fff 1px, transparent 1px);
+  background-size: 44px 44px;
+  -webkit-mask-image: linear-gradient(180deg, #000, transparent 85%);
+  mask-image: linear-gradient(180deg, #000, transparent 85%); }
+.login-side > * { position: relative; }
+.login-mark { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto;
+  width: 36px; height: 36px; border-radius: 10px; font-weight: 800; font-size: 18px; color: #fff;
+  background: linear-gradient(135deg, #3BA77A, #2F8F68); box-shadow: 0 6px 16px -6px rgba(47,143,104,.8); }
+.login-side-brand { display: flex; align-items: center; justify-content: center; gap: 12px; font-size: 18px; font-weight: 700;
+  color: #fff; letter-spacing: -.01em; }
+.login-side-brand em { font-style: normal; font-weight: 500; color: #9CCBB4; }
+.login-side-copy { max-width: 440px; width: 100%; margin: 0 auto; text-align: center; }
+.login-side-copy h1 { margin: 0 0 14px; font-size: 32px; line-height: 1.2; font-weight: 700;
+  letter-spacing: -.02em; color: #fff; }
+.login-side-copy p { margin: 0 0 28px; font-size: 15px; line-height: 1.6; color: #B9D6C7; }
+.login-side-copy ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.login-side-copy li { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 12px 16px;
+  border: 1px solid rgba(156,203,180,.22); border-radius: 12px; background: rgba(255,255,255,.04); }
+.login-side-copy li b { font-size: 14px; color: #fff; }
+.login-side-copy li span { font-size: 13px; color: #A9CBB9; }
+.login-side-foot { font-size: 12px; color: #86B19C; text-align: center; }
+
+.login-main { display: flex; align-items: center; justify-content: center; padding: 40px 24px; }
+.login-card { width: min(400px, 100%); background: var(--panel); border: 1px solid #E3E9E6;
+  border-radius: 16px; padding: 36px 34px 28px;
+  box-shadow: 0 1px 2px rgba(16,24,40,.04), 0 24px 48px -24px rgba(11,61,46,.18);
+  animation: loginrise .35s ease-out both; }
+@keyframes loginrise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.login-card-mark { display: none; margin-bottom: 18px; }
+.login-title { margin: 0; font-size: 24px; font-weight: 700; letter-spacing: -.02em; color: var(--text); }
+.login-sub { margin: 6px 0 26px; font-size: 14px; color: var(--muted); }
+.login-field { display: block; margin-bottom: 16px; }
+.login-field > span { display: block; font-size: 13px; font-weight: 600; color: var(--text-2, #374151);
+  margin-bottom: 6px; }
+.login-input { position: relative; display: flex; align-items: center; }
+.login-input > svg { position: absolute; left: 12px; width: 17px; height: 17px; fill: none;
+  stroke: #8A9A92; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
+.login-input input { width: 100%; height: 44px; padding: 0 12px 0 38px; font-size: 15px;
+  border: 1px solid #D5DED9; border-radius: 10px; background: #fff; color: var(--text);
+  transition: border-color .12s, box-shadow .12s; }
+.login-input input::placeholder { color: #A3B0AA; }
+.login-input input:hover { border-color: #B9C8C0; }
+.login-input input:focus { outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(47,143,104,.16); }
+.login-input input[type="password"], .login-input:has(.login-eye) input { padding-right: 64px; }
+.login-eye { position: absolute; right: 6px; height: 32px; padding: 0 10px; border: 0; border-radius: 7px;
+  background: transparent; color: var(--accent); font-size: 12.5px; font-weight: 600; cursor: pointer; }
+.login-eye:hover { background: var(--brand-50); }
+.login-hint { margin: -8px 0 14px; font-size: 12.5px; color: #B45309; }
+.login-err { margin: 0 0 14px; padding: 10px 12px; font-size: 13.5px; line-height: 1.4;
+  color: #9F1239; background: #FFF1F3; border: 1px solid #FBCFD8; border-radius: 10px; text-align: left; }
+.login-submit { width: 100%; height: 46px; margin-top: 4px; display: inline-flex; align-items: center;
+  justify-content: center; gap: 10px; border: 0; border-radius: 10px; cursor: pointer;
+  font-size: 15px; font-weight: 600; color: #fff; background: var(--brand);
+  box-shadow: 0 8px 18px -10px rgba(11,61,46,.7); transition: background .12s, transform .06s; }
+.login-submit:hover:not(:disabled) { background: var(--brand-700); }
+.login-submit:active:not(:disabled) { transform: translateY(1px); }
+.login-submit:disabled { opacity: .55; cursor: default; box-shadow: none; }
+.login-spin { width: 16px; height: 16px; border-radius: 50%; border: 2px solid rgba(255,255,255,.35);
+  border-top-color: #fff; animation: loginspin .7s linear infinite; }
+@keyframes loginspin { to { transform: rotate(360deg); } }
+.login-foot { margin: 18px 0 0; font-size: 12.5px; color: var(--muted); text-align: center; }
+@media (max-width: 900px) {
+  .login-wrap { grid-template-columns: 1fr; }
+  .login-side { display: none; }
+  .login-card-mark { display: block; }
+}
 
 /* ==========================================================================
    Search · Filter · Minimize — the three controls every list screen carries
@@ -1832,6 +1883,26 @@ tr.overrole td { opacity: .5; }
    so padding on it pushes the box edge outward while the icon stays pinned to
    that edge — the glyph ends up outside the input and clipped by the sidebar. */
 .sidebar .searchbox { margin: var(--sp-2) var(--sp-3) 0; }
+/* Search and Filters sharing one row at the top of a sidebar list. The search
+   takes what the button leaves; its own sidebar margin is dropped because the
+   row now carries it. */
+.sidetools { display: flex; align-items: center; gap: var(--sp-2);
+  margin: var(--sp-2) var(--sp-3) 0; }
+.sidebar .sidetools .searchbox { margin: 0; flex: 1; min-width: 0; }
+.sidetools .filterbtn { flex: 0 0 auto; padding: 7px 10px; }
+/* The panel fitted to a 300px column: dropdowns and text take the full width,
+   dates and amounts pair up two to a row, and a long panel scrolls on its own
+   rather than squeezing the list underneath it to nothing. */
+.sidebar .filterpanel { margin: var(--sp-2) var(--sp-3) 0; padding: var(--sp-3);
+  max-height: 55vh; overflow-y: auto; flex: 0 0 auto; }
+.sidebar .filterpanel .row { gap: var(--sp-2); }
+.sidebar .filterpanel .row > .field { flex: 1 1 100%; min-width: 0; margin: 0; }
+.sidebar .filterpanel .row > .field:has(.datebox),
+.sidebar .filterpanel .row > .field:has(input[type=number]) { flex: 1 1 calc(50% - var(--sp-2)); }
+.sidebar .filterpanel .field .datebox,
+.sidebar .filterpanel .field input[type=number] { max-width: none; }
+.sidebar .filterpanel .field label { font-size: var(--fs-xs); margin-bottom: 3px; }
+.sidebar .filterpanel .filterfoot { margin-top: var(--sp-2); padding-top: var(--sp-2); }
 /* the sidebar is 300px wide; chips there earn their space */
 .sidebar .fchip { padding: 4px 10px; font-size: var(--fs-xs); }
 .sidebar .chiprow { gap: 5px; }
@@ -2079,6 +2150,13 @@ tr.overrole td { opacity: .5; }
   gap: var(--sp-5); padding: var(--gutter); align-items: start; }
 @media (max-width: 1180px) { .lprintwrap { grid-template-columns: minmax(0, 1fr); } }
 .lprintside { position: sticky; top: var(--sp-5); }
+/* The label screen's toolbar mixes labelled fields (Template, Sort) with a bare
+   search box and buttons. Centred, the fields' labels pushed their selects below
+   everything else; bottom-aligned at one control height, the row reads as a line. */
+.lprinttools { align-items: flex-end; }
+.lprinttools .searchbox input, .lprinttools .field select,
+.lprinttools .btn, .lprinttools .filterbtn { min-height: 38px; }
+.lprinttools .field select { text-overflow: ellipsis; }
 /* The proof scales to this box (see proofPx), so it never needs to scroll — and
    must not: a label with its edges cut off is the one thing a proof cannot be. */
 .lproof { display: flex; justify-content: center; padding: var(--sp-3);
@@ -2355,3 +2433,95 @@ table.items tr.warnrow td { background: var(--warn-bg); }
 /* The fourth role. Same weight as the super admin's badge, in the accent rather
    than the chrome, so the two read as a pair with the top one brighter. */
 .badge.role-superboss { background: var(--brand-500); color: #fff; border-color: var(--brand-500); }
+
+/* ---------- card figures never overflow ----------
+   A figure is sized to its card: --len (its number of characters, set by
+   DashTile / Stat) against the card's own width (container units), between 13px
+   and the usual headline size. A crore rupee total used to run past the edge
+   and be cut off; a hidden digit is a wrong number. Nothing else about the
+   cards changes. */
+.dtile, .stat { container-type: inline-size; }
+.dtile .val, .dtile .val.long, .stat .val, .stat .val.long {
+  font-size: clamp(13px, calc(100cqi / (var(--len, 6) * .54)), var(--fs-3xl));
+  white-space: nowrap; max-width: 100%; }
+.dtile .lbl, .stat .lbl { overflow-wrap: anywhere; }
+
+/* ---------- in-screen way back ----------
+   One bar, one shape, wherever a screen swaps its list for one record: the
+   "← <where you came from>" button first, then the title. Kept outside any
+   collapsible panel header, so folding a panel never hides the way out. */
+.detailbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 0 0 14px; }
+.detailbar h2 { margin: 0; }
+/* the scan box when it sits in a toolbar row rather than above a list */
+.scanbox.inline { margin-bottom: 0; padding-top: 4px; padding-bottom: 4px; }
+.scanbox.inline .btn { padding: 4px 12px; }
+
+/* ---------- tabs inside a screen (Invoice Entry → Invoices | GRN | Inventory) ----------
+   Underlined text tabs on the screen's own white band — lighter than the open
+   tabs strip above them, so the two rows never read as one control. */
+.subtabs { display: flex; gap: 4px; flex: 0 0 auto; padding: 0 var(--gutter);
+  background: var(--panel); border-bottom: 1px solid var(--line); }
+.subtab { display: inline-flex; align-items: center; gap: 7px; padding: 11px 14px 10px;
+  border: none; border-bottom: 2px solid transparent; background: transparent; margin-bottom: -1px;
+  color: var(--muted); font-size: var(--fs-sm); font-weight: 600; cursor: pointer; white-space: nowrap; }
+.subtab:hover { color: var(--text); }
+.subtab.on { color: var(--brand); border-bottom-color: var(--accent); }
+.subtab:focus-visible { outline: none; box-shadow: var(--focus); border-radius: 6px 6px 0 0; }
+.subpane { flex: 1; min-width: 0; min-height: 0; flex-direction: column; }
+.subpane > * { flex: 1; min-height: 0; }
+
+/* ---------- Invoice Entry: one invoice, its stages top to bottom ---------- */
+.invpage { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.invhead { padding: 12px var(--gutter) 10px; background: var(--panel); border-bottom: 1px solid var(--line);
+  display: flex; flex-direction: column; gap: 10px; }
+.stepper { list-style: none; margin: 0; padding: 0; display: flex; gap: 6px; flex-wrap: wrap; }
+.stepper li { display: inline-flex; align-items: center; gap: 7px; font-size: var(--fs-sm); color: var(--muted);
+  font-weight: 600; padding-right: 14px; position: relative; }
+.stepper li:not(:last-child)::after { content: ''; width: 26px; height: 2px; background: var(--line); margin-left: 8px; }
+.stepper li.done:not(:last-child)::after { background: var(--accent); }
+.stepper .dot { width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center;
+  justify-content: center; font-size: 11px; border: 2px solid var(--line); background: var(--panel); }
+.stepper li.done { color: var(--brand); }
+.stepper li.done .dot { background: var(--accent); border-color: var(--accent); color: #fff; }
+.stepper li.now { color: var(--text); }
+.stepper li.now .dot { border-color: var(--accent); color: var(--brand); }
+.stagebar { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; flex: 0 0 auto;
+  padding: 10px var(--gutter); border: none; border-bottom: 1px solid var(--line); background: var(--bg);
+  color: var(--text); font-size: var(--fs-sm); cursor: pointer; }
+.stagebar:hover:not(:disabled) { background: var(--brand-50); }
+.stagebar.on { background: var(--panel); }
+.stagebar:disabled { cursor: default; opacity: .6; }
+.stagenum { color: var(--accent); font-size: 15px; }
+.stagesum { color: var(--muted); }
+.stagechev { margin-left: auto; color: var(--muted); }
+.stagebody { flex: 1; min-height: 0; display: flex; border-bottom: 1px solid var(--line); }
+.stagebody > * { flex: 1; min-width: 0; }
+/* a product's receipts, in the product panel */
+.srclist { display: flex; flex-direction: column; gap: 6px; }
+.srcrow { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--line);
+  border-radius: 8px; background: var(--panel); }
+.srcrow .small { color: var(--muted); }
+
+/* the invoice page's single work area, and the receipt inside it */
+.invwork { flex: 1; min-height: 0; display: flex; }
+.invwork > .main, .invwork > .editor { flex: 1; min-width: 0; }
+.revtab.receipt { border-style: dashed; }
+.revtab.receipt.on { border-style: solid; }
+.revtab:disabled { opacity: .45; cursor: default; }
+.grn-embed .actionbar.sticky { position: sticky; bottom: calc(-1 * var(--gutter)); z-index: 3;
+  margin: 0 calc(-1 * var(--gutter)) calc(-1 * var(--gutter)); }
+.receipt-empty p { max-width: 720px; line-height: 1.7; }
+
+/* Invoice Entry's own actions, at the right end of its Invoices / Products bar */
+.subtab-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; padding: 6px 0; }
+
+/* Stock Audit: the kind of count, chosen in the heading */
+.auditkind { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.auditkind h2 { margin: 0 10px 0 0; }
+.auditkind-b { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--panel); color: var(--text); font-weight: 600;
+  font-size: var(--fs-sm); cursor: pointer; }
+.auditkind-b:hover { border-color: var(--accent); }
+.auditkind-b.on { background: var(--brand); border-color: var(--brand); color: #fff; }
+.auditkind-open { font-size: 11px; font-weight: 600; color: var(--warn); }
+.auditkind-b.on .auditkind-open { color: #ffd98a; }

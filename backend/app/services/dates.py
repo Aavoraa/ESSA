@@ -29,6 +29,7 @@ ambiguous day/month pairs use the day-first assumption, and that assumption is
 stated here rather than buried in a format list.
 """
 import datetime as dt
+import functools
 import re
 
 ISO = "%Y-%m-%d"
@@ -114,6 +115,16 @@ def normalise_fields(payload, *keys):
 
 def parse(value):
     """The value as a `date`, or None. For arithmetic — ageing, sorting."""
+    if isinstance(value, str):
+        return _parse_text(value)
+    iso = to_iso(value)
+    return dt.date.fromisoformat(iso) if iso else None
+
+
+@functools.lru_cache(maxsize=4096)
+def _parse_text(value):
+    # A string always reads as the same date, and the ageing reports parse the
+    # same few hundred invoice dates tens of thousands of times per call.
     iso = to_iso(value)
     return dt.date.fromisoformat(iso) if iso else None
 

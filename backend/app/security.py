@@ -163,6 +163,8 @@ POLICY = [
     (r"^/api/notifications", "user", "user", None),
     (r"^/api/voice", "user", "user", None),
     (r"^/api/dashboard", "user", "user", "dashboard"),
+    # The search index's health — server administration, not business data.
+    (r"^/api/search", "superadmin", "superadmin", None),
 ]
 
 POLICY_RE = [(re.compile(p), r, w, s) for p, r, w, s in POLICY]
@@ -249,6 +251,34 @@ def token_from(request: Request) -> str:
 
 def is_public(path: str) -> bool:
     return any(rx.match(path) for rx in PUBLIC)
+
+
+def may_read(request: Request, path: str) -> bool:
+    """Whether the account behind this (already admitted) request could GET
+    `path` itself — the role, grant and allotment checks auth_middleware makes,
+    in the same order.
+
+    For an endpoint that answers several screens' questions in one call (the
+    warehouse dashboard's summary): each part is given only to an account that
+    could have asked for it directly, so combining the calls widens nothing."""
+    need, screen, action = required_access("GET", path)
+    if need is None or is_public(path):
+        return True
+    who = getattr(request.state, "user", None)
+    if not who:
+        return False
+    if ROLE_RANK.get(who.get("role"), 0) < ROLE_RANK[need]:
+        return False
+    if not permissions.allows(who.get("permissions") or {}, screen, action):
+        return False
+    mine = getattr(request.state, "warehouses", None)
+    if mine:
+        wid = scope.from_request(request)
+        if wid and int(wid) not in mine:
+            return False
+        if wid is None and screen in WAREHOUSE_SCOPED and len(mine) != 1:
+            return False
+    return True
 
 
 async def auth_middleware(request: Request, call_next):

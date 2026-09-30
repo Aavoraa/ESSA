@@ -99,7 +99,7 @@ def products(category: Optional[str] = None, brand: Optional[str] = None,
         rows = svc.find(db, filters, q, limit=limit)
     except svc.PricingError as exc:
         raise HTTPException(400, str(exc))
-    total = len(svc.find(db, filters, q))
+    total = svc.count(db, filters, q)
     return {"total": total, "shown": len(rows),
             "products": [{"id": p.id, "sku": p.sku, "description": p.description,
                           "category": p.category, "brand": p.brand,
