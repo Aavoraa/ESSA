@@ -315,7 +315,7 @@ function LoginScreen({ onLogin }) {
     e.preventDefault(); setErr(''); setBusy(true)
     try {
       const r = await api.login(username.trim(), password)
-      onLogin(r.token, r.user, r.role, r.permissions)
+      onLogin(r.user, r.role, r.permissions)
     } catch (e) { setErr(e.detail || 'Login failed'); setBusy(false) }
   }
   // a password typed with Caps Lock on is the commonest failed sign-in, and
@@ -326,8 +326,8 @@ function LoginScreen({ onLogin }) {
     <div className="login-wrap">
       <aside className="login-side" aria-hidden="true">
         <div className="login-side-brand">
-          <span className="login-mark">W</span>
-          <span>Warexx <em>· Enterprise ERP</em></span>
+          <span className="login-mark">E</span>
+          <span>ESSA AI <em>· Enterprise ERP</em></span>
         </div>
         <div className="login-side-copy">
           <h1>Inventory, stores and suppliers — in one place.</h1>
@@ -338,14 +338,14 @@ function LoginScreen({ onLogin }) {
             <li><b>Reports</b><span>Every register, filtered and exportable</span></li>
           </ul>
         </div>
-        <div className="login-side-foot">© {new Date().getFullYear()} Warexx · Enterprise ERP</div>
+        <div className="login-side-foot">© {new Date().getFullYear()} ESSA AI · Enterprise ERP</div>
       </aside>
 
       <main className="login-main">
         <form className="login-card" onSubmit={submit} noValidate>
-          <div className="login-card-mark"><span className="login-mark">W</span></div>
+          <div className="login-card-mark"><span className="login-mark">E</span></div>
           <h2 className="login-title">Welcome back</h2>
-          <p className="login-sub">Sign in to your Warexx account</p>
+          <p className="login-sub">Sign in to your ESSA AI account</p>
 
           <label className="login-field">
             <span>Username</span>
@@ -1974,7 +1974,7 @@ function InvoiceTable({ active = true, reloadKey, onOpen, onDeleteDoc, onClearAl
             <th style={{ width: 96 }}>Stage</th>
             {INV_TABLE_COLS.map((col) => <th key={col.k} style={{ width: col.w }}
               className={col.num ? 'num' : undefined}>{col.h}</th>)}
-            <th style={{ width: 70 }}>Scan</th><th style={{ width: 36 }}></th>
+            <th style={{ width: 70 }}>Scan</th><th style={{ width: 44 }} aria-label="Delete"></th>
           </tr></thead>
           <tbody>{pg.rows.map((r) => (
             <tr key={r.key} style={{ cursor: 'pointer' }} onClick={() => onOpen(r)}
@@ -1989,9 +1989,15 @@ function InvoiceTable({ active = true, reloadKey, onOpen, onDeleteDoc, onClearAl
               <td className="small">{r.kind === 'doc'
                 ? (r.has_image === false ? '✍ typed' : r.confidence != null ? `📄 ${Math.round(r.confidence * 100)}%` : '📄')
                 : (r.document_id ? '📄 yes' : '—')}</td>
-              <td>{r.kind === 'doc' && onDeleteDoc && (
-                <button className="rowdel" title="Delete this uploaded document"
-                  onClick={(e) => { e.stopPropagation(); onDeleteDoc(r.document_id) }}>×</button>)}</td>
+              <td>{onDeleteDoc && (r.document_id || r.purchase_id) && (
+                <button className="rowtrash" disabled={r.stage === 'stock'}
+                  aria-label="Delete this invoice"
+                  title={r.stage === 'stock'
+                    ? 'Posted to stock — unpost its GRN before deleting'
+                    : r.document_id ? 'Delete this invoice, its reading and any draft GRN'
+                      : 'Delete this draft GRN'}
+                  onClick={(e) => { e.stopPropagation(); onDeleteDoc(r) }}>
+                  <Icon name="trash" size={15} /></button>)}</td>
             </tr>
           ))}</tbody>
         </table>
@@ -13334,16 +13340,15 @@ function AccessEditor({ user, catalog, onSave, onClose, toast }) {
 
           <h4 style={{ marginTop: 18 }}>Store / POS</h4>
           <div className="small" style={{ marginBottom: 8 }}>
-            What this account may open in the Store. <b>User</b> sees only the
-            Billing Counter and Store Reports — the other Store screens leave the
-            menu and are refused if reached another way. The Store&apos;s own
-            sign-in still applies underneath: its Reports need a manager or
-            admin login there.
+            What this account may open in the Store. <b>User</b> sees only
+            Billing, Delivery, Store Stock, Customers, Returns and Alteration —
+            the other Store screens leave the menu and are refused if reached
+            another way. An account whose role is User always has this level.
           </div>
           <div className="datagrid">
             {(cat.store_access || [
               { key: 'admin', label: 'Admin', why: 'every Store screen' },
-              { key: 'user', label: 'User', why: 'Billing Counter and Store Reports only' },
+              { key: 'user', label: 'User', why: 'Billing, Delivery, Store Stock, Customers, Returns and Alteration only' },
             ]).map((s) => (
               <label className="mcheck" key={s.key}>
                 <input type="radio" name="store-access" checked={store === s.key}
@@ -13529,9 +13534,9 @@ function Users({ toast, me }) {
                           .map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
                       </select>
                     )}
-                    {u.permissions?.store === 'user' && (
+                    {(u.permissions?.store === 'user' || u.role === 'user') && (
                       <div style={{ marginTop: 4 }}>
-                        <span className="badge" title="Store access: Billing Counter and Store Reports only — change it under Access">
+                        <span className="badge" title="Store access: Billing, Delivery, Store Stock, Customers, Returns and Alteration only — change it under Access">
                           Store · User</span>
                       </div>
                     )}
@@ -13612,11 +13617,10 @@ function ChangePassword({ onClose, toast }) {
     if (next !== again) { toast('The two new passwords do not match', 'err'); return }
     setBusy(true)
     try {
-      const r = await api.changePassword(cur, next)
-      // The change rotated the signing seed, so the token this tab is holding
-      // is already dead — swap in the fresh one rather than dropping the user
-      // at the login screen for having done as they were asked.
-      if (r.token) session.set(r.token)
+      // The change rotated the signing seed, so the old session is dead — the
+      // server answers with a fresh cookie, rather than dropping the user at
+      // the login screen for having done as they were asked.
+      await api.changePassword(cur, next)
       toast('✓ Password changed', 'ok'); onClose()
     } catch (e2) { toast(e2.detail || 'Could not change it', 'err'); setBusy(false) }
   }
@@ -14912,7 +14916,8 @@ function CommandCenter({ go, toast, user, role, onEnter, active = true }) {
               actions={
                 <span className="segbar">
                   {CC_SERIES.map(([key, label]) => (
-                    <button key={key} className={view === key ? 'on' : ''}
+                    <button key={key} className={'seg' + (view === key ? ' on' : '')}
+                      aria-pressed={view === key}
                       onClick={(e) => { e.stopPropagation(); setView(key) }}>{label}</button>
                   ))}
                 </span>}>
@@ -16451,7 +16456,10 @@ const POS_ITEMS = [POS_HOME, null, ...POS_SCREENS]
 // not the Store Dashboard either, which is the store's takings at a glance. The
 // shop refuses every other screen itself (its app/modules.py, told by the /pos
 // mount), so this is the menu agreeing with the server, not the enforcement.
-const POS_USER_KEYS = new Set(['pos:counter', 'pos:reports'])
+// The floor's day: billing, handing over, stock, the customer, taking goods
+// back, alterations. Kept in step with STORE_USER_MODULES in the shop.
+const POS_USER_KEYS = new Set(['pos:counter', 'pos:delivery', 'pos:inventory',
+  'pos:customers', 'pos:returns', 'pos:alterations'])
 
 // One frame, keyed on the path so choosing another screen from the menu loads
 // it rather than leaving the frame on whatever it had drifted to.
@@ -16614,8 +16622,8 @@ function NavSidebar({ kind, context, items, tab, go, online, foot, drawer, onClo
       {drawer && (
         <div className="navdrawer-head">
           <div className="th-brand">
-            <span className="th-logo" aria-hidden="true">W</span>
-            <div className="brand">Warexx <span>· ERP</span><small style={{ display: 'block' }}>{kind}</small></div>
+            <span className="th-logo" aria-hidden="true">E</span>
+            <div className="brand">ESSA AI <span>· ERP</span><small style={{ display: 'block' }}>{kind}</small></div>
           </div>
           <button className="th-icon" onClick={onClose} aria-label="Close navigation menu">
             <Icon name="x" size={20} /></button>
@@ -16751,6 +16759,33 @@ const PLOT = { w: VB.w - PAD.l - PAD.r, h: VB.h - PAD.t - PAD.b }
 const VIZ = ['var(--viz-1)', 'var(--viz-2)', 'var(--viz-3)', 'var(--viz-4)', 'var(--viz-5)']
 const SEQ = 'var(--viz-2)'                       // single-series / sequential default
 
+// The time charts draw in a viewBox as wide as they really are, so axis text
+// stays at its true 11px and the height stays VB.h. One fixed 620-wide box
+// scaled to a full-width card blew the text up two or three times and made the
+// chart taller than the screen, its dates and its line pushed out of sight.
+// Narrower than VB.w it still scales down, as before.
+function useVizWidth() {
+  const ref = useRef(null)
+  const [w, setW] = useState(VB.w)
+  useEffect(() => {
+    const el = ref.current
+    if (!el || typeof ResizeObserver === 'undefined') return undefined
+    const ro = new ResizeObserver(([e]) => {
+      const cw = Math.round(e.contentRect.width)
+      if (cw > 0) setW(Math.max(VB.w, cw))
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+  return [ref, w]
+}
+
+// A period with nothing in it says so, rather than drawing a flat line along
+// a 0–1 axis that reads as a broken chart.
+const VizEmpty = ({ children }) => (
+  <div className="vizempty">{children || 'Nothing recorded in this period.'}</div>
+)
+
 // Axis ticks land on clean numbers — a gridline at 83,417 is a gridline nobody
 // reads a value off.
 const niceTicks = (max, count = 4) => {
@@ -16773,14 +16808,15 @@ const compact = (v) => {
 // The frame every plotted chart shares: hairline solid gridlines (never dashed —
 // dashing reads as "projection" when it is just a grid), clean ticks, and axis
 // text in the muted ink rather than in any series colour.
-function Grid({ ticks, max }) {
+function Grid({ ticks, max, w = VB.w }) {
+  const pw = w - PAD.l - PAD.r
   return (
     <g>
       {ticks.map((t) => {
         const y = PAD.t + PLOT.h - (max ? (t / max) * PLOT.h : 0)
         return (
           <g key={t}>
-            <line x1={PAD.l} x2={PAD.l + PLOT.w} y1={y} y2={y}
+            <line x1={PAD.l} x2={PAD.l + pw} y1={y} y2={y}
               stroke="var(--viz-grid)" strokeWidth="1" />
             <text x={PAD.l - 8} y={y + 3.5} textAnchor="end" className="viztick">{compact(t)}</text>
           </g>
@@ -16863,23 +16899,26 @@ function VizTip({ at, children }) {
 // ---- one series over time ----
 function LineChart({ labels, values, unit, valueFmt }) {
   const [hover, setHover] = useState(null)
+  const [box, W] = useVizWidth()
+  const PW = W - PAD.l - PAD.r
   const max = Math.max(...values, 0)
   const ticks = niceTicks(max)
   const top = ticks[ticks.length - 1] || 1
-  const x = (i) => PAD.l + (values.length === 1 ? PLOT.w / 2 : (i / (values.length - 1)) * PLOT.w)
+  const x = (i) => PAD.l + (values.length === 1 ? PW / 2 : (i / (values.length - 1)) * PW)
   const y = (v) => PAD.t + PLOT.h - (v / top) * PLOT.h
   const pts = values.map((v, i) => `${x(i)},${y(v)}`).join(' ')
   const nth = everyNth(labels.length)
   const peak = values.indexOf(max)
   const fmt = valueFmt || compact
+  if (!(max > 0)) return <div className="vizplot" ref={box}><VizEmpty /></div>
   return (
-    <div className="vizplot">
-      <svg viewBox={`0 0 ${VB.w} ${VB.h}`} className="vizsvg" role="img"
+    <div className="vizplot" ref={box}>
+      <svg viewBox={`0 0 ${W} ${VB.h}`} className="vizsvg" role="img"
         aria-label={`${unit} over ${labels.length} months`}>
-        <Grid ticks={ticks} max={top} />
+        <Grid ticks={ticks} max={top} w={W} />
         {/* area wash at ~10%, never a saturated block */}
         <polygon fill={SEQ} fillOpacity="0.10"
-          points={`${PAD.l},${PAD.t + PLOT.h} ${pts} ${PAD.l + PLOT.w},${PAD.t + PLOT.h}`} />
+          points={`${PAD.l},${PAD.t + PLOT.h} ${pts} ${PAD.l + PW},${PAD.t + PLOT.h}`} />
         <polyline points={pts} fill="none" stroke={SEQ} strokeWidth="2"
           strokeLinejoin="round" strokeLinecap="round" />
         {/* the peak is direct-labelled; every other value rides the axis and the
@@ -16889,7 +16928,7 @@ function LineChart({ labels, values, unit, valueFmt }) {
           // Drawn above unconditionally it escapes the plot and lands on the card
           // title — a label clipped by, or overflowing, its own chart.
           const above = y(max) - PAD.t > 16
-          const lx = Math.min(Math.max(x(peak), PAD.l + 16), PAD.l + PLOT.w - 16)
+          const lx = Math.min(Math.max(x(peak), PAD.l + 16), PAD.l + PW - 16)
           return (
             <g>
               <circle cx={x(peak)} cy={y(max)} r="4.5" fill={SEQ}
@@ -16904,8 +16943,8 @@ function LineChart({ labels, values, unit, valueFmt }) {
         ))}
         {/* hit bands are the full plot height and far wider than the 2px line */}
         {labels.map((l, i) => (
-          <rect key={'h' + i} x={x(i) - PLOT.w / (labels.length * 2)} y={PAD.t}
-            width={PLOT.w / labels.length} height={PLOT.h} fill="transparent"
+          <rect key={'h' + i} x={x(i) - PW / (labels.length * 2)} y={PAD.t}
+            width={PW / labels.length} height={PLOT.h} fill="transparent"
             onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)} />
         ))}
         {hover != null && (
@@ -16918,7 +16957,7 @@ function LineChart({ labels, values, unit, valueFmt }) {
         )}
       </svg>
       {hover != null && (
-        <VizTip at={{ x: (x(hover) / VB.w) * 100, y: (y(values[hover]) / VB.h) * 100 }}>
+        <VizTip at={{ x: (x(hover) / W) * 100, y: (y(values[hover]) / VB.h) * 100 }}>
           <b>{labels[hover]}</b><br />{fmt(values[hover])} {unit}
         </VizTip>
       )}
@@ -16929,18 +16968,21 @@ function LineChart({ labels, values, unit, valueFmt }) {
 // ---- two series compared over time ----
 function GroupedBars({ labels, series, unit }) {
   const [hover, setHover] = useState(null)
+  const [box, W] = useVizWidth()
+  const PW = W - PAD.l - PAD.r
   const max = Math.max(...series.flatMap((s) => s.values), 0)
   const ticks = niceTicks(max)
   const top = ticks[ticks.length - 1] || 1
-  const band = PLOT.w / labels.length
+  const band = PW / labels.length
   const GAP = 2                                   // the surface gap between neighbours
   const bw = Math.min(24, (band - 14 - GAP) / series.length)
   const nth = everyNth(labels.length)
+  if (!(max > 0)) return <div className="vizplot" ref={box}><VizEmpty /></div>
   return (
-    <div className="vizplot">
-      <svg viewBox={`0 0 ${VB.w} ${VB.h}`} className="vizsvg" role="img"
+    <div className="vizplot" ref={box}>
+      <svg viewBox={`0 0 ${W} ${VB.h}`} className="vizsvg" role="img"
         aria-label={`${series.map((s) => s.name).join(' and ')} by month`}>
-        <Grid ticks={ticks} max={top} />
+        <Grid ticks={ticks} max={top} w={W} />
         {labels.map((l, i) => {
           const groupW = bw * series.length + GAP * (series.length - 1)
           const x0 = PAD.l + band * i + (band - groupW) / 2
@@ -16966,7 +17008,7 @@ function GroupedBars({ labels, series, unit }) {
         ))}
       </svg>
       {hover != null && (
-        <VizTip at={{ x: ((PAD.l + band * hover + band / 2) / VB.w) * 100, y: 8 }}>
+        <VizTip at={{ x: ((PAD.l + band * hover + band / 2) / W) * 100, y: 8 }}>
           <b>{labels[hover]}</b>
           {series.map((s, si) => (
             <div key={s.name}><i className="tipkey" style={{ background: VIZ[si] }} />
@@ -17819,9 +17861,27 @@ export default function App() {
         && !window.confirm(`${labelFor(k)} has unsaved changes. Close it and lose them?`)) return
     const left = openTabs.filter((x) => x !== k)
     rememberOpen(left)
-    // Closing the tab you are looking at has to land somewhere. The next open
-    // tab is the least surprising place; the dashboard when there is none.
-    if (k === tab) setTab(left[left.length - 1] || (here ? 'dashboard' : homeTab))
+    // A closed screen is no longer somewhere ← Back can go.
+    const trail = (backTrail.current[whKey] || []).filter((x) => x !== k)
+    backTrail.current[whKey] = trail
+    if (k !== tab) return
+    // Closing the tab you are looking at has to land somewhere, and the least
+    // surprising place is where you were BEFORE it. Not the last tab in the
+    // strip's list: that is merely the one opened most recently, and was how
+    // closing Invoices dropped people on the Bill Counter they had opened an
+    // hour earlier. The screen you came from, if it is still open (or is not a
+    // tab at all, like the dashboard); else the tab beside this one; else home.
+    let dest = null
+    for (let i = trail.length - 1; i >= 0 && !dest; i--) {
+      const t = trail[i]
+      if (!keepAlive(t) || left.includes(t)) dest = t
+    }
+    if (!dest) {
+      const at = alive.indexOf(k)
+      const rest = alive.filter((x) => x !== k)
+      dest = rest[Math.max(0, at - 1)] || null
+    }
+    setTab(dest || (here ? 'dashboard' : homeTab), { back: true })
   }
   const enterWarehouse = (w, land) => {
     // The dashboard's rows key their id as `warehouse_id`, the Locations tree as
@@ -17871,9 +17931,11 @@ export default function App() {
   //: what this ACCOUNT may open, screen by screen. Empty means unrestricted and
   //: the role decides on its own — see services/permissions.has_map.
   const [perms, setPerms] = useState({})
-  // Narrowed to billing and reports in the Store — see POS_USER_KEYS. Where the
-  // Store opens for them is the counter, since its dashboard is not theirs.
-  const storeUser = perms?.store === 'user'
+  // Narrowed to the floor's screens in the Store — see POS_USER_KEYS. Every
+  // account whose role is User is, always (as the server decides it —
+  // permissions.store_access); an admin only when Users & Access says so. Where
+  // the Store opens for them is the counter, since its dashboard is not theirs.
+  const storeUser = perms?.store === 'user' || role === 'user'
   const storeHome = storeUser ? 'pos:counter' : 'pos:home'
   const posItems = storeUser ? POS_ITEMS.filter((p) => p && POS_USER_KEYS.has(p.key)) : POS_ITEMS
   const [showPassword, setShowPassword] = useState(false)
@@ -17935,15 +17997,15 @@ export default function App() {
   const refreshStatus = useCallback(() => api.status().then(setStatus), [])
   const refresh = useCallback(() => api.listDocuments().then(setDocs), [])
 
-  // verify any stored token on load (so a refresh doesn't force re-login).
-  // The role comes back from the server on every verify rather than being kept
-  // beside the token: a role changed by the super admin then takes effect on
-  // the next reload, instead of waiting for the person to sign out.
+  // ask on load whether the session cookie is still good (so a refresh doesn't
+  // force re-login). The cookie is HttpOnly, so this page cannot look at it —
+  // it can only ask. The role comes back from the server on every verify: a
+  // role changed by the super admin takes effect on the next reload, instead
+  // of waiting for the person to sign out.
   useEffect(() => {
-    const t = session.get()
-    if (!t) { setAuthChecked(true); return }
-    api.verifyToken(t).then((r) => {
+    api.verifySession().then((r) => {
       if (r.ok) {
+        session.set(r.user)
         setAuthed(true); setUser(r.user); setRole(r.role || '')
         setPerms(r.permissions || {})
       } else session.clear()
@@ -17962,8 +18024,8 @@ export default function App() {
 
   useEffect(() => { if (authed) { refreshStatus(); refresh() } }, [authed, refresh, refreshStatus])
   const toast = (m, kind) => { setToastMsg({ m, kind }); setTimeout(() => setToastMsg(null), 3000) }
-  const handleLogin = (token, u, r, perms) => {
-    session.set(token); setUser(u); setRole(r || ''); setPerms(perms || {}); setAuthed(true)
+  const handleLogin = (u, r, perms) => {
+    session.set(u); setUser(u); setRole(r || ''); setPerms(perms || {}); setAuthed(true)
   }
   const logout = () => {
     // Clears the cookie as well as the stored token. Without the call the
@@ -18054,6 +18116,20 @@ export default function App() {
       await api.deleteDocument(id)
       if (sel === id) setSel(null)
       await refresh(); setInvReload((n) => n + 1); toast('Document deleted', 'ok')
+    } catch (err) { toast(err.detail || 'Delete failed', 'err') }
+  }
+  // A row of the Invoices table: an uploaded scan goes with its reading and any
+  // draft GRN; an invoice keyed in by hand is only its draft GRN. A posted one
+  // is refused by the server (and the button is disabled) — unpost it first.
+  const delInvoice = async (r) => {
+    const name = [r.supplier_name, r.invoice_number && '#' + r.invoice_number].filter(Boolean).join(' ')
+    if (!window.confirm(`Delete this invoice${name ? ' — ' + name : ''}?\nThis cannot be undone.`)) return
+    try {
+      if (r.document_id) await api.deleteDocument(r.document_id)
+      else await api.deletePurchase(r.purchase_id)
+      if (sel === r.document_id) setSel(null)
+      if (r.purchase_id && selPurchase === r.purchase_id) setSelPurchase(null)
+      await refresh(); setInvReload((n) => n + 1); toast('Invoice deleted', 'ok')
     } catch (err) { toast(err.detail || 'Delete failed', 'err') }
   }
   const clearAll = async () => {
@@ -18264,8 +18340,8 @@ export default function App() {
         <button className="th-icon th-menu" onClick={() => setNavOpen(true)}
           aria-label="Open navigation menu" title="Menu"><Icon name="menu" size={20} /></button>
         <div className="th-brand">
-          <span className="th-logo" aria-hidden="true">W</span>
-          <div className="brand">Warexx <span>· Enterprise ERP</span>
+          <span className="th-logo" aria-hidden="true">E</span>
+          <div className="brand">ESSA AI <span>· Enterprise ERP</span>
             <small>{companyName} — multi-warehouse inventory &amp; retail supply chain</small></div>
         </div>
         <div className="spacer" />
@@ -18539,7 +18615,7 @@ export default function App() {
             <InvoiceTable active={tab === 'documents' && invLens === 'invoices' && !sel && !selPurchase}
               reloadKey={invReload}
               onOpen={(r) => openInvoice(r.document_id, r.purchase_id)}
-              onDeleteDoc={(id) => delOne(null, id)}
+              onDeleteDoc={delInvoice}
               onClearAll={isSuper ? clearAll : null} />
           </div>
         </div>

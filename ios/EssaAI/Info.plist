@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>Warexx</string>
+	<string>ESSA AI</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -66,11 +66,11 @@
 	<!-- What iOS shows when it asks. Apple rejects vague wording, so each says
 	     what the permission is for in this app. -->
 	<key>NSCameraUsageDescription</key>
-	<string>Warexx uses the camera to scan QR codes and barcodes on product labels and cartons, and to photograph invoices and delivery dockets.</string>
+	<string>ESSA AI uses the camera to scan QR codes and barcodes on product labels and cartons, and to photograph invoices and delivery dockets.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Warexx lets you attach an invoice or docket photo that is already on this device.</string>
+	<string>ESSA AI lets you attach an invoice or docket photo that is already on this device.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Warexx connects to your warehouse server on the shop's Wi-Fi network.</string>
+	<string>ESSA AI connects to your warehouse server on the shop's Wi-Fi network.</string>
 
 	<!-- Plain HTTP. The warehouse server on the shop's LAN is http://<PC address>:8000
 	     and has no certificate, so ATS would refuse it. NSAllowsArbitraryLoads

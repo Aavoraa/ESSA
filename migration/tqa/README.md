@@ -53,6 +53,32 @@ at the first failure, leaving the database as it was before that step.
 `.py` steps and `validate.py` run with the backend's own venv (they call ESSA's
 services), which `migrate.py` does itself.
 
+## Refreshing from a newer TAQUALIVE database backup
+
+Later snapshots of the legacy system come as a PostgreSQL dump (`TAQUALIVE.backup`)
+rather than the CSV zip. `load_backup.py` turns one into the same `legacy_tqa.raw.*`
+the CSV loader makes (booleans as `t`/`f`, exactly as the export wrote them), so
+the rest of the pipeline is unchanged. Done this way on 2026-10-13 with the
+9 Oct 2026 backup (bills to 8 Oct 2026 21:43); logs are in `output/`.
+
+```bash
+python load_backup.py "C:/…/TAQUALIVE.backup"            # LEGACY_DATABASE_URL=…/legacy_tqa
+python prepare_target.py --recreate --save-base           # ESSA_DATABASE_URL=…/essa_staging
+python migrate.py && python validate.py                   # must end with no HARD check failed
+# with the ESSA server stopped:
+#   ALTER DATABASE essa RENAME TO essa_before_<date>;  (and change its comment, so no script drops it)
+#   ALTER DATABASE essa_staging RENAME TO essa;
+OLD_DATABASE_URL=…/essa_before_<date> ESSA_DATABASE_URL=…/essa \
+  python carry_over.py --since "<previous run's finish, UTC>"
+```
+
+`carry_over.py` brings across what was set up in ESSA itself since the previous
+run — accounts and passwords (ESSA and POS), Users & Access settings, the item
+master, label templates, category aliases, agents, transports, suppliers and
+trained invoice formats — matched by name. Transactions entered in ESSA since
+then are not replayed into the rebuilt ledger; they are listed in
+`output/post_golive_transactions.csv` for re-entry.
+
 ## Steps (dependency order, from ESSA's foreign keys)
 
 | Step | Writes | From |

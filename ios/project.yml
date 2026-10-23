@@ -4,9 +4,9 @@
 #     brew install xcodegen      (once)
 #     cd ios && xcodegen generate
 #
-# which writes Warexx.xcodeproj next to this file. CI does the same — see
+# which writes EssaAI.xcodeproj next to this file. CI does the same — see
 # .github/workflows/ios-app.yml.
-name: Warexx
+name: EssaAI
 options:
   bundleIdPrefix: com.essa
   deploymentTarget:
@@ -18,18 +18,18 @@ settings:
     CURRENT_PROJECT_VERSION: "1"
     SWIFT_VERSION: "5.0"
 targets:
-  Warexx:
+  EssaAI:
     type: application
     platform: iOS
     sources:
-      - path: Warexx
+      - path: EssaAI
     settings:
       base:
         # The same identifier as the Android app. Change it here if the Apple
         # account registers a different one.
         PRODUCT_BUNDLE_IDENTIFIER: com.essa.warehouse
-        PRODUCT_NAME: Warexx
-        INFOPLIST_FILE: Warexx/Info.plist
+        PRODUCT_NAME: EssaAI
+        INFOPLIST_FILE: EssaAI/Info.plist
         GENERATE_INFOPLIST_FILE: NO
         TARGETED_DEVICE_FAMILY: "1,2"          # iPhone and iPad
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
@@ -37,23 +37,23 @@ targets:
         # Your Apple Developer Team ID (Xcode › Settings › Accounts). Left blank
         # so the project opens anywhere; Xcode asks for it on the first run.
         DEVELOPMENT_TEAM: ""
-  WarexxTests:
+  EssaAITests:
     type: bundle.unit-test
     platform: iOS
     sources:
-      - path: WarexxTests
+      - path: EssaAITests
     dependencies:
-      - target: Warexx
+      - target: EssaAI
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
         PRODUCT_BUNDLE_IDENTIFIER: com.essa.warehouse.tests
 schemes:
-  Warexx:
+  EssaAI:
     build:
       targets:
-        Warexx: all
-        WarexxTests: [test]
+        EssaAI: all
+        EssaAITests: [test]
     test:
       targets:
-        - WarexxTests
+        - EssaAITests

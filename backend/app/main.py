@@ -528,7 +528,7 @@ def _boot_wanted() -> bool:
 # viewable (the image route takes ?page=), a merge refuses rather than destroys
 # when a page's file is gone, and a failed reading says which of the two things
 # went wrong instead of always claiming it fell back to OCR.
-app = FastAPI(title="Warexx", version="0.2.0",
+app = FastAPI(title="ESSA AI", version="0.2.0",
               description="Trainable invoice-to-data extraction for Essa Garments")
 
 # ---- who may call what ----
@@ -596,6 +596,11 @@ def _storage_error(request, exc):
 
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
                    allow_headers=["*"])
+
+# CSP, HSTS, framing, nosniff and the rest — see security_headers.py. Added
+# last so it is outermost, and so even a 401 or a CORS preflight carries them.
+from .security_headers import SecurityHeadersMiddleware
+app.add_middleware(SecurityHeadersMiddleware)
 
 app.include_router(documents.router)
 app.include_router(suppliers.router)
@@ -727,8 +732,9 @@ def _pos_unavailable_html(rest: str = "") -> str:
 def _with_store_access(scope):
     """Tell the shop when the Essa account behind this request is a Store user.
 
-    Users & Access can narrow an account's Store to the Billing Counter and Store
-    Reports (services/permissions.STORE_ACCESS). Hiding the other screens in our
+    An account whose role is User — or one Users & Access narrows — gets only
+    the floor's Store screens (billing, delivery, stock, customers, returns,
+    alteration; services/permissions.STORE_ACCESS). Hiding the other screens in our
     menu is not enough: the frame has its own navigation, and a URL typed into
     it would open anything. So the shop has to know, and it can only know
     through the request — it has its own login and no idea who is signed in here.
@@ -741,7 +747,7 @@ def _with_store_access(scope):
 
     Never raises: a database hiccup here must not take the till down with it.
     It fails NARROW instead — an account that could not be looked up gets the
-    Store user's two screens, so billing carries on and nothing else opens.
+    Store user's floor screens, so billing carries on and nothing else opens.
     """
     from .security import token_from
     from .services import permissions as perms_svc
@@ -764,7 +770,7 @@ def _with_store_access(scope):
             try:
                 user = resolve_token(db, token)
                 narrow = user is not None and perms_svc.store_access(
-                    perms_svc.normalise(user.permissions)) == "user"
+                    perms_svc.normalise(user.permissions), user.role) == "user"
             finally:
                 db.close()
         except Exception:                              # noqa: BLE001

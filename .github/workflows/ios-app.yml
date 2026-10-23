@@ -39,7 +39,7 @@ jobs:
         run: |
           SIM=$(xcrun simctl list devices available | grep -m1 -oE 'iPhone [0-9A-Za-z ]+ \(' | sed 's/ ($//')
           echo "Simulator: $SIM"
-          xcodebuild test -project Warexx.xcodeproj -scheme Warexx \
+          xcodebuild test -project EssaAI.xcodeproj -scheme EssaAI \
             -destination "platform=iOS Simulator,name=$SIM" \
             CODE_SIGNING_ALLOWED=NO | tail -40
           exit ${PIPESTATUS[0]}
@@ -49,7 +49,7 @@ jobs:
       - name: Build for iPhone hardware (unsigned)
         working-directory: ios
         run: |
-          xcodebuild build -project Warexx.xcodeproj -scheme Warexx \
+          xcodebuild build -project EssaAI.xcodeproj -scheme EssaAI \
             -destination 'generic/platform=iOS' -configuration Release \
             CODE_SIGNING_ALLOWED=NO | tail -20
           exit ${PIPESTATUS[0]}

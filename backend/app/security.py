@@ -233,19 +233,19 @@ def required_access(method: str, path: str):
 
 
 def token_from(request: Request) -> str:
-    """A token can arrive four ways, and all four are in use.
+    """A token can arrive three ways.
 
-    The header is what the two apps send on their own calls. The cookie is for
-    the requests the app does not make by hand — an <img> pointing at an invoice
-    scan, or a report opened in a new tab — which cannot carry a header. The
-    query parameter is the last resort for the same case, and for `curl`.
+    The HttpOnly cookie is what every browser sends — the desktop app, the phone
+    PWA, an <img> pointing at an invoice scan, a report opened in a new tab. The
+    headers are for the native app and for `curl`. A `?token=` in the URL is
+    deliberately NOT accepted: URLs end up in server logs, browser history and
+    Referer headers, which is everywhere a session should not be.
     """
     auth = request.headers.get("authorization", "")
     if auth.lower().startswith("bearer "):
         return auth[7:].strip()
     return (request.headers.get("x-essa-token")
             or request.cookies.get("essa_token")
-            or request.query_params.get("token")
             or "")
 
 

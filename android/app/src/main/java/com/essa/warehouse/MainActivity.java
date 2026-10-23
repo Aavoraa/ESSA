@@ -9,6 +9,8 @@ import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Bundle;
 import android.provider.MediaStore;
+import android.speech.RecognizerIntent;
+import android.speech.tts.TextToSpeech;
 import android.view.KeyEvent;
 import android.webkit.JavascriptInterface;
 import android.webkit.PermissionRequest;
@@ -28,6 +30,8 @@ import androidx.core.content.ContextCompat;
 import androidx.core.content.FileProvider;
 
 import java.io.File;
+import java.util.ArrayList;
+import java.util.Locale;
 
 import com.journeyapps.barcodescanner.ScanContract;
 import com.journeyapps.barcodescanner.ScanOptions;
@@ -65,6 +69,16 @@ public class MainActivity extends AppCompatActivity {
     private Uri cameraOutput;
     private ActivityResultLauncher<String> cameraPermissionLauncher;
     private PermissionRequest pendingPagePermission;
+
+    // Voice for the Command Center. A WebView has neither half of the Web Speech
+    // API — no SpeechRecognition at all, and a speechSynthesis with no voices —
+    // so the page asks the phone's own recogniser and speech engine through the
+    // bridge (AndroidHost.listen / AndroidHost.speak) instead. The recogniser is
+    // the system's RecognizerIntent: it shows Google's own "Speak now" sheet and
+    // needs no RECORD_AUDIO permission here, because the recogniser app holds it.
+    private ActivityResultLauncher<Intent> speechLauncher;
+    private TextToSpeech tts;
+    private boolean ttsReady;
 
     /**
      * Replaces the page's camera scanner with the native one.
@@ -150,6 +164,28 @@ public class MainActivity extends AppCompatActivity {
         // Android's own camera permission, asked for only when something actually
         // wants the camera rather than on first launch — a permission dialog
         // before the app has done anything is the one people refuse.
+        speechLauncher = registerForActivityResult(
+            new ActivityResultContracts.StartActivityForResult(), result -> {
+                String said = null;
+                Intent data = result.getData();
+                if (result.getResultCode() == RESULT_OK && data != null) {
+                    ArrayList<String> heard =
+                        data.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS);
+                    if (heard != null && !heard.isEmpty()) said = heard.get(0);
+                }
+                if (said != null && !said.trim().isEmpty()) {
+                    web.evaluateJavascript("window.__essaVoiceResult && window.__essaVoiceResult("
+                        + JSONObject.quote(said) + ")", null);
+                } else {
+                    voiceError("Nothing was heard");
+                }
+            });
+
+        tts = new TextToSpeech(this, status -> {
+            ttsReady = status == TextToSpeech.SUCCESS;
+            if (ttsReady) tts.setLanguage(new Locale("en", "IN"));
+        });
+
         cameraPermissionLauncher = registerForActivityResult(
             new ActivityResultContracts.RequestPermission(), granted -> {
                 PermissionRequest req = pendingPagePermission;
@@ -327,6 +363,57 @@ public class MainActivity extends AppCompatActivity {
             o.setOrientationLocked(true);
             runOnUiThread(() -> scanLauncher.launch(o));
         }
+
+        /** Whether this phone has a speech recogniser to hand the mic to. */
+        @JavascriptInterface
+        public boolean canListen() {
+            return !getPackageManager().queryIntentActivities(
+                new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH), 0).isEmpty();
+        }
+
+        /** Open the phone's "Speak now" sheet; the words come back through
+         *  window.__essaVoiceResult(text), or window.__essaVoiceError(why). */
+        @JavascriptInterface
+        public void listen(String lang) {
+            runOnUiThread(() -> {
+                Intent i = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+                i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                           RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+                i.putExtra(RecognizerIntent.EXTRA_LANGUAGE,
+                           lang == null || lang.isEmpty() ? "en-IN" : lang);
+                i.putExtra(RecognizerIntent.EXTRA_PROMPT, "Ask the Command Center");
+                i.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1);
+                try {
+                    speechLauncher.launch(i);
+                } catch (Exception e) {
+                    voiceError("This phone has no speech recogniser — install or enable Google voice typing");
+                }
+            });
+        }
+
+        /** Read an answer out loud with the phone's speech engine. */
+        @JavascriptInterface
+        public boolean speak(String text) {
+            if (!ttsReady || text == null) return false;
+            tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "essa-answer");
+            return true;
+        }
+
+        @JavascriptInterface
+        public void stopSpeaking() {
+            if (ttsReady) tts.stop();
+        }
+    }
+
+    private void voiceError(String why) {
+        runOnUiThread(() -> web.evaluateJavascript(
+            "window.__essaVoiceError && window.__essaVoiceError(" + JSONObject.quote(why) + ")", null));
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (tts != null) tts.shutdown();
+        super.onDestroy();
     }
 
     private String baseUrl() {

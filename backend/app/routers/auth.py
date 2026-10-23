@@ -1,11 +1,15 @@
 """
 Signing in, from the desktop app and from the phone.
 
-Credentials are checked against the users table (see services/users); the reply
-carries a signed token the apps keep in localStorage and send back as a header.
-The same token is also set as a cookie, which is not redundant: an <img> tag
-pointing at an invoice scan, or a label preview opened in a new tab, cannot send
-a header, and those requests are policed like every other one.
+Credentials are checked against the users table (see services/users). The
+signed token goes back ONLY as an HttpOnly, SameSite=Strict cookie (Secure when
+the request came over HTTPS): the browser sends it on every call — <img> tags
+and new tabs included — and no script on the page can read it, so an injected
+script cannot lift a session and replay it elsewhere.
+
+The one exception is a native client (the React Native app), which has no page
+for a script to run in and keeps its token in the device's own storage. It asks
+for the token in the reply by sending `X-Essa-Client: native`.
 """
 import datetime as dt
 
@@ -34,8 +38,30 @@ class ChangePasswordIn(BaseModel):
     new_password: str
 
 
-def _session(user: User, token: str) -> dict:
-    return {"ok": True, "token": token, "user": user.username,
+def _wants_token(request: Request) -> bool:
+    """Whether the caller is a native app that must be handed the token."""
+    return request.headers.get("x-essa-client", "").lower() == "native"
+
+
+def _is_https(request: Request) -> bool:
+    # Behind nginx the app itself is spoken to over plain HTTP; the proxy says
+    # what the browser actually used.
+    proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip()
+    return (proto or request.url.scheme) == "https"
+
+
+def set_session_cookie(request: Request, response: Response, token: str) -> None:
+    """HttpOnly: invisible to JavaScript. SameSite=Strict: never sent on a
+    request another site started, which is what keeps a cookie-carried session
+    safe from cross-site forgery. Secure whenever the page is on HTTPS — not
+    unconditionally, because a warehouse laptop served over http on the LAN
+    would then never get its cookie back."""
+    response.set_cookie("essa_token", token, max_age=COOKIE_MAX_AGE, path="/",
+                        httponly=True, secure=_is_https(request), samesite="strict")
+
+
+def _session(user: User, token: str = "") -> dict:
+    out = {"ok": True, "user": user.username,
             "role": user.role, "role_label": users_svc.ROLE_LABEL.get(user.role, user.role),
             "full_name": user.full_name or "",
             # By rank, never by name: `role == "superadmin"` read False for the
@@ -49,10 +75,14 @@ def _session(user: User, token: str) -> dict:
             # refuses either way — this is what stops the floor being offered
             # twelve buttons that answer "not for you".
             "permissions": permissions.normalise(user.permissions)}
+    if token:
+        out["token"] = token
+    return out
 
 
 @router.post("/login")
-def login(body: LoginIn, response: Response, db: Session = Depends(get_db)):
+def login(body: LoginIn, request: Request, response: Response,
+          db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == body.username.strip()).first()
     # One message for both "no such user" and "wrong password", so the form
     # cannot be used to find out which usernames exist.
@@ -81,31 +111,27 @@ def login(body: LoginIn, response: Response, db: Session = Depends(get_db)):
                      role=user.role, method="POST", path="/api/auth/login",
                      screen="session", action="signin", outcome="ok", status=200,
                      summary="signed in")
-    response.set_cookie("essa_token", token, max_age=COOKIE_MAX_AGE,
-                        samesite="lax", path="/")
-    return _session(user, token)
+    set_session_cookie(request, response, token)
+    return _session(user, token if _wants_token(request) else "")
 
 
 @router.get("/verify")
-def verify(request: Request, response: Response, token: str = "",
-           db: Session = Depends(get_db)):
-    """What a refresh asks: is the token in localStorage still good, and as
-    whom? A role changed by the super admin lands here, so a demoted user's next
-    reload shows the smaller app rather than waiting for them to sign out."""
+def verify(request: Request, db: Session = Depends(get_db)):
+    """What a refresh asks: is the session cookie still good, and as whom? A
+    role changed by the super admin lands here, so a demoted user's next reload
+    shows the smaller app rather than waiting for them to sign out. The token is
+    never echoed back — a page script able to call this must not be able to
+    read the session out of the answer."""
     from ..security import token_from
-    user = users_svc.resolve_token(db, token or token_from(request))
+    user = users_svc.resolve_token(db, token_from(request))
     if not user:
         return {"ok": False, "user": None, "role": None}
-    # Re-set the cookie: a session restored from localStorage on a browser that
-    # dropped the cookie would otherwise show broken invoice images.
-    response.set_cookie("essa_token", token or token_from(request),
-                        max_age=COOKIE_MAX_AGE, samesite="lax", path="/")
-    return _session(user, token or token_from(request))
+    return _session(user)
 
 
 @router.post("/logout")
 def logout(response: Response):
-    response.delete_cookie("essa_token", path="/")
+    response.delete_cookie("essa_token", path="/", httponly=True, samesite="strict")
     return {"ok": True}
 
 
@@ -139,6 +165,5 @@ def change_password(body: ChangePasswordIn, request: Request, response: Response
     # The seed rotated, so the token that authorised this call is now dead —
     # hand back a fresh one rather than bouncing them to the login screen.
     token = users_svc.mint_token(user)
-    response.set_cookie("essa_token", token, max_age=COOKIE_MAX_AGE,
-                        samesite="lax", path="/")
-    return {"ok": True, "token": token}
+    set_session_cookie(request, response, token)
+    return {"ok": True, **({"token": token} if _wants_token(request) else {})}

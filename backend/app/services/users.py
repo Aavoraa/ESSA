@@ -117,11 +117,24 @@ def _sign(payload: str, seed: str) -> str:
     return hmac.new(key, payload.encode(), hashlib.sha256).hexdigest()
 
 
+#: How long a token is honoured after it was issued, checked here on the server
+#: rather than left to the cookie's own expiry — a token copied out of a browser
+#: does not carry the browser's expiry with it.
+TOKEN_MAX_AGE = 60 * 60 * 24 * 30
+
+#: Marks the current token shape. The first shape began with the username, so a
+#: stolen token announced exactly whose session it was ("superadmin.…"); those
+#: no longer verify, and everybody signs in once more after the upgrade.
+_TOKEN_VERSION = "v2"
+
+
 def mint_token(user: User) -> str:
-    """`<username>.<issued-at>.<signature>` — readable enough to debug, signed
-    so none of the three parts can be edited."""
+    """`v2.<user id>.<issued-at>.<signature>`. Says nothing about whose account
+    or what rank — the row is looked up by id and the role read from it — and
+    the signature is an HMAC keyed by the server's ESSA_AUTH_SECRET together
+    with this user's random token_seed, so no part can be edited or forged."""
     issued = str(int(dt.datetime.utcnow().timestamp()))
-    payload = f"{user.username}.{issued}"
+    payload = f"{_TOKEN_VERSION}.{user.id}.{issued}"
     return f"{payload}.{_sign(payload, user.token_seed)}"
 
 
@@ -129,13 +142,18 @@ def resolve_token(db: Session, token: str):
     """The User this token names, or None. Deactivating an account takes effect
     here on the next request, because the row is re-read every time rather than
     trusted from the token's contents."""
-    if not token or token.count(".") != 2:
+    if not token or token.count(".") != 3:
         return None
-    username, issued, sig = token.split(".")
-    user = db.query(User).filter(User.username == username).first()
+    version, uid, issued, sig = token.split(".")
+    if version != _TOKEN_VERSION or not uid.isdigit() or not issued.isdigit():
+        return None
+    age = dt.datetime.utcnow().timestamp() - int(issued)
+    if age < -300 or age > TOKEN_MAX_AGE:
+        return None
+    user = db.get(User, int(uid))
     if not user or not user.active:
         return None
-    if not hmac.compare_digest(_sign(f"{username}.{issued}", user.token_seed), sig):
+    if not hmac.compare_digest(_sign(f"{version}.{uid}.{issued}", user.token_seed), sig):
         return None
     return user
 

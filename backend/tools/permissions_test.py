@@ -114,7 +114,7 @@ client = TestClient(app)
 
 
 def login(u, pw):
-    return client.post("/api/auth/login", json={"username": u, "password": pw}).json()
+    return client.post("/api/auth/login", headers={"X-Essa-Client": "native"}, json={"username": u, "password": pw}).json()
 
 
 su = login("superadmin", "super@123")
@@ -185,7 +185,7 @@ eq("and cleared again",
    client.patch("/api/users/%d" % floor["id"], headers=head_su,
                 json={"full_name": ""}).json()["full_name"], "")
 
-head("Store access: Admin (the whole Store) or User (billing and reports)")
+head("Store access: Admin (the whole Store) or User (the floor's screens)")
 eq("nothing recorded is the whole Store", P.store_access({}), "admin")
 eq("user is kept", P.normalise({"store": "user"}), {"store": "user"})
 eq("admin is what nothing means, so it is not stored",
@@ -234,8 +234,37 @@ eq("no Essa session adds nothing — the shop's own login decides", shop_sees(),
 eq("static files are not looked up", shop_sees("/pos/static/css/app.css",
                                                 token=u_tok["token"]), None)
 client.put("/api/users/%d/permissions" % floor["id"], headers=head_su, json={})
+eq("a User-role account stays a Store user even with nothing recorded",
+   shop_sees(token=u_tok["token"]), b"user")
+eq("…because the role decides it", P.store_access({}, "user"), "user")
+
+# The Users & Access switch still narrows — and un-narrows — an admin.
+adm_row = next(x for x in client.get("/api/users", headers=head_su).json()["users"]
+               if x["username"] == "admin")
+a_tok = login("admin", "essa@123")
+eq("an admin is the whole Store", shop_sees(token=a_tok["token"]), None)
+client.put("/api/users/%d/permissions" % adm_row["id"], headers=head_su,
+           json={"store": "user"})
+eq("narrowed in Users & Access, the admin is a Store user",
+   shop_sees(token=a_tok["token"]), b"user")
+client.put("/api/users/%d/permissions" % adm_row["id"], headers=head_su, json={})
 eq("back to Admin, the header goes on the very next request",
-   shop_sees(token=u_tok["token"]), None)
+   shop_sees(token=a_tok["token"]), None)
+
+head("what a Store user may open in the shop")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__)))), "Textile Retail Shop"))
+import importlib.util as _ilu                                         # noqa: E402
+_spec = _ilu.spec_from_file_location("shop_modules", os.path.join(
+    sys.path[0], "app", "modules.py"))
+SM = _ilu.module_from_spec(_spec); _spec.loader.exec_module(SM)
+for ep in ("pos.counter", "delivery.index", "inventory.list_products",
+           "customers.list_customers", "returns.index", "alterations.index"):
+    eq(f"allowed: {ep}", SM.store_user_allows(ep), True)
+for ep in ("reports.index", "main.dashboard", "floor.index", "audits.index",
+           "checker.index", "pos.invoice_list", "stores.index",
+           "promotions.index", "staff.list_staff"):
+    eq(f"refused: {ep}", SM.store_user_allows(ep), False)
 
 print("\n%d FAILED" % len(bad) if bad else "\nall passing")
 sys.exit(1 if bad else 0)

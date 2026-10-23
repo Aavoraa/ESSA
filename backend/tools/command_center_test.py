@@ -242,7 +242,7 @@ client = TestClient(app)
 
 
 def login(u, pw):
-    return client.post("/api/auth/login", json={"username": u, "password": pw}).json()
+    return client.post("/api/auth/login", headers={"X-Essa-Client": "native"}, json={"username": u, "password": pw}).json()
 
 
 def H(tok):
@@ -309,7 +309,7 @@ head("the audit trail writes itself")
 r = client.post("/api/locations/warehouses", headers=head_su,
                 json={"name": "Karur", "code": "KR"})
 eq("a warehouse is created", r.status_code, 200)
-client.post("/api/auth/login", json={"username": "boss", "password": "wrong"})
+client.post("/api/auth/login", headers={"X-Essa-Client": "native"}, json={"username": "boss", "password": "wrong"})
 trail = client.get("/api/audit", headers=head_su).json()
 lines = [e["summary"] for e in trail["events"]]
 eq("the new warehouse is on the trail", any("added warehouse Karur" in s for s in lines), True)

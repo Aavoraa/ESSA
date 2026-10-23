@@ -57,4 +57,8 @@ EXPOSE 8000
 # runtime.py keeps the vision settings in process memory — a second worker would
 # hold its own copy and answer differently depending on which one took the call.
 # Moving to Postgres (ESSA_DATABASE_URL) is what makes more workers safe.
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1"]
+#
+# --no-server-header: do not advertise "uvicorn" to every caller.
+# --proxy-headers: trust X-Forwarded-Proto from the nginx in front, so the
+# session cookie is marked Secure and HSTS is sent on HTTPS.
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1 --no-server-header --proxy-headers --forwarded-allow-ips='*'"]

@@ -3,7 +3,7 @@ import Foundation
 /// Where the warehouse server is, and turning what someone typed into it.
 ///
 /// The same rules as the Android app's SetupActivity.normalise / isLanHost, and
-/// the same test cases (WarexxTests/ServerAddressTests.swift mirrors
+/// the same test cases (EssaAITests/ServerAddressTests.swift mirrors
 /// android/tools/normalise_test.mjs), so one address typed into either phone
 /// means the same server.
 ///

@@ -264,7 +264,7 @@ db.commit()
 # ===========================================================================
 head("…and all of it over HTTP, in the shape the screen consumes")
 client = TestClient(app)
-tok = client.post("/api/auth/login", json={"username": "admin", "password": "essa@123"})
+tok = client.post("/api/auth/login", headers={"X-Essa-Client": "native"}, json={"username": "admin", "password": "essa@123"})
 client.headers["Authorization"] = "Bearer " + tok.json()["token"]
 
 r = client.get("/api/inventory/locate", params={"code": "TQ1334194"})

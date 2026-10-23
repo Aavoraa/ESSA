@@ -7,17 +7,26 @@
 //  global one for this file, so the calls underneath are unchanged and none can
 //  be forgotten later.
 //
-//  The token also goes back as a cookie at login, which is what carries the
-//  <img> tags pointing at invoice scans and any report opened in a new tab —
-//  neither of those can send a header.
+//  The token itself never reaches this code. The server sets it as an
+//  HttpOnly, SameSite=Strict cookie, which the browser sends on every call —
+//  and on the <img> tags and new tabs that cannot send a header — and which no
+//  script on the page can read. A script injected into the page therefore has
+//  nothing to steal.
+//
+//  What is kept here is only WHO is signed in (the username): not a secret,
+//  just what keys the remembered answers below so one account never sees
+//  another's. It lives in memory, and is re-learned from /api/auth/verify on
+//  every load.
 // ---------------------------------------------------------------------------
-const TOKEN_KEY = 'essa_token'
+// The token used to be kept in localStorage; drop any copy an older build left.
+try { localStorage.removeItem('essa_token') } catch { /* private mode */ }
 
+let signedInAs = ''
 export const session = {
-  get: () => localStorage.getItem(TOKEN_KEY) || '',
+  get: () => signedInAs,
   // a different (or no) account starts with nothing remembered (readCache below)
-  set: (t) => { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY); clearAll() },
-  clear: () => { localStorage.removeItem(TOKEN_KEY); clearAll() },
+  set: (who) => { signedInAs = who || ''; clearAll() },
+  clear: () => { signedInAs = ''; clearAll() },
 }
 
 // Called by App when a call comes back 401, so an expired or revoked token
@@ -59,9 +68,7 @@ export const warehouse = {
 }
 
 const send = (url, opts = {}) => {
-  const token = session.get()
   const headers = new Headers(opts.headers || {})
-  if (token) headers.set('X-Essa-Token', token)
   const here = warehouse.get()
   if (here && here.id) headers.set('X-Essa-Warehouse', String(here.id))
   return window.fetch(url, { ...opts, headers, credentials: 'same-origin' })
@@ -253,7 +260,8 @@ export const api = {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username, password }) })
     .then(async r => { const j = await r.json().catch(() => ({})); if (!r.ok) throw Object.assign(new Error('login'), { detail: j.detail }); return j }),
-  verifyToken: (token) => fetch('/api/auth/verify?token=' + encodeURIComponent(token || '')).then(J),
+  // asks whether the session cookie is still good — the browser sends it
+  verifySession: () => fetch('/api/auth/verify').then(J),
   logout: () => fetch('/api/auth/logout', { method: 'POST' }).then(J).catch(() => ({})),
   changePassword: (current_password, new_password) => fetch('/api/auth/change-password', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },

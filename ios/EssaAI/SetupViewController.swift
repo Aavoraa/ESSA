@@ -133,7 +133,7 @@ final class SetupViewController: UIViewController, UITextFieldDelegate {
                 // broken" into "tap Allow, then Connect again".
                 if base.hasPrefix("http://") {
                     msg += "\n\nIf iPhone asked to find devices on your local network, tap Allow and "
-                        + "try again. (Settings › Warexx › Local Network.)"
+                        + "try again. (Settings › ESSA AI › Local Network.)"
                 }
                 self.status.text = msg
                 return

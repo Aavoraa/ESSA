@@ -12,15 +12,19 @@ async function J(r) {
 
 export function makeApi(server, token) {
   const base = (server || '').replace(/\/+$/, '');
-  const get = (path) => fetch(base + path).then(J);
+  // A native app has no page for a script to run in, so it is the one client
+  // the server hands the token to (X-Essa-Client: native) — browsers only ever
+  // get an HttpOnly cookie. Sent back as a header, never in the URL.
+  const headers = { ...hdr, 'X-Essa-Client': 'native', ...(token ? { 'X-Essa-Token': token } : {}) };
+  const get = (path) => fetch(base + path, { headers }).then(J);
   const send = (method, path, body) =>
-    fetch(base + path, { method, headers: hdr, body: body === undefined ? undefined : JSON.stringify(body) }).then(J);
+    fetch(base + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) }).then(J);
 
   return {
     base,
     ping: () => get('/api/status'),
     login: (username, password) => send('POST', '/api/auth/login', { username, password }),
-    verify: () => get('/api/auth/verify?token=' + encodeURIComponent(token || '')),
+    verify: () => get('/api/auth/verify'),
 
     // inventory
     options: () => get('/api/inventory/product-options'),

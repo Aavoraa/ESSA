@@ -1,5 +1,5 @@
 import XCTest
-@testable import Warexx
+@testable import EssaAI
 
 /// The setup screen's address rules. The same cases as
 /// android/tools/normalise_test.mjs — an address typed into either phone must

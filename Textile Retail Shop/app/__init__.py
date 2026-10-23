@@ -245,7 +245,8 @@ def create_app(config_class=Config):
 
     @app.before_request
     def _store_access_gate():
-        """A Store user reaches the Billing Counter and Reports, and nothing else.
+        """A Store user reaches the floor's screens (modules.STORE_USER_MODULES):
+        billing, delivery, store stock, customers, returns and alterations.
 
         After the warehouse-scope capture on purpose: the frame's first load
         carries `?wh=`, and a redirect from here must not lose it.
@@ -258,7 +259,8 @@ def create_app(config_class=Config):
             return None
         if request.endpoint == "main.dashboard":
             return redirect(url_for("pos.counter"))
-        msg = ("Your Store access is Billing Counter and Reports only. "
+        msg = ("Your Store access is Billing, Delivery, Store Stock, Customers, "
+               "Returns and Alteration only. "
                "Ask a super admin to change it in Users & Access.")
         if "/api/" in request.path or request.is_json:
             return jsonify({"ok": False, "error": msg}), 403

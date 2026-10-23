@@ -7,6 +7,9 @@ from app import db
 from app.datefilter import day_from, day_to
 from app import (billing_numbers, cancellation, drawer, places, promotions, transfers,
                  vouchers, warehouse_items)
+from app import modules as modules_mod
+import re
+from urllib.parse import urlsplit
 from app.utils import role_required
 # Every name this file needs is imported HERE, at module level, and never inside
 # a view. This package is loaded as `app`, and when the shop is served inside the
@@ -696,9 +699,39 @@ def _feedback_link(inv):
     return url_for("feedback.give", token=token, _external=True)
 
 
+def _invoice_back_url(inv, print_view):
+    """Where the bill's ← Back goes: the screen it was opened FROM.
+
+    It used to be the Billing Counter, always — right after ringing a bill up,
+    and wrong from everywhere else a bill is opened (the Invoices list, a
+    customer, a delivery, the dashboard…): the Invoices screen's Back dropped
+    the person on the till.
+
+    The referring page is used only when it is this shop's own page and not
+    this bill itself (which is what it is after a cancel posts back here).
+    Without one, a bill opened to print has just been rung up, so it goes back
+    to the counter; any other goes to the Invoices list — or the counter for a
+    Store user, who is not given the list.
+    """
+    ref = request.referrer or ""
+    if ref:
+        parts = urlsplit(ref)
+        root = request.script_root or ""
+        this_bill = re.search(rf"/invoice/{inv.id}(/[a-z]+)?/?$", parts.path)
+        own = (parts.netloc == request.host and parts.path.startswith(root + "/")
+               and not this_bill)
+        if own:
+            return parts.path + (f"?{parts.query}" if parts.query else "")
+    if print_view or (modules_mod.store_user(request)
+                      and not modules_mod.store_user_allows("pos.invoice_list")):
+        return url_for("pos.counter")
+    return url_for("pos.invoice_list")
+
+
 def _invoice_page(inv, print_view):
     return render_template(
         "pos/invoice.html", inv=inv, print_view=print_view,
+        back_url=_invoice_back_url(inv, print_view),
         cancel_blocked=cancellation.why_not(inv, current_user),
         coupons_issued=Coupon.query.filter_by(issued_invoice_id=inv.id).all(),
         feedback_link=_feedback_link(inv) if not inv.is_cancelled else None)

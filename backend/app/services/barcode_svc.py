@@ -403,7 +403,7 @@ def qr_svg(payload: str, scale: int = 3) -> str:
     payload = str(payload or "")
     if _HAVE_QR and payload:
         try:
-            qr = _segno.make(payload, error="m")
+            qr = _segno.make_qr(payload, error="m")
             # segno writes bytes, so this needs a BytesIO — a StringIO raises.
             # svgns=True keeps the xmlns, which the /qr.svg response requires and
             # which is harmless when the same markup is inlined into a label.
@@ -428,7 +428,7 @@ def qr_module_size_mm(payload: str, box_mm: float) -> float:
     that rather than trusting a comment."""
     if not (_HAVE_QR and payload):
         return 0.0
-    n = _segno.make(str(payload), error="m").symbol_size(border=QUIET_ZONE)[0]
+    n = _segno.make_qr(str(payload), error="m").symbol_size(border=QUIET_ZONE)[0]
     return box_mm / n if n else 0.0
 
 
@@ -448,7 +448,7 @@ def qr_png(payload: str, scale: int = 6) -> bytes:
     if _HAVE_QR and payload:
         try:
             buf = io.BytesIO()
-            _segno.make(payload, error="m").save(
+            _segno.make_qr(payload, error="m").save(
                 buf, kind="png", scale=scale, border=QUIET_ZONE)
             return buf.getvalue()
         except Exception:

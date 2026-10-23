@@ -734,6 +734,9 @@ a { color: var(--accent); text-underline-offset: 2px; }
 .vizscroll { overflow-x: auto; }
 
 .vizplot { position: relative; }
+.vizempty { display: flex; align-items: center; justify-content: center; min-height: 160px;
+  color: var(--muted); font-size: var(--fs-sm); border: 1px dashed var(--line);
+  border-radius: var(--radius-sm); margin-top: var(--sp-2); }
 .vizsvg { display: block; width: 100%; height: auto; overflow: visible; }
 
 /* Axis and label text wears TEXT tokens, never a series colour — a pale hue is
@@ -846,6 +849,14 @@ a { color: var(--accent); text-underline-offset: 2px; }
   line-height: 1; padding: 0 2px; border-radius: 4px; opacity: 0; }
 .doc-row:hover .rowdel { opacity: 1; }
 .rowdel:hover { color: var(--danger); background: var(--danger-bg); }
+/* A table row's delete: always visible (a hover-only control is undiscoverable
+   on a touch screen), quiet until pointed at. */
+.rowtrash { display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; padding: 0; border: 1px solid transparent; border-radius: 6px;
+  background: transparent; color: var(--muted); cursor: pointer; }
+.rowtrash:hover:not(:disabled), .rowtrash:focus-visible { color: var(--danger);
+  background: var(--danger-bg); border-color: var(--danger); }
+.rowtrash:disabled { opacity: .35; cursor: not-allowed; }
 .doc-row .m { color: var(--muted); font-size: var(--fs-sm); margin-top: var(--sp-1);
   display: flex; gap: var(--sp-2); align-items: center; }
 /* Status badges: a mono uppercase word with a dot in its own ink, on a tint

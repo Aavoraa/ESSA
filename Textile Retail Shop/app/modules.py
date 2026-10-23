@@ -81,8 +81,11 @@ MODULES = [
 # client that sends one itself has only taken access away from itself.
 STORE_HEADER = "X-Essa-Store-Access"
 
-#: The two modules a Store user sees.
-STORE_USER_MODULES = ("counter", "reports")
+#: The modules a Store user sees: the floor's day — billing, handing over,
+#: looking up stock, the customer, taking goods back, alterations. Nothing that
+#: reports on the store or configures it.
+STORE_USER_MODULES = ("counter", "delivery", "inventory", "customers", "returns",
+                      "alterations")
 
 #: …and what billing needs that belongs to no menu entry of its own: signing in
 #: and out, choosing the till, the counter's own lookups, the customer search it

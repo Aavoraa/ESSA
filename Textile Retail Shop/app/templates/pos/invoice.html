@@ -1,7 +1,10 @@
 {% extends "base.html" %}
 {% block content %}
+{# The bill's QR fills its box (the symbol carries a viewBox — utils._scalable),
+   on white, so a camera gets every module at full size and full contrast. #}
+<style>.bill-qr svg{display:block;width:100%;height:auto;background:#fff}</style>
 <div class="no-print mb-3 d-flex flex-wrap gap-2 align-items-start">
-  <a href="{{ url_for('pos.counter') }}" class="btn btn-outline-secondary btn-sm"><i class="bi bi-arrow-left"></i> Back</a>
+  <a href="{{ back_url }}" class="btn btn-outline-secondary btn-sm"><i class="bi bi-arrow-left"></i> Back</a>
   <button class="btn btn-brand btn-sm" onclick="window.print()"><i class="bi bi-printer"></i> Print</button>
   {# Cancelling is for a bill rung up wrongly today, before anything else has hung
      off it — app/cancellation.py says what counts. When it cannot be cancelled the
@@ -70,7 +73,7 @@
          is how it works. The barcode renderer is pure Python and cannot be
          missing, so the bill always carries something a reader can take. #}
       {% set bill_qr = inv.invoice_number | qr(scale=3) %}
-      <div class="d-inline-block mt-1" style="width:96px">
+      <div class="d-inline-block mt-1 bill-qr" style="width:96px">
         {% if bill_qr %}{{ bill_qr }}
         {% else %}{{ inv.invoice_number | barcode(module=1, height=34, with_text=False) }}{% endif %}
       </div>

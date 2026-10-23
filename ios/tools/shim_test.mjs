@@ -19,8 +19,8 @@ import { dirname, join } from 'node:path';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const IOS = join(HERE, '..');
 const PAGE = join(IOS, '..', 'backend', 'app', 'mobile', 'index.html');
-const SWIFT = readFileSync(join(IOS, 'Warexx', 'WebViewController.swift'), 'utf8');
-const PLIST = readFileSync(join(IOS, 'Warexx', 'Info.plist'), 'utf8');
+const SWIFT = readFileSync(join(IOS, 'EssaAI', 'WebViewController.swift'), 'utf8');
+const PLIST = readFileSync(join(IOS, 'EssaAI', 'Info.plist'), 'utf8');
 
 let fail = 0;
 const ok = (name, cond, extra = '') => {
@@ -100,7 +100,7 @@ ok('ATS: NSAllowsArbitraryLoads is not neutralised by a sibling key',
    !(has('NSAllowsArbitraryLoads') && (has('NSAllowsLocalNetworking') || has('NSAllowsArbitraryLoadsInWebContent'))),
    'with either sibling present iOS ignores NSAllowsArbitraryLoads and http://192.168.x.x stops loading');
 ok('the scene delegate named in Info.plist exists', /class SceneDelegate\b/.test(
-  readFileSync(join(IOS, 'Warexx', 'SceneDelegate.swift'), 'utf8')));
+  readFileSync(join(IOS, 'EssaAI', 'SceneDelegate.swift'), 'utf8')));
 
 console.log(fail ? `\n${fail} FAILED` : '\nall passed');
 process.exit(fail ? 1 : 0);

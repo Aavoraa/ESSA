@@ -6,10 +6,10 @@
 <meta name="theme-color" content="#0B3D2E" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-<meta name="apple-mobile-web-app-title" content="Warexx" />
+<meta name="apple-mobile-web-app-title" content="ESSA AI" />
 <link rel="manifest" href="/m/manifest.webmanifest" />
 <link rel="apple-touch-icon" href="/m/icon.png" />
-<title>Warexx</title>
+<title>ESSA AI</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <!-- Inter + JetBrains Mono, fetched without holding up the first paint: a
@@ -222,12 +222,45 @@ button.link[data-drop],button.link[data-del],button.link[data-shdel]{min-width:4
 .shutter{bottom:calc(34px + env(safe-area-inset-bottom))}
 .scanhint{bottom:calc(120px + env(safe-area-inset-bottom))}
 @media (orientation:landscape) and (max-height:500px){.scanhint{bottom:auto;top:calc(16px + env(safe-area-inset-top))}}
+/* ---------- Command Center: ask by voice ---------- */
+.mic{width:96px;height:96px;border-radius:50%;border:none;background:var(--chrome);color:#fff;
+  font-size:40px;display:flex;align-items:center;justify-content:center;margin:8px auto 6px;
+  box-shadow:var(--shadow);cursor:pointer;transition:transform .15s,background-color .15s}
+.mic:active{transform:scale(.96)}
+.mic.on{background:#B91C1C;animation:micpulse 1.2s ease-in-out infinite}
+.mic:disabled{opacity:.5;cursor:not-allowed}
+@keyframes micpulse{0%,100%{box-shadow:0 0 0 0 rgba(185,28,28,.45)}50%{box-shadow:0 0 0 14px rgba(185,28,28,0)}}
+@media (prefers-reduced-motion:reduce){.mic.on{animation:none}}
+.askrow{display:flex;gap:8px;margin-top:10px}
+.askrow input{flex:1;min-width:0;min-height:46px;padding:0 12px;border:1px solid var(--line);border-radius:8px;font-size:15px;background:var(--panel);color:var(--text)}
+.askrow .btn{width:auto;flex:0 0 auto}
+.ans{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;margin-top:12px;box-shadow:var(--shadow)}
+.ans .ttl{font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--muted)}
+.ans .big{font-size:26px;font-weight:700;margin:4px 0 2px;color:var(--text);font-variant-numeric:tabular-nums}
+.ans .line{font-size:14px;line-height:1.45;color:var(--text)}
+.ans.no{border-left:3px solid var(--warn)}
+.facts{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
+.facts div{background:var(--bg);border-radius:8px;padding:8px 10px}
+.facts span{display:block;font-size:11px;color:var(--muted)}
+.facts b{font-size:14px;font-variant-numeric:tabular-nums}
+.anstbl{width:100%;border-collapse:collapse;margin-top:10px;font-size:12px}
+.anstbl th{text-align:left;color:var(--muted);font-weight:600;padding:6px 4px;border-bottom:1px solid var(--line)}
+.anstbl td{padding:6px 4px;border-bottom:1px solid var(--line);vertical-align:top}
+.anstbl td.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.tblwrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.exs{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.exs .chip{text-transform:none;min-height:34px;font-size:12px}
 </style>
 </head>
 <body>
 <div id="app"><div class="center"><div class="spin"></div></div></div>
 <script>
-const S = { token: localStorage.getItem('essa_token')||'', user: localStorage.getItem('essa_user')||'',
+// The session itself is an HttpOnly cookie the server sets at sign-in: this
+// page never sees it, so a script injected into it has nothing to steal.
+// S.token only marks WHO is signed in (the username) — no secret — and keys
+// the remembered answers so one account never sees another's.
+try{ localStorage.removeItem('essa_token'); }catch(e){}   // left by older builds
+const S = { token: '', user: localStorage.getItem('essa_user')||'',
             // The access level this account signs in at — user, admin or
             // superadmin. Read back from the server on every verify rather than
             // trusted from storage, so a level changed on the desktop takes
@@ -291,7 +324,6 @@ async function api(path, opts){
     if(hit && Date.now()-hit.at<CACHE_MS){ MCACHE.delete(key); MCACHE.set(key,hit); return JSON.parse(hit.text); }
   } else if(method!=='GET'){ cacheClear(); }
   const h = Object.assign({'Content-Type':'application/json'}, (opts||{}).headers||{});
-  if(S.token) h['X-Essa-Token'] = S.token;
   // …and WHICH BUILDING it is being made inside. Set here, in the one funnel
   // every call passes through, rather than threaded into the fifty places that
   // make one: a screen that forgot would not look broken, it would look like
@@ -334,7 +366,6 @@ async function upload(path, file, name){
   // LR copy photographed on the dock is filed against the building it was
   // photographed in.
   const h = {};
-  if(S.token) h['X-Essa-Token'] = S.token;
   if(S.warehouse && S.warehouse.id) h['X-Essa-Warehouse'] = String(S.warehouse.id);
   cacheClear();                                     // an upload is a write too
   const r=await fetch(path,{method:'POST',body:fd,headers:h});
@@ -484,7 +515,7 @@ function alertNew(added, counts){
   try{ if(navigator.vibrate) navigator.vibrate(counts.critical ? [130, 80, 130] : 130); }catch(e){}
   if(window.Notification && Notification.permission === 'granted'){
     try{
-      new Notification(`Warexx · ${added} new alert${added===1?'':'s'}`, {
+      new Notification(`ESSA AI · ${added} new alert${added===1?'':'s'}`, {
         body: `${counts.unread||0} unread — open the app to see them`,
         icon: '/m/icon-192.png', tag: 'essa-alerts',
       });
@@ -596,10 +627,9 @@ function toast(m){ const t=document.createElement('div'); t.className='toast'; t
 // verify on start-up — so the role can never be stored by one path and missed
 // by the other.
 function setSession(r){
-  S.token = r.token || S.token;
+  S.token = r.user || S.token;
   S.user  = r.user || S.user;
   S.role  = r.role || '';
-  localStorage.setItem('essa_token', S.token);
   localStorage.setItem('essa_user', S.user||'');
   localStorage.setItem('essa_role', S.role||'');
 }
@@ -695,12 +725,11 @@ function renderWarehouse(){
 }
 
 (async function boot(){
-  if(S.token){
-    try{
-      const v = await api('/api/auth/verify?token='+encodeURIComponent(S.token));
-      if(v.ok){ setSession(v); return afterSignIn(); }
-    }catch(e){}
-  }
+  // The cookie is HttpOnly, so the page cannot look for it — it asks.
+  try{
+    const v = await api('/api/auth/verify');
+    if(v.ok){ setSession(v); return afterSignIn(); }
+  }catch(e){}
   S.screen='login'; render();
 })();
 
@@ -739,6 +768,7 @@ function render(){
   if(S.screen==='bundles') return renderBundles();
   if(S.screen==='bundle') return renderBundle();
   if(S.screen==='audit') return renderAudit();
+  if(S.screen==='command') return renderCommand();
   return renderList();
 }
 
@@ -750,6 +780,7 @@ function tabs(active){
   // a corner, and a number nobody can see is a number nobody acts on
   const un = S.notifCounts.unread || 0;
   return `<div class="row" style="gap:8px;overflow:auto">
+    ${atLeast('admin')?`<div class="chip ${active==='command'?'on':''}" data-tab="command">🎙 Command</div>`:''}
     <div class="chip ${active==='lr'?'on':''}" data-tab="lr">Consignments</div>
     <div class="chip ${active==='grn'?'on':''}" data-tab="grn">Receive</div>
     <div class="chip ${active==='bundles'?'on':''}" data-tab="bundles">Bundles</div>
@@ -802,10 +833,168 @@ function wireTabs(){
     S.screen=c.dataset.tab; render();
   });
 }
+// ---------- Command Center by voice ----------
+// The desktop Command Center's question box, for the phone: press the mic, say
+// "today's total sales" or "which products are low in stock", and the answer
+// comes back on screen AND out loud. The same /api/command/ask the desktop uses,
+// so the answer — and what this account is allowed to see in it — is the same.
+//
+// Voice comes from whichever the phone has. Inside the Android app, the phone's
+// own recogniser and speech engine through the bridge (a WebView has no Web
+// Speech API of its own); in a phone browser, the browser's SpeechRecognition.
+// Neither — the question can always be typed.
+const CMD_FALLBACK = ["Today's total sales","Which floor has the highest sales?",
+  "Which products are low in stock?","Show pending supplier payments",
+  "How many products were received through GRN today?","Today's profit"];
+S.cmd = {q:'', ans:null, busy:false, listening:false, examples:null, spoken:false};
+
+const voiceNative = ()=>!!(window.AndroidHost && AndroidHost.listen);
+const voiceWeb = ()=>window.SpeechRecognition || window.webkitSpeechRecognition;
+function canListen(){
+  if(voiceNative()){ try{ return AndroidHost.canListen ? AndroidHost.canListen() : true; }catch(e){ return true; } }
+  return !!voiceWeb();
+}
+function sayAloud(text){
+  if(!text) return;
+  try{
+    if(window.AndroidHost && AndroidHost.speak && AndroidHost.speak(String(text))) return;
+  }catch(e){}
+  try{
+    if(!window.speechSynthesis) return;
+    speechSynthesis.cancel();
+    const u=new SpeechSynthesisUtterance(String(text)); u.lang='en-IN'; speechSynthesis.speak(u);
+  }catch(e){}
+}
+function stopSaying(){
+  try{ if(window.AndroidHost && AndroidHost.stopSpeaking) AndroidHost.stopSpeaking(); }catch(e){}
+  try{ if(window.speechSynthesis) speechSynthesis.cancel(); }catch(e){}
+}
+// The two ways back from the phone's recogniser. Global, because the Android
+// bridge can only call into the page by name.
+window.__essaVoiceResult = (text)=>{
+  S.cmd.listening=false;
+  if(S.screen!=='command') return;
+  S.cmd.q=String(text||''); S.cmd.spoken=true; askCommand();
+};
+window.__essaVoiceError = (why)=>{
+  S.cmd.listening=false;
+  if(S.screen==='command'){ paintCommand(); if(why) toast(why); }
+};
+let webRec=null;
+function listen(){
+  if(S.cmd.busy) return;
+  stopSaying();
+  if(S.cmd.listening){                        // a second tap stops it
+    try{ webRec && webRec.stop(); }catch(e){}
+    S.cmd.listening=false; paintCommand(); return;
+  }
+  if(voiceNative()){
+    S.cmd.listening=true; paintCommand();
+    try{ AndroidHost.listen('en-IN'); }catch(e){ window.__essaVoiceError('Voice is not available on this phone'); }
+    return;
+  }
+  const R=voiceWeb();
+  if(!R){ toast('Voice is not available here — type the question instead'); return; }
+  webRec=new R(); webRec.lang='en-IN'; webRec.interimResults=true; webRec.maxAlternatives=1;
+  let last='';
+  webRec.onresult=(e)=>{
+    last=Array.from(e.results).map(r=>r[0].transcript).join(' ');
+    const box=document.getElementById('cq'); if(box) box.value=last;
+  };
+  webRec.onerror=(e)=>{
+    S.cmd.listening=false; paintCommand();
+    toast(e.error==='not-allowed'||e.error==='service-not-allowed'
+      ? 'Microphone permission was refused' : e.error==='no-speech' ? 'Nothing was heard' : 'Voice stopped: '+e.error);
+  };
+  webRec.onend=()=>{
+    const was=S.cmd.listening; S.cmd.listening=false; webRec=null;
+    if(was && last.trim()){ S.cmd.q=last.trim(); S.cmd.spoken=true; askCommand(); }
+    else paintCommand();
+  };
+  S.cmd.listening=true; paintCommand();
+  try{ webRec.start(); }catch(e){ S.cmd.listening=false; paintCommand(); toast('Could not start the microphone'); }
+}
+async function askCommand(text){
+  const q=String(text!=null?text:S.cmd.q).trim();
+  if(!q){ toast('Say or type a question'); return; }
+  S.cmd.q=q; S.cmd.busy=true; paintCommand();
+  try{
+    S.cmd.ans = await api('/api/command/ask',{method:'POST',body:JSON.stringify({q})});
+    // Read aloud only what was ASKED aloud: a typed question in a quiet office
+    // does not want its answer spoken.
+    if(S.cmd.spoken) sayAloud(S.cmd.ans.speak || S.cmd.ans.line);
+  }catch(e){
+    S.cmd.ans={ok:false,title:'Could not ask',line:e.message||'The question could not be sent.'};
+  }
+  S.cmd.spoken=false; S.cmd.busy=false; paintCommand();
+}
+function renderCommand(){
+  app.innerHTML = `<div class="topbar"><h1>Command Center</h1>
+      <button class="link" id="lo9">Logout</button></div>
+    <div class="controls">${tabs('command')}</div>
+    <div class="list" id="cmdbody"></div>`;
+  document.getElementById('lo9').onclick=logout;
+  wireTabs();
+  if(!S.cmd.examples){
+    api('/api/command/examples').then(r=>{
+      S.cmd.examples=(r.examples||[]).map(e=>e.q).slice(0,8);
+      if(S.screen==='command') paintCommand();
+    }).catch(()=>{ S.cmd.examples=CMD_FALLBACK; });
+  }
+  paintCommand();
+}
+// A figure lines up on the right; a name reads from the left.
+const cmdNum=(v)=>typeof v==='number' || /^[₹\-\d,.\s%]+[a-zA-Z]{0,3}$/.test(String(v==null?'':v).trim());
+function answerHtml(a){
+  if(!a) return '';
+  const cols=a.columns||[], rows=a.rows||[];
+  const shown=rows.slice(0,25);
+  return `<div class="ans ${a.ok===false?'no':''}" aria-live="polite">
+    <div class="ttl">${esc(a.title||'Answer')}${a.period&&a.period.label?' · '+esc(a.period.label):''}</div>
+    ${a.headline?`<div class="big">${esc(a.headline)}</div>`:''}
+    <div class="line">${esc(a.line||'')}</div>
+    ${(a.facts||[]).length?`<div class="facts">${a.facts.map(x=>`<div><span>${esc(x.label)}</span><b>${esc(x.value)}</b></div>`).join('')}</div>`:''}
+    ${cols.length&&shown.length?`<div class="tblwrap"><table class="anstbl">
+      <thead><tr>${cols.map(c=>`<th${shown.every(r=>r[c]==null||r[c]===''||cmdNum(r[c]))?' style="text-align:right"':''}>${esc(c)}</th>`).join('')}</tr></thead>
+      <tbody>${shown.map(r=>`<tr>${cols.map(c=>`<td class="${cmdNum(r[c])?'n':''}">${esc(r[c]==null?'':r[c])}</td>`).join('')}</tr>`).join('')}</tbody>
+    </table></div>${rows.length>shown.length?`<div class="hint">Showing ${shown.length} of ${rows.length} — the full list is on the desktop Command Center.</div>`:''}`:''}
+    ${a.note?`<div class="hint" style="margin-top:8px">${esc(a.note)}</div>`:''}
+    ${(a.suggestions||[]).length?`<div class="exs">${a.suggestions.map(q=>`<div class="chip" data-ex="${esc(q)}">${esc(q)}</div>`).join('')}</div>`:''}
+    ${(a.speak||a.line)&&a.ok!==false?`<button class="btn sec" id="csay" style="margin-top:12px">🔊 Read it out</button>`:''}
+  </div>`;
+}
+function paintCommand(){
+  const body=document.getElementById('cmdbody'); if(!body) return;
+  const c=S.cmd, voice=canListen();
+  const exs=c.examples||CMD_FALLBACK;
+  body.innerHTML = `
+    <div style="text-align:center;margin-top:10px">
+      <button class="mic ${c.listening?'on':''}" id="cmic" ${c.busy||!voice?'disabled':''}
+        aria-label="${c.listening?'Stop listening':'Ask by voice'}">${c.listening?'⏹':'🎙'}</button>
+      <div class="hint" style="font-size:13px">${
+        !voice ? 'Voice is not available on this phone — type the question below.'
+        : c.listening ? '<b>Listening…</b> ask your question'
+        : c.busy ? 'Working it out…' : 'Tap the mic and ask — e.g. “today’s total sales”'}</div>
+    </div>
+    <form class="askrow" id="cform">
+      <input id="cq" value="${esc(c.q)}" placeholder="Or type a question, GRN or bill no." enterkeyhint="send" autocomplete="off">
+      <button class="btn" type="submit" ${c.busy?'disabled':''}>Ask</button>
+    </form>
+    ${c.busy?'<div class="spin" style="margin:18px auto"></div>':answerHtml(c.ans)}
+    ${!c.ans&&!c.busy?`<div class="hint" style="margin-top:14px">Try one of these</div>
+      <div class="exs">${exs.map(q=>`<div class="chip" data-ex="${esc(q)}">${esc(q)}</div>`).join('')}</div>`:''}
+    <div class="hint" style="margin-top:14px">Answers cover the warehouses this account is allotted.</div>`;
+  document.getElementById('cmic').onclick=listen;
+  document.getElementById('cform').onsubmit=(e)=>{ e.preventDefault(); S.cmd.spoken=false; askCommand(document.getElementById('cq').value); };
+  body.querySelectorAll('[data-ex]').forEach(el=>el.onclick=()=>{ S.cmd.spoken=false; askCommand(el.dataset.ex); });
+  const say=document.getElementById('csay');
+  if(say) say.onclick=()=>sayAloud(c.ans.speak||c.ans.line);
+}
+
 function renderLogin(){
   app.innerHTML = `<div class="center">
     <div class="logo">AI</div>
-    <div class="brand">Warexx <span>·</span> Warehouse</div>
+    <div class="brand">ESSA AI <span>·</span> Warehouse</div>
     <div class="card">
       <div class="field"><label>Username</label><input id="u" autocapitalize="none" value="${esc(S.user)}" placeholder="your username"></div>
       <div class="field"><label>Password</label><input id="p" type="password" placeholder="••••••••"></div>

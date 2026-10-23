@@ -18,7 +18,7 @@ final class ScannerViewController: UIViewController, AVCaptureMetadataOutputObje
     private static let formats: [AVMetadataObject.ObjectType] = [.qr, .code128, .ean13, .ean8, .code39]
 
     private let session = AVCaptureSession()
-    private let sessionQueue = DispatchQueue(label: "warexx.scanner")
+    private let sessionQueue = DispatchQueue(label: "essaai.scanner")
     private var preview: AVCaptureVideoPreviewLayer?
     private var finished = false
 
@@ -136,7 +136,7 @@ final class ScannerViewController: UIViewController, AVCaptureMetadataOutputObje
     // MARK: no camera
 
     private func cameraOff() {
-        unavailable("Camera access is off for Warexx. Turn it on in Settings › Warexx › Camera, "
+        unavailable("Camera access is off for ESSA AI. Turn it on in Settings › ESSA AI › Camera, "
                     + "or type the code instead.")
         settingsButton.isHidden = false
     }

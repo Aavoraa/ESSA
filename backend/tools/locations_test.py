@@ -61,7 +61,7 @@ def head(t):
 
 
 client = TestClient(app)
-su = client.post("/api/auth/login",
+su = client.post("/api/auth/login", headers={"X-Essa-Client": "native"},
                  json={"username": "superadmin", "password": "super@123"}).json()
 H = {"Authorization": "Bearer " + su["token"]}
 

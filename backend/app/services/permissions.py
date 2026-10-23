@@ -108,7 +108,7 @@ DATA_KEYS = [k for k, _, _ in DATA_PERMISSIONS]
 #: never open one the shop login could not.
 STORE_ACCESS = [
     ("admin", "Admin", "every Store screen"),
-    ("user", "User", "Billing Counter and Store Reports only"),
+    ("user", "User", "Billing, Delivery, Store Stock, Customers, Returns and Alteration only"),
 ]
 STORE_KEYS = [k for k, _, _ in STORE_ACCESS]
 
@@ -162,8 +162,15 @@ def normalise(raw):
     return out
 
 
-def store_access(perms):
-    """`admin` (every Store screen) or `user` (Billing Counter and Reports)."""
+def store_access(perms, role=None):
+    """`admin` (every Store screen) or `user` (the floor's screens — billing,
+    delivery, store stock, customers, returns, alteration).
+
+    An account whose ROLE is `user` is always the latter, whatever its map says:
+    the Store's reports, promotions, staff and till setup are not floor work. An
+    admin or above is narrowed only when Users & Access says so."""
+    if role == "user":
+        return "user"
     return "user" if (perms or {}).get("store") == "user" else "admin"
 
 

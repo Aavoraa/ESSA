@@ -106,6 +106,11 @@ def qr_svg(payload, scale=3):
     Error correction 'M' and a 4-module quiet zone, matching what the warehouse
     prints: the same payload has to come off both tags identically, and a QR
     crowded to its edge is one a scanner reads slowly or not at all.
+
+    Always a full QR, never a Micro QR. Left to choose, segno.make() encodes a
+    short payload — a bill number like INV-000001 — as Micro QR: one corner
+    square instead of three, which phone cameras and most counter scanners do
+    not read at all. make_qr() rules it out.
     """
     if not payload:
         return ""
@@ -115,7 +120,7 @@ def qr_svg(payload, scale=3):
         return ""
     try:
         buf = io.BytesIO()      # segno writes bytes here; a StringIO raises
-        segno.make(str(payload), error="m").save(
+        segno.make_qr(str(payload), error="m").save(
             buf, kind="svg", scale=scale, border=4, xmldecl=False, svgns=True)
         return _scalable(buf.getvalue().decode())
     except Exception:
@@ -136,7 +141,7 @@ def qr_module_size_mm(payload, box_mm):
         import segno
     except ImportError:
         return 0.0
-    n = segno.make(str(payload), error="m").symbol_size(border=4)[0]
+    n = segno.make_qr(str(payload), error="m").symbol_size(border=4)[0]
     return box_mm / n if n else 0.0
 
 

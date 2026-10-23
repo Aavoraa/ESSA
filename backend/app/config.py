@@ -143,6 +143,14 @@ REQUIRE_PO_FOR_LR = _env("ESSA_REQUIRE_PO_FOR_LR", "1").lower() not in (
 # creates a missing row, so a password changed in the app is not reverted to the
 # value below on the next restart.
 AUTH_SECRET = os.environ.get("ESSA_AUTH_SECRET", "essa-local-secret-change-me")
+# The token HMAC is keyed by this AND each user's random seed, so the default
+# does not by itself make tokens forgeable — but it is also the /api/admin/boot
+# key, and it is public. Say so loudly rather than run quietly on it.
+if AUTH_SECRET == "essa-local-secret-change-me" or len(AUTH_SECRET) < 32:
+    import warnings
+    warnings.warn("ESSA_AUTH_SECRET is unset, the default, or shorter than 32 "
+                  "characters — set a long random value in production "
+                  "(python -c \"import secrets; print(secrets.token_urlsafe(48))\").")
 
 
 SEED_ACCOUNTS = {
