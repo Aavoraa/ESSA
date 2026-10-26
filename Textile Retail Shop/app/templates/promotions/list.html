@@ -22,7 +22,7 @@
                              ('expired', 'Expired', 'secondary'),
                              ('inactive', 'Switched off', 'secondary')] %}
   <a class="btn btn-sm {% if status == key %}btn-brand{% else %}btn-outline-secondary{% endif %}"
-     href="{{ url_for('promotions.index', q=q, status=key) }}">
+     href="{{ url_for('promotions.legacy_index', q=q, status=key) }}">
     {{ label }}
     <span class="badge text-bg-light">{{ counts.values()|sum if not key else counts.get(key, 0) }}</span>
   </a>

@@ -437,7 +437,7 @@ a { color: var(--accent); text-underline-offset: 2px; }
   flex-direction: column; gap: 2px; }
 .navitem { position: relative; display: flex; align-items: center; gap: 10px; width: 100%;
   text-align: left; background: transparent; border: none; border-radius: 8px;
-  padding: 8px 12px; min-height: 34px; color: var(--muted); font-size: var(--fs-sm);
+  padding: 4px 12px; min-height: 26px; flex: 0 1 34px; color: var(--muted); font-size: var(--fs-sm);
   font-weight: 500; line-height: 1.25; transition: background .1s, color .1s; }
 .navitem .ico-svg { color: var(--muted); }
 .navitem:hover { background: var(--bg); color: var(--text); }
@@ -832,6 +832,21 @@ a { color: var(--accent); text-underline-offset: 2px; }
 
 @media (prefers-reduced-motion: reduce) { .sidebar { transition: none; } }
 
+/* On a phone a 300px list beside the detail leaves the detail 75px and pushes
+   the page sideways. So the two stack: the list on top, capped so the detail is
+   still in reach, and the collapse control folds it to a one-line bar. */
+@media (max-width: 720px) {
+  .body:has(> .sidebar) { flex-direction: column; overflow: auto; }
+  .body > .sidebar { width: 100%; max-height: 42vh; flex: 0 0 auto;
+    border-right: none; border-bottom: 1px solid var(--line); }
+  .body > .sidebar .sidebody { width: 100%; min-width: 0; }
+  .body > .sidebar.collapsed { width: 100%; height: 38px; }
+  .body > .sidebar .siderail { flex-direction: row; justify-content: center; padding: 0 12px; }
+  .body > .sidebar .siderail .raillabel { writing-mode: horizontal-tb; }
+  .body > .sidebar ~ * { flex: 1 0 auto; min-height: 0; }
+  .body > .sidebar ~ .empty { margin-top: 32px; padding: 0 var(--gutter); }
+}
+
 .sidebar .head { padding: var(--sp-3) var(--sp-4); border-bottom: 1px solid var(--line);
   display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); }
 /* after the shorthand above, or it would be overwritten by it — reserves room so
@@ -1058,6 +1073,9 @@ td.flagcell input { border-color: var(--warn); background: var(--panel); }
   flex-wrap: wrap; margin-top: var(--sp-3); padding-top: var(--sp-3);
   border-top: 1px solid var(--line); font-size: var(--fs-sm); color: var(--muted); }
 .pager-count { font-variant-numeric: tabular-nums; }
+/* the marker "Fit" measures the list from — no size, no box */
+.pager-anchor { display: block; width: 0; height: 0; overflow: hidden; }
+.pager-mark { height: 0; overflow: hidden; }
 .pager-count b { color: var(--text); }
 .pager-size { display: inline-flex; align-items: center; gap: var(--sp-2); }
 .pager-size select { background: var(--panel); color: var(--text);
@@ -1585,7 +1603,9 @@ a.btn { text-decoration: none; }
    the fill here and the shadow keeps the card edge. */
 .stat { --tile-bg: var(--panel); --tile-line: var(--line);
   --tile-bar: var(--accent); --tile-val: var(--text); --tile-lbl: var(--muted);
-  flex: 1; background: var(--panel); border: 1px solid var(--line);
+  /* grows to share the row, but wraps before it is too narrow to read — a
+     zero basis let six tiles squeeze until each label broke a letter a line */
+  flex: 1 1 140px; background: var(--panel); border: 1px solid var(--line);
   border-radius: var(--radius-lg); padding: 14px 16px; box-shadow: var(--shadow-1); min-width: 0; }
 /* the family shows as the dot before the label — the same ink the dashboard
    cards use for their chip */
@@ -2378,7 +2398,10 @@ table.items tbody tr.sel { background: var(--brand-100); }
 .cc-voicehint { margin-top: var(--sp-2); color: var(--text-2); line-height: 1.6; }
 
 /* Example questions, and the choices when one code names two records. */
-.cc-examples { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-top: var(--sp-2); }
+.cc-examples { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-top: var(--sp-2);
+  /* one row of examples: the rest wrap out of sight rather than pushing the
+     screen into a scroll */
+  max-height: 30px; overflow: hidden; }
 .cc-chip { font-size: var(--fs-sm); color: var(--text-2); background: var(--panel);
   border: 1px solid var(--line); border-radius: 999px; padding: 4px 11px; cursor: pointer;
   transition: border-color .12s, color .12s; }
@@ -2536,3 +2559,150 @@ table.items tr.warnrow td { background: var(--warn-bg); }
 .auditkind-b.on { background: var(--brand); border-color: var(--brand); color: #fff; }
 .auditkind-open { font-size: 11px; font-weight: 600; color: var(--warn); }
 .auditkind-b.on .auditkind-open { color: #ffd98a; }
+
+/* ---------- one screen, no scrolling (FitPages) ----------
+   The page bar under a screen whose panels are shown a window at a time. Slim,
+   left-to-right, the current page marked the way the open nav item is. */
+.fitpages { display: block; }
+/* flow-root keeps a panel's own margin inside its wrapper, so the height that is
+   measured is the room it really takes */
+.fitblock { display: flow-root; }
+.fitbar { display: flex; align-items: center; gap: var(--sp-2); margin-top: var(--sp-2);
+  padding-top: var(--sp-2); border-top: 1px solid var(--line); min-height: 36px; }
+.fitbar > .btn { padding: 4px 11px; min-height: 30px; }
+.fitbar > .btn:disabled { opacity: .45; cursor: default; }
+.fitbar-pages { flex: 1; min-width: 0; display: flex; gap: 4px; overflow-x: auto;
+  scrollbar-width: none; justify-content: center; }
+.fitbar-pages::-webkit-scrollbar { display: none; }
+.fitbar-pg { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto;
+  border: 1px solid var(--line); background: var(--panel); color: var(--muted);
+  border-radius: var(--radius-sm); padding: 4px 10px; font-size: var(--fs-xs); }
+.fitbar-pg b { color: var(--text); font-variant-numeric: tabular-nums; }
+.fitbar-pg span { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fitbar-pg:hover { border-color: var(--line-strong); color: var(--text); }
+.fitbar-pg.on { background: var(--brand-100); border-color: var(--brand-200); color: var(--brand); }
+.fitbar-pg.on b { color: var(--brand); }
+/* Reports list: the group picker, and a group's name over its search matches */
+.rep-pick { margin: 0 12px 4px; width: calc(100% - 24px); }
+.rep-grp { padding: 10px 14px 4px; font-size: 11px; text-transform: uppercase;
+  color: var(--muted); letter-spacing: .5px; }
+/* paged filter panel keeps its field spacing */
+.psafilters .fitpages { display: flex; flex-direction: column; gap: var(--sp-3); }
+.psafilters .fitbar-pg span { display: none; }
+/* An invoice whose checks all passed has nothing to read in this box, so it is
+   one line — the verdict, the confidence and the re-read button — and the
+   form below gets the room. The note on re-reading moves to the button's
+   tooltip. */
+.warnbox.clean { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 14px;
+  padding: 8px 14px; margin-bottom: 10px !important; }
+.warnbox.clean h4 { flex: 1; margin: 0; }
+.warnbox.clean .reread { margin-top: 0 !important; }
+.warnbox.clean .reread .small { display: none; }
+
+/* ---------- the invoice editor, sized to stay on one screen ----------
+   The six tabs keep to one row, and the fields sit closer: label and box a
+   little tighter, the grid gap smaller. A field is 48px instead of 58, which is
+   the difference between a group fitting under the tabs and spilling. */
+.editor .revtabs { gap: 6px; margin-bottom: var(--sp-3); }
+.editor .revtab { padding-left: 10px; padding-right: 10px; white-space: nowrap; }
+.editor .grid { gap: var(--sp-2) var(--sp-3); }
+.editor .field label { margin-bottom: 3px; }
+.editor .field input, .editor .field select { min-height: 32px; padding-top: 6px; padding-bottom: 6px; }
+.editor .section h5 { margin: 0 0 6px; }
+
+/* ---------- short windows (≤ 860px tall) ----------
+   On a laptop screen the frame above a form — header, context bar, open tabs,
+   page title — took a third of the height before the first field. Each band
+   gives up its spare padding here, and the invoice header puts its progress
+   steps beside the title instead of under it, so the work itself fits. Nothing
+   is hidden; only air is taken out. */
+@media (max-height: 860px) {
+  .topbar { height: 46px; }
+  .ctxbar { padding-top: 4px; padding-bottom: 4px; }
+  .tabstrip { height: 32px; }
+  .opentab { height: 28px; }
+  .subtab { padding: 7px 12px 6px; }
+  .invhead { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 18px;
+    padding-top: 6px; padding-bottom: 6px; }
+  .invhead .stepper { margin-left: auto; }
+  .invhead .detailbar { margin: 0; }
+  .pagehead { padding-top: 10px; padding-bottom: 8px; }
+  .pagehead h2 { font-size: var(--fs-lg); }
+  .screenbody, .dash { padding-top: 12px; padding-bottom: 12px; }
+  .editor { padding-top: 12px; padding-bottom: 12px; }
+  .section { padding: 12px; margin-bottom: 12px; }
+  .section > .panelhead:first-child, .section > h4:first-child {
+    margin: -12px -12px 12px; padding: 6px 12px; min-height: 36px; }
+  .section > .panelhead:only-child { margin-bottom: -12px; }
+  .section > .tablewrap { margin-left: -12px; margin-right: -12px; }
+  .warnbox.clean { padding-top: 5px; padding-bottom: 5px; }
+}
+
+/* ==========================================================================
+   The side rail (NavRail)
+   --------------------------------------------------------------------------
+   A column of categories in the chrome's green, each opening a fly-out of its
+   screens beside it. The category of the open screen is lit in the accent; the
+   one being looked at is a shade lighter. Below 1024px the menu button opens the
+   full drawer instead, so the rail is not drawn there.
+   ========================================================================== */
+.navrail { width: 78px; flex: 0 0 78px; background: var(--chrome); position: relative;
+  display: flex; flex-direction: column; z-index: 25; user-select: none; }
+.navrail-list { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.navrail-btn { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 100%;
+  flex: 0 1 auto; min-height: 50px; padding: 9px 4px 8px; background: transparent; border: none;
+  border-bottom: 1px solid rgba(255,255,255,.10); color: var(--on-chrome-2, #E7F4EC);
+  font-size: 10.5px; font-weight: 600; letter-spacing: .01em; cursor: pointer;
+  transition: background .12s, color .12s; }
+.navrail-btn .ico-svg { color: inherit; }
+.navrail-btn:hover, .navrail-btn.open { background: rgba(255,255,255,.08); color: #fff; }
+.navrail-btn.cur { background: var(--accent); color: #fff; }
+.navrail-btn:focus-visible { outline: 2px solid var(--on-chrome-2, #E7F4EC); outline-offset: -3px; }
+.navrail-foot { padding: 10px 0 12px; display: flex; justify-content: center; }
+.navrail-foot i { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+.navrail-foot i.off { background: #D97706; }
+.navrail-fly { position: absolute; left: 78px; width: 260px; max-height: calc(100vh - 16px);
+  overflow-y: auto; background: var(--chrome-deep, #082C21); border-radius: 0 10px 10px 0;
+  box-shadow: 8px 10px 28px rgba(0,0,0,.28); padding-bottom: 8px; z-index: 30; }
+.navrail-flyhead { background: var(--accent); color: #fff; font-size: 15px; font-weight: 600;
+  padding: 12px 18px; border-radius: 0 10px 0 0; }
+.navrail-flyhead small { display: block; font-size: 11px; font-weight: 400; opacity: .8; margin-top: 1px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.navrail-item { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+  background: transparent; border: none; color: #CFE3D8; padding: 7px 18px; font-size: 13px;
+  cursor: pointer; transition: background .1s, color .1s; }
+.navrail-item .ico-svg { color: #8FBFA6; flex: 0 0 auto; }
+.navrail-item:hover, .navrail-item:focus-visible { background: rgba(255,255,255,.07); color: #fff; outline: none; }
+.navrail-item.on { color: #fff; background: rgba(47,143,104,.35); }
+.navrail-item.on .ico-svg { color: #fff; }
+.navrail-item .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.navrail-item .nb { font-family: var(--mono); font-size: 10px; padding: 1px 6px; border-radius: 999px;
+  background: var(--accent); color: #fff; }
+@media (max-width: 1023px) { .navrail { display: none; } }
+@media (max-height: 640px) { .navrail-btn { min-height: 44px; padding: 6px 4px; } }
+/* the fly-out heading opens its category's page */
+button.navrail-flyhead { display: block; width: 100%; text-align: left; border: none; cursor: pointer; }
+button.navrail-flyhead .arr { opacity: 0; margin-left: 4px; transition: opacity .12s, margin .12s; }
+button.navrail-flyhead:hover { background: var(--accent-700, #257353); }
+button.navrail-flyhead:hover .arr, button.navrail-flyhead:focus-visible .arr { opacity: 1; margin-left: 8px; }
+
+/* ---------- a category's own page (CategoryPage) ---------- */
+.shellmain { position: relative; }
+.catpage { position: absolute; inset: 0; z-index: 20; background: var(--bg); display: flex;
+  flex-direction: column; overflow: hidden; }
+.catpage .screenbody { overflow: auto; }
+.catgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr)); gap: 12px; }
+.catcard { display: flex; align-items: center; gap: 14px; text-align: left; padding: 16px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-1); cursor: pointer; transition: border-color .12s, background .12s; }
+.catcard:hover { border-color: var(--accent); background: var(--brand-50); }
+.catcard.on { border-color: var(--accent); }
+.catcard .ico { flex: 0 0 40px; height: 40px; border-radius: 10px; background: var(--brand-100);
+  color: var(--brand); display: inline-flex; align-items: center; justify-content: center; }
+.catcard .ico .ico-svg { color: var(--brand); }
+.catcard .tx { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.catcard .lbl { font-weight: 700; color: var(--text); font-size: var(--fs-md); }
+.catcard .lbl .nb { margin-left: 8px; font-family: var(--mono); font-size: 10px; padding: 1px 6px;
+  border-radius: 999px; background: var(--accent); color: #fff; vertical-align: middle; }
+.catcard .blurb { color: var(--muted); font-size: var(--fs-sm); line-height: 1.4; }
+.catcard .go { color: var(--accent); font-size: 18px; }

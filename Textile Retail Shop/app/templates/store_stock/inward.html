@@ -1,0 +1,171 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head">
+  <h4 class="mb-0"><i class="bi bi-box-arrow-in-down"></i> Store / Stock Inward</h4>
+  <div class="d-flex flex-wrap gap-2 align-items-center">
+    <div class="input-group input-group-sm" style="width:220px">
+      <input id="pkgCode" class="form-control" placeholder="Package Code" aria-label="Package code">
+      <button id="pkgFind" class="btn btn-success" type="button" title="Open the delivery with this package code" aria-label="Find"><i class="bi bi-search"></i></button>
+    </div>
+    <select id="fLoc" class="form-select form-select-sm" style="width:auto" aria-label="Branch">
+      <option value="">All my branches</option>
+      {% for l in locations %}<option value="{{ l.id }}" {% if here and l.id == here.id %}selected{% endif %}>{{ l.name }}</option>{% endfor %}
+    </select>
+    <button id="btnRefresh" type="button" class="btn btn-sm btn-outline-secondary"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+  </div>
+</div>
+
+<div id="siMsg" class="small mb-2"></div>
+
+<div class="row g-3">
+  <div class="col-lg-5">
+    <div class="card p-2">
+      <h6 class="mb-2">On the way here</h6>
+      <div class="table-responsive">
+        <table class="table table-sm table-hover align-middle mb-0">
+          <thead><tr><th>Package</th><th>Date</th><th>From</th><th>To</th><th class="text-end">Pcs</th></tr></thead>
+          <tbody id="pBody"><tr><td colspan="5" class="text-center text-muted small py-4">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-7">
+    <div class="card p-2" id="dCard">
+      <div id="dEmpty" class="text-center text-muted small py-5">Choose a delivery on the left, or type its package code.</div>
+      <div id="dBody" hidden>
+        <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+          <h6 class="mb-0" id="dTitle"></h6>
+          <span class="badge text-bg-warning" id="dKind"></span>
+        </div>
+        <div class="row g-2 align-items-end mb-2">
+          <div class="col-sm-4"><label class="form-label small mb-1" for="dBy">Received By</label>
+            <select id="dBy" class="form-select form-select-sm">
+              {% for u in users %}<option value="{{ u.full_name }}" {% if u.id == current_user.id %}selected{% endif %}>{{ u.full_name }}</option>{% endfor %}
+            </select></div>
+          <div class="col-sm-3"><label class="form-label small mb-1" for="dDate">Date</label>
+            <input id="dDate" type="date" class="form-control form-control-sm" value="{{ today }}"></div>
+          <div class="col-sm-5"><label class="form-label small mb-1" for="dScan">Scan what came out of the box</label>
+            <input id="dScan" class="form-control form-control-sm" placeholder="Barcode / item code" autocomplete="off"></div>
+        </div>
+        <div class="table-responsive">
+          <table class="table table-sm align-middle mb-1">
+            <thead><tr><th style="width:40px">S.No</th><th>Barcode</th><th>Item</th><th class="text-end">Sent</th>
+              <th class="text-end" style="width:110px">Received</th><th class="text-end">Short</th></tr></thead>
+            <tbody id="dLines"></tbody>
+          </table>
+        </div>
+        <div class="d-flex flex-wrap align-items-center gap-2 mt-2">
+          <span class="small text-muted" id="dTotals"></span>
+          <span class="ms-auto"></span>
+          <button type="button" id="dAll" class="btn btn-sm btn-outline-secondary" title="Set every line to what was sent">All arrived</button>
+          <button type="button" id="dZero" class="btn btn-sm btn-outline-secondary" title="Start the count from zero and scan each piece">Count from zero</button>
+          <button type="button" id="dReceive" class="btn btn-sm btn-brand"><i class="bi bi-check2-circle"></i> Receive</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const U = {
+    pending: "{{ url_for('storestock.inward_pending') }}",
+    detail: (k, id) => "{{ url_for('storestock.inward_detail', kind='K', tid=0) }}".replace('/K/0', `/${k}/${id}`),
+    receive: (k, id) => "{{ url_for('storestock.inward_receive', kind='K', tid=0) }}".replace('/K/0/', `/${k}/${id}/`),
+  };
+  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const say = (m, bad) => { $('siMsg').innerHTML = m || ''; $('siMsg').style.color = bad ? '#BE123C' : 'var(--brand-dark)'; };
+  let rows = [];
+  let cur = null;           // {kind, id, code, lines:[{line_id, barcode, sku, name, qty, codes, got}]}
+
+  async function loadPending() {
+    const r = await fetch(U.pending); const j = await r.json();
+    rows = j.ok ? j.rows : [];
+    paintPending();
+  }
+  function paintPending() {
+    const loc = $('fLoc').value;
+    const shown = rows.filter((r) => !loc || String(r.to_id) === loc);
+    $('pBody').innerHTML = shown.map((r) => `<tr class="p-row ${cur && cur.kind === r.kind && cur.id === r.id ? 'table-active' : ''}" data-k="${r.kind}" data-id="${r.id}" style="cursor:pointer">
+        <td><b>${esc(r.code)}</b><div class="small text-muted">${r.kind === 'wh' ? 'From warehouse' : 'From branch'}</div></td>
+        <td class="small">${esc(r.date)}</td><td class="small">${esc(r.from)}</td><td class="small">${esc(r.to)}</td>
+        <td class="text-end">${r.qty}</td></tr>`).join('')
+      || '<tr><td colspan="5" class="text-center text-muted small py-4">Nothing on the way here.</td></tr>';
+    document.querySelectorAll('.p-row').forEach((tr) => tr.onclick = () => open(tr.dataset.k, +tr.dataset.id));
+  }
+  async function open(kind, id) {
+    const r = await fetch(U.detail(kind, id)); const j = await r.json();
+    if (!j.ok) return say(esc(j.error), true);
+    if (j.status !== 'posted' && j.status !== 'sent') return say(`${esc(j.code)} has already been received.`, true);
+    cur = {kind, id, code: j.code, to: j.to, lines: j.lines.map((l) => Object.assign(l, {got: l.qty}))};
+    $('dEmpty').hidden = true; $('dBody').hidden = false;
+    $('dTitle').textContent = `${j.code} → ${j.to}`;
+    $('dKind').textContent = kind === 'wh' ? 'From warehouse' : 'From branch';
+    say(''); paintLines(); paintPending(); $('dScan').focus();
+  }
+  function paintLines() {
+    $('dLines').innerHTML = cur.lines.map((l, i) => {
+      const short = Math.max(0, l.qty - l.got);
+      return `<tr class="${l.got > 0 && short === 0 ? 'table-success' : short > 0 && l.got > 0 ? 'table-warning' : ''}">
+        <td>${i + 1}</td><td class="font-monospace small">${esc(l.barcode || l.sku)}</td>
+        <td>${esc(l.name)}<div class="small text-muted">${esc(l.sku)}</div></td>
+        <td class="text-end">${l.qty}</td>
+        <td><input type="number" min="0" max="${l.qty}" step="1" class="form-control form-control-sm text-end d-got" data-i="${i}" value="${l.got}" aria-label="Received quantity"></td>
+        <td class="text-end ${short ? 'text-danger fw-semibold' : 'text-muted'}">${short || '—'}</td></tr>`;
+    }).join('');
+    const sent = cur.lines.reduce((s, l) => s + l.qty, 0), got = cur.lines.reduce((s, l) => s + l.got, 0);
+    $('dTotals').textContent = `Sent ${sent} · received ${got}` + (sent - got > 0 ? ` · short ${sent - got}` : '');
+    document.querySelectorAll('.d-got').forEach((el) => el.onchange = () => {
+      const l = cur.lines[+el.dataset.i];
+      l.got = Math.max(0, Math.min(l.qty, Math.round(+el.value || 0))); paintLines();
+    });
+  }
+  // a scan counts one more of that line
+  $('dScan').addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || !cur) return;
+    e.preventDefault();
+    const code = $('dScan').value.trim().toLowerCase(); $('dScan').value = '';
+    if (!code) return;
+    const l = cur.lines.find((x) => x.codes.some((c) => String(c).toLowerCase() === code) && x.got < x.qty)
+           || cur.lines.find((x) => x.codes.some((c) => String(c).toLowerCase() === code));
+    if (!l) return say(`“${esc(code)}” is not on this delivery.`, true);
+    if (l.got >= l.qty) return say(`All ${l.qty} of ${esc(l.name)} are already counted — more than was sent?`, true);
+    l.got += 1; say(''); paintLines();
+  });
+  $('dAll').onclick = () => { if (cur) { cur.lines.forEach((l) => { l.got = l.qty; }); paintLines(); } };
+  $('dZero').onclick = () => { if (cur) { cur.lines.forEach((l) => { l.got = 0; }); paintLines(); $('dScan').focus(); } };
+  $('dReceive').onclick = async () => {
+    if (!cur) return;
+    const sent = cur.lines.reduce((s, l) => s + l.qty, 0), got = cur.lines.reduce((s, l) => s + l.got, 0);
+    if (got < sent && !confirm(`${sent - got} piece(s) short of what was sent. Receive what was counted?`)) return;
+    $('dReceive').disabled = true;
+    try {
+      const accepted = {}; cur.lines.forEach((l) => { accepted[l.line_id] = l.got; });
+      const r = await fetch(U.receive(cur.kind, cur.id), {method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({accepted, received_by: $('dBy').value, date: $('dDate').value})});
+      const j = await r.json();
+      if (!j.ok) return say(esc(j.error), true);
+      say(`Received <b>${esc(cur.code)}</b> — ${got} piece(s) are now ${esc(cur.to)}'s stock.` + (j.short > 0 ? ` ${j.short} short, recorded on the transfer.` : ''));
+      cur = null; $('dBody').hidden = true; $('dEmpty').hidden = false;
+      loadPending();
+    } finally { $('dReceive').disabled = false; }
+  };
+  $('fLoc').onchange = paintPending;
+  $('btnRefresh').onclick = loadPending;
+  async function find() {
+    const code = $('pkgCode').value.trim().toLowerCase();
+    if (!code) return;
+    const r = rows.find((x) => String(x.code).toLowerCase() === code);
+    if (!r) return say(`No delivery on the way here with package code “${esc($('pkgCode').value)}”.`, true);
+    $('pkgCode').value = ''; open(r.kind, r.id);
+  }
+  $('pkgFind').onclick = find;
+  $('pkgCode').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); find(); } });
+  loadPending();
+})();
+</script>
+{% endblock %}

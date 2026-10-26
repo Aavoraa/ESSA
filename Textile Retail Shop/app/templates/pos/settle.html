@@ -1,0 +1,308 @@
+{% extends "base.html" %}
+{% block content %}
+{# Settlement — its own tab. The counter has already raised these bills (stock
+   is off the shelf and the delivery copy has printed); this is where the money
+   is taken. Settling prints the customer's copy. Fits the window; never scrolls. #}
+<div class="pos-screen" id="posScreen">
+
+  <aside class="pos-left">
+    <div class="card pend">
+      <div class="px-3 py-2 border-bottom d-flex justify-content-between align-items-center">
+        <span class="fw-bold"><i class="bi bi-hourglass-split"></i> Waiting for payment</span>
+        <span class="badge text-bg-warning">{{ pending|length }}</span>
+      </div>
+      <div class="pend-list list-group list-group-flush">
+        {% for b in pending %}
+        <a href="{{ url_for('pos.settle', id=b.id) }}"
+           class="list-group-item list-group-item-action py-1 px-3 {{ 'active' if inv and b.id == inv.id }}">
+          <div class="d-flex justify-content-between">
+            <span class="font-monospace fw-semibold">{{ b.invoice_number }}</span>
+            <span class="fw-semibold">{{ b.total|inr }}</span></div>
+          <div class="small {{ '' if inv and b.id == inv.id else 'text-muted' }}">
+            {{ b.invoice_date.strftime('%H:%M') if b.invoice_date }} · {{ b.customer.name if b.customer else 'Walk-in' }}</div>
+        </a>
+        {% else %}
+        <div class="list-group-item text-muted small py-3 text-center">No bills are waiting.</div>
+        {% endfor %}
+      </div>
+    </div>
+
+    {% if inv %}
+    <div class="card sum">
+      <div class="px-3 py-2 border-bottom d-flex justify-content-between align-items-center">
+        <span class="fw-bold"><i class="bi bi-receipt"></i> <span class="font-monospace">{{ inv.invoice_number }}</span></span>
+        <a href="{{ url_for('pos.view_invoice', iid=inv.id) }}" class="btn btn-outline-secondary btn-sm" title="Open the bill">
+          <i class="bi bi-box-arrow-up-right"></i></a>
+      </div>
+      <div class="px-3 pt-1 small text-muted">
+        <i class="bi bi-person"></i>
+        {% if inv.customer %}<b>{{ inv.customer.name }}</b> {{ inv.customer.phone or '' }}{% else %}Walk-in customer{% endif %}
+      </div>
+      <div class="sum-lines px-2">
+        <table class="table table-sm mb-0 small">
+          <thead><tr><th>#</th><th>Emp</th><th>Product</th><th class="text-end">Qty</th><th class="text-end">Amount</th></tr></thead>
+          <tbody>
+            {% for r in rcpt.rows %}
+            <tr><td>{{ r.sno }}</td><td>{{ r.emp }}</td><td>{{ r.product }}</td>
+              <td class="text-end">{{ '%g' % (r.qty if r.qty is not none else r.mtr) }}</td>
+              <td class="text-end">{{ 'FREE' if r.free else r.amt|inr }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="px-3 py-2 border-top small sum-totals">
+        <div><span>Gross</span><b>{{ rcpt.gross|inr }}</b></div>
+        {% if rcpt.discount %}<div><span>Discount</span><b>- {{ rcpt.discount|inr }}</b></div>{% endif %}
+        <div><span>Net total</span><b>{{ rcpt.net|inr }}</b></div>
+        {# The settlement-stage schemes: what comes off now, and the coupons the
+           bill earns for next time — the server applies the same when it is paid. #}
+        {% for a in scheme_awards %}
+        <div class="text-success"><span><i class="bi bi-gift"></i> {{ a.scheme.name }}
+          <span class="text-muted">· {{ a.scheme.applicable_label }}</span></span>
+          <b>{% if a.points %}{{ '%g' % a.points }} points{% if not inv.customer %} (no customer){% endif %}{% elif a.scheme.applicable == 'settlement' %}- {{ a.amount|inr }}{% else %}coupon {{ (a.coupon_value or a.amount)|inr }}{% endif %}</b></div>
+        {% endfor %}
+        {% if scheme_off %}<div class="fw-bold"><span>To pay</span><b>{{ due|inr }}</b></div>{% endif %}
+      </div>
+    </div>
+    {% endif %}
+  </aside>
+
+  <section class="card pos-pay">
+    <div class="px-3 py-2 border-bottom"><span class="fw-bold"><i class="bi bi-cash-coin"></i> SETTLEMENT</span>
+      {% if inv %}<span class="font-monospace ms-2">{{ inv.invoice_number }}</span>{% endif %}</div>
+
+    {% if not inv %}
+    <div class="m-auto text-center p-4">
+      <div class="mb-2 text-muted">No bills are waiting for payment.</div>
+      <a href="{{ url_for('pos.counter') }}" class="btn btn-brand">Go to billing</a>
+    </div>
+    {% elif inv.is_cancelled or settled_already %}
+    <div class="m-auto text-center p-4">
+      <div class="mb-2">{{ inv.invoice_number }} is {{ 'cancelled' if inv.is_cancelled else 'already settled' }}.</div>
+      <a href="{{ url_for('pos.view_invoice', iid=inv.id) }}" class="btn btn-outline-primary">Open the bill</a>
+      <a href="{{ url_for('pos.counter') }}" class="btn btn-brand">New bill</a>
+    </div>
+    {% else %}
+    <div class="pay-body px-3 py-2">
+      <div class="readouts">
+        <div class="ro"><div class="ro-k">Amount due</div><div class="ro-v" id="rDue">{{ due|inr }}</div></div>
+        <div class="ro"><div class="ro-k">Amount received</div><div class="ro-v" id="rReceived">₹0.00</div></div>
+        <div class="ro"><div class="ro-k" id="rBalLabel">Balance to pay</div><div class="ro-v" id="rBalance">₹0.00</div></div>
+        <div class="ro ro-change"><div class="ro-k">Change to give back</div><div class="ro-v" id="rChange">₹0.00</div></div>
+      </div>
+
+      {# Cash takes what was HANDED OVER; how much settles the bill and how much
+         goes back is worked out. Every other tender is for an exact amount. #}
+      <div class="tenders mt-2">
+        <div class="tender">
+          <label class="t-name" for="cashIn"><i class="bi bi-cash"></i> Cash received</label>
+          <input id="cashIn" class="form-control" type="number" min="0" step="0.01" placeholder="0.00">
+          <div class="t-quick">
+            <button type="button" class="btn btn-outline-primary btn-sm" id="cashExact">Exact</button>
+            {% for n in [100, 200, 500, 2000] %}
+            <button type="button" class="btn btn-outline-secondary btn-sm cash-add" data-add="{{ n }}">+{{ n }}</button>
+            {% endfor %}
+          </div>
+        </div>
+        {% for m, label, icon, hint in [('card','Card','bi-credit-card','Approval / last 4'),
+                                       ('upi','UPI','bi-phone','UPI reference'),
+                                       ('credit_note','Credit note','bi-arrow-left-right','Credit note no. (required)'),
+                                       ('advance','Advance','bi-wallet2','Advance no. (optional)')] %}
+        <div class="tender" data-method="{{ m }}">
+          <label class="t-name"><i class="bi {{ icon }}"></i> {{ label }}</label>
+          <input class="form-control t-amt" data-method="{{ m }}" type="number" min="0" step="0.01" placeholder="0.00">
+          <div class="t-quick">
+            <input class="form-control form-control-sm t-ref" data-method="{{ m }}" maxlength="64" placeholder="{{ hint }}">
+            <button type="button" class="btn btn-outline-primary btn-sm t-rest" data-method="{{ m }}" title="Put the rest of the bill on {{ label }}">Rest</button>
+          </div>
+          {% if m in ('credit_note', 'advance') %}<div class="t-note small" data-method="{{ m }}"></div>{% endif %}
+        </div>
+        {% endfor %}
+      </div>
+      <div id="sWarn" class="small mt-2" style="color:#BE123C"></div>
+    </div>
+
+    <div class="px-3 py-2 border-top d-flex justify-content-between align-items-center gap-2">
+      <span class="small text-muted"><i class="bi bi-printer"></i> Settling prints the customer copy.</span>
+      <button id="billBtn" class="btn btn-brand btn-lg" disabled><i class="bi bi-check-circle"></i> Settle &amp; print</button>
+    </div>
+    {% endif %}
+  </section>
+</div>
+
+<style>
+  .pos-screen { display:grid; grid-template-columns: 380px minmax(0,1fr); gap:12px; height: calc(100vh - 150px); }
+  .pos-left { display:flex; flex-direction:column; gap:12px; min-height:0; }
+  .pos-left .card, .pos-pay { margin:0; }
+  .pend { display:flex; flex-direction:column; min-height:0; flex: 0 1 38%; }
+  .pend-list { overflow:auto; min-height:0; }
+  .sum { display:flex; flex-direction:column; min-height:0; flex: 1 1 62%; }
+  .sum-lines { flex:1 1 auto; min-height:0; overflow:auto; }
+  .sum-lines thead th { position:sticky; top:0; background:var(--surface, #fff); }
+  .sum-totals > div { display:flex; justify-content:space-between; }
+  .pos-pay { display:flex; flex-direction:column; min-height:0; }
+  .pay-body { flex:1 1 auto; min-height:0; overflow:auto; }
+  .readouts { display:grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap:8px; }
+  .ro { border:1px solid var(--border, #DCE5DF); border-radius:8px; padding:8px 10px; }
+  .ro-k { font-size:.75rem; color:var(--text-muted, #68756E); text-transform:uppercase; letter-spacing:.04em; }
+  .ro-v { font-size:1.6rem; font-weight:700; font-variant-numeric: tabular-nums; }
+  .ro-change { background:#F5FBF7; border-color:#C1DDD2; }
+  .ro-change .ro-v { color:var(--brand-dark); }
+  .tenders { display:grid; grid-template-columns: 1fr 1fr; gap:8px; }
+  .tender { border:1px solid var(--border, #DCE5DF); border-radius:8px; padding:6px 8px;
+            display:grid; grid-template-columns: 120px minmax(0,1fr); gap:4px 8px; align-items:center; }
+  .tender .t-name { font-size:.85rem; font-weight:600; margin:0; }
+  .tender .t-quick { grid-column: 1 / -1; display:flex; gap:4px; }
+  .tender .t-note { grid-column: 1 / -1; }
+  @media (max-width: 991px) {
+    .pos-screen { grid-template-columns: 1fr; height:auto; }
+    .readouts, .tenders { grid-template-columns: 1fr 1fr; }
+  }
+</style>
+{% endblock %}
+{% block scripts %}
+<script>
+const $ = (id) => document.getElementById(id);
+function fmt(n){ return '₹' + Number(n || 0).toFixed(2); }
+const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+
+const SCREEN = $('posScreen');
+function fitScreen(){
+  if (window.innerWidth < 992){ SCREEN.style.height = ''; document.body.style.overflow = ''; return; }
+  const top = SCREEN.getBoundingClientRect().top + window.scrollY;
+  SCREEN.style.height = Math.max(420, window.innerHeight - top - 12) + 'px';
+  document.body.style.overflow = 'hidden';
+}
+window.addEventListener('resize', fitScreen);
+fitScreen();
+
+{% if inv and not inv.is_cancelled and not settled_already %}
+const BILL_ID = {{ inv.id }};
+const DUE = r2({{ due }});
+const CUSTOMER_ID = {{ inv.customer_id or 'null' }};
+const EXCHANGE = {{ exchange | tojson }};
+const METHODS = ['card', 'upi', 'credit_note', 'advance'];
+const amtEl = (m) => document.querySelector(`.t-amt[data-method="${m}"]`);
+const refEl = (m) => document.querySelector(`.t-ref[data-method="${m}"]`);
+const noteEl = (m) => document.querySelector(`.t-note[data-method="${m}"]`);
+const num = (el) => parseFloat(el && el.value) || 0;
+
+// ---- store credit and advances: what is left on them ------------------------
+const left = {credit_note: null, advance: null};
+const leftErr = {credit_note: '', advance: ''};
+async function lookupCreditNote(){
+  const code = refEl('credit_note').value.trim();
+  left.credit_note = null; leftErr.credit_note = '';
+  if (code){
+    try {
+      const j = await (await fetch(`${SHOP_ROOT}/pos/api/credit-note?code=${encodeURIComponent(code)}`)).json();
+      if (j.ok){ left.credit_note = j.balance; refEl('credit_note').value = j.number; }
+      else leftErr.credit_note = j.error;
+    } catch (err){ leftErr.credit_note = 'Could not check the credit note: ' + err; }
+  }
+  paint();
+}
+async function lookupAdvance(){
+  left.advance = null; leftErr.advance = '';
+  if (!CUSTOMER_ID) leftErr.advance = 'This bill has no customer, so no advance can be used.';
+  else {
+    try {
+      const j = await (await fetch(`${SHOP_ROOT}/pos/api/advance-balance?customer_id=${CUSTOMER_ID}`)).json();
+      const ref = refEl('advance').value.trim().toUpperCase();
+      const one = ref ? j.advances.find((a) => a.number.toUpperCase() === ref) : null;
+      if (ref && !one) leftErr.advance = `No advance “${ref}” with a balance for this customer.`;
+      left.advance = ref ? (one ? one.balance : 0) : j.balance;
+    } catch (err){ leftErr.advance = 'Could not check the advance: ' + err; }
+  }
+  paint();
+}
+
+// ---- the arithmetic ----------------------------------------------------------
+function figures(){
+  const other = METHODS.map((m) => ({method: m, amount: r2(num(amtEl(m))), reference: refEl(m).value.trim()}))
+    .filter((r) => r.amount > 0);
+  const nonCash = r2(other.reduce((a, r) => a + r.amount, 0));
+  const cashIn = r2(num($('cashIn')));
+  const cashApplied = r2(Math.max(0, Math.min(cashIn, DUE - nonCash)));
+  return {other, nonCash, cashIn, cashApplied,
+          received: r2(cashIn + nonCash), balance: r2(DUE - nonCash - cashApplied),
+          change: r2(cashIn - cashApplied)};
+}
+
+function paint(){
+  const f = figures();
+  $('rReceived').innerText = fmt(f.received);
+  $('rBalance').innerText = fmt(Math.max(0, f.balance));
+  $('rBalLabel').innerText = f.balance > 0 ? 'Balance to pay' : 'Balance';
+  $('rBalance').style.color = f.balance > 0.005 ? '#BE123C' : 'var(--brand-dark)';
+  $('rChange').innerText = fmt(f.change);
+  ['credit_note', 'advance'].forEach((m) => {
+    const el = noteEl(m);
+    if (leftErr[m]){ el.style.color = '#BE123C'; el.innerText = leftErr[m]; }
+    else if (left[m] !== null){ el.style.color = 'var(--brand-dark)'; el.innerText = `${fmt(left[m])} available.`; }
+    else el.innerText = '';
+  });
+  let msg = '';
+  if (f.nonCash > DUE + 0.005) msg = `Card / UPI / credit come to ${fmt(f.nonCash - DUE)} more than the bill. Only cash gives change.`;
+  else if (f.balance > 0.005) msg = `${fmt(f.balance)} still to be paid.`;
+  for (const r of f.other){
+    if (r.method === 'credit_note' && !r.reference) msg = 'Enter the credit note number to spend it.';
+    else if ((r.method === 'credit_note' || r.method === 'advance') && leftErr[r.method]) msg = leftErr[r.method];
+    else if (left[r.method] !== null && left[r.method] !== undefined && r.amount > left[r.method] + 0.005)
+      msg = `Only ${fmt(left[r.method])} ${r.method === 'credit_note' ? 'store credit' : 'advance'} is available.`;
+  }
+  $('sWarn').innerText = msg;
+  $('billBtn').disabled = !!msg;
+}
+
+$('cashIn').oninput = paint;
+$('cashExact').onclick = () => { const f = figures(); $('cashIn').value = Math.max(0, r2(DUE - f.nonCash)).toFixed(2); paint(); };
+document.querySelectorAll('.cash-add').forEach((b) => b.onclick = () => {
+  $('cashIn').value = r2(num($('cashIn')) + Number(b.dataset.add)).toFixed(2); paint();
+});
+document.querySelectorAll('.t-amt, .t-ref').forEach((el) => el.oninput = paint);
+document.querySelectorAll('.t-rest').forEach((b) => b.onclick = () => {
+  const m = b.dataset.method;
+  const others = METHODS.filter((x) => x !== m).reduce((a, x) => a + num(amtEl(x)), 0);
+  let rest = r2(Math.max(0, DUE - others));
+  if (left[m] !== null && left[m] !== undefined) rest = Math.min(rest, left[m]);
+  amtEl(m).value = rest ? rest.toFixed(2) : '';
+  $('cashIn').value = '';
+  paint();
+});
+refEl('credit_note').addEventListener('change', lookupCreditNote);
+refEl('advance').addEventListener('change', lookupAdvance);
+
+// ---- settle it --------------------------------------------------------------
+$('billBtn').onclick = async () => {
+  const btn = $('billBtn');
+  btn.disabled = true;
+  const f = figures();
+  const payments = f.other.map((r) => ({method: r.method, amount: r.amount, tendered: r.amount, reference: r.reference || null}));
+  if (f.cashIn > 0) payments.unshift({method: 'cash', amount: f.cashApplied, tendered: f.cashIn, reference: null});
+  try {
+    const j = await (await fetch(`${SHOP_ROOT}/pos/settle/${BILL_ID}`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({payments: payments.filter((p) => p.amount > 0)}),
+    })).json();
+    if (j.error){ alert('Error: ' + j.error); btn.disabled = false; return; }
+    // The customer's copy, with what was received and the change on screen.
+    window.location = `${SHOP_ROOT}/pos/invoice/${BILL_ID}/print?copy=customer&fresh=1`;
+  } catch (err){
+    alert('Settlement failed: ' + err);
+    btn.disabled = false;
+  }
+};
+
+// An exchange: the store credit from the return is waiting, applied up to the bill.
+if (EXCHANGE){
+  refEl('credit_note').value = EXCHANGE.number;
+  amtEl('credit_note').value = r2(Math.min(EXCHANGE.balance, DUE)).toFixed(2);
+  lookupCreditNote();
+}
+if (CUSTOMER_ID) lookupAdvance();
+paint();
+$('cashIn').focus();
+{% endif %}
+</script>
+{% endblock %}

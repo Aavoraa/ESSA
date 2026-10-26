@@ -90,7 +90,7 @@ def _warehouse_locations():
     somebody asks; stock that arrived somewhere it never went is a figure nobody
     questions.
     """
-    from app import warehouse_items as wh
+    wh = _wh                  # bound at import — see transfers.py
     con = wh._connect()
     if con is None:
         return []

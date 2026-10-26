@@ -146,6 +146,17 @@ class _Con:
             named = {}
         return _Result(self._conn.execute(text(sql), named))
 
+    def commit(self):
+        """For the few writes the shop makes to the warehouse — a store's own
+        transfer notes (app/store_stock.py). Everything else only reads."""
+        self._conn.commit()
+
+    def rollback(self):
+        try:
+            self._conn.rollback()
+        except SQLAlchemyError:
+            pass
+
     def close(self):
         try:
             self._conn.close()
@@ -275,6 +286,65 @@ def fetch_items():
         con.close()
 
 
+def _read_column(sql):
+    """One query's `v` column as a list of non-blank strings, on its own
+    connection — so a table this warehouse doesn't have costs only that list,
+    and on Postgres a failed statement can't poison the next one."""
+    con = _connect()
+    if con is None:
+        return []
+    try:
+        return [str(r["v"]).strip() for r in con.execute(sql).fetchall()
+                if r["v"] is not None and str(r["v"]).strip()]
+    except SQLAlchemyError:
+        return []
+    finally:
+        con.close()
+
+
+def fetch_vocabulary():
+    """The warehouse's masters, as pick-lists for the shop's screens: the
+    product attribute options (Masters → Product Attributes, keyed brand, color,
+    material, pattern, style, fit, sleeve, product_type, size), the suppliers,
+    the purchase invoice numbers and the design numbers. Empty lists when there
+    is no warehouse to read."""
+    out = {}
+    con = _connect()
+    if con is not None:
+        try:
+            for r in con.execute("SELECT attr, value FROM attribute_options").fetchall():
+                if r["attr"] and r["value"] is not None and str(r["value"]).strip():
+                    out.setdefault(str(r["attr"]), []).append(str(r["value"]).strip())
+        except SQLAlchemyError:
+            pass
+        finally:
+            con.close()
+    out["supplier"] = _read_column("SELECT name AS v FROM suppliers")
+    out["invoice"] = _read_column("SELECT DISTINCT invoice_number AS v FROM purchases")
+    out["design_no"] = _read_column("SELECT DISTINCT design_no AS v FROM products")
+    return out
+
+
+#: {warehouse supplier id: name}, read once per sync — see fetch_supplier_names.
+_SUPPLIERS = {}
+
+
+def fetch_supplier_names():
+    """The warehouse's suppliers by id — what a sales scheme's Invoice filter
+    reads as the item's supplier. Its own connection and its own failure: a
+    warehouse with no suppliers table still syncs its products."""
+    con = _connect()
+    if con is None:
+        return {}
+    try:
+        return {r["id"]: r["name"] for r in
+                con.execute("SELECT id, name FROM suppliers").fetchall()}
+    except SQLAlchemyError:
+        return {}
+    finally:
+        con.close()
+
+
 def fetch_units(warehouse_id):
     """Every garment the warehouse holds for this item, each with its own QR.
 
@@ -379,6 +449,10 @@ def _apply(p, row, cat_ids, created=False):
         if v not in (None, ""):
             setattr(p, dest, v)
 
+    sid = row["primary_supplier_id"] if "primary_supplier_id" in row.keys() else None
+    if sid and _SUPPLIERS.get(sid):
+        p.supplier = _SUPPLIERS[sid]
+
     uom = str(row["uom"] or "").strip().lower()
     if uom in SHOP_UNITS:
         p.unit = uom
@@ -450,6 +524,8 @@ def sync_warehouse_items():
                 "available": available()}
 
     cat_ids = _category_ids()
+    _SUPPLIERS.clear()
+    _SUPPLIERS.update(fetch_supplier_names())
     existing = {p.sku: p for p in Product.query.all()}
     added = updated = 0
     for row in rows:

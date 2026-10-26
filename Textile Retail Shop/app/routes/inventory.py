@@ -144,6 +144,22 @@ def api_barcode_lookup():
     return jsonify(info)
 
 
+def _scheme_fields(p, form):
+    """The attributes a sales scheme can filter on that the warehouse doesn't
+    send (brand, style, sleeve, marker) or that a shop-made item needs set by
+    hand (supplier, purchase invoice and date). See app/schemes.py."""
+    from datetime import datetime as _dt
+    for key in ("brand", "style", "sleeve", "marker", "supplier", "purchase_invoice"):
+        if key in form:
+            setattr(p, key, (form.get(key) or "").strip() or None)
+    if "purchase_date" in form:
+        raw = (form.get("purchase_date") or "").strip()
+        try:
+            p.purchase_date = _dt.strptime(raw, "%Y-%m-%d").date() if raw else None
+        except ValueError:
+            p.purchase_date = None
+
+
 @inventory_bp.route("/new", methods=["GET", "POST"])
 @login_required
 @role_required("admin", "manager")
@@ -174,6 +190,7 @@ def new_product():
                 fabric=request.form.get("fabric", ""),
                 floor_id=request.form.get("floor_id", type=int) or None,
             )
+            _scheme_fields(p, request.form)
             db.session.add(p)
             db.session.flush()
             if p.stock_qty > 0:
@@ -218,6 +235,7 @@ def edit_product(pid):
         p.color = request.form.get("color", "")
         p.size = request.form.get("size", "")
         p.fabric = request.form.get("fabric", "")
+        _scheme_fields(p, request.form)
         p.floor_id = request.form.get("floor_id", type=int) or None
         if p.stock_qty != old_stock:
             db.session.add(StockMovement(

@@ -32,13 +32,19 @@ from datetime import datetime
 from sqlalchemy.exc import SQLAlchemyError
 
 from app import db
+# At module level, not inside the functions: once the shop is mounted in the
+# warehouse app, `app` names the WAREHOUSE's package at request time, and a
+# function-level `from app import …` reaches into the wrong one. Store → Stock
+# Inward calls into here per request, so this has to be bound now.
+from app import warehouse_items as wh
 from app.models import Location, LocationStock, Product, StockMovement, TransferReceipt
 
-#: Statuses of a warehouse dispatch that mean the goods are at the far end.
-#: `posted` is "it left the warehouse"; `received` is "somebody there accepted
-#: it". Both count as arrived — a lorry that has gone is stock the warehouse no
-#: longer has, and leaving it in neither place is the gap this closes.
-ARRIVED = ("posted", "received")
+#: Statuses of a warehouse dispatch that mean the goods are in the branch.
+#: Only `received`: somebody counted it in — on the store's own Stock Inward
+#: (app/store_stock.py) or the warehouse's. A `posted` dispatch is on the road;
+#: taking it in unseen is what the store's Stock Inward replaced, since the
+#: count there is what the branch actually got.
+ARRIVED = ("received",)
 
 
 def at(location_id, product_id):
@@ -72,12 +78,17 @@ def _pending_lines(con, known_ids):
         "       o.received_date AS received_date, o.date AS sent_date "
         "FROM stock_outward_lines l "
         "JOIN stock_outwards o ON o.id = l.outward_id "
-        "WHERE o.status IN ('posted', 'received')"
+        "WHERE o.status IN (" + ", ".join("'%s'" % s for s in ARRIVED) + ")"
     )
+    # a store's own return to the warehouse is not stock arriving here
     try:
-        rows = con.execute(sql).fetchall()
+        rows = con.execute(sql + " AND o.from_store_id IS NULL").fetchall()
     except SQLAlchemyError:
-        return []
+        con.rollback()
+        try:
+            rows = con.execute(sql).fetchall()      # a warehouse from before returns
+        except SQLAlchemyError:
+            return []
     return [r for r in rows if int(r["line_id"]) not in known_ids]
 
 
@@ -87,7 +98,6 @@ def sync_transfers():
     Returns (lines, pieces) — how many dispatch lines were applied and how many
     pieces they brought — so a caller can report it or ignore it.
     """
-    from app import warehouse_items as wh
 
     con = wh._connect()
     if con is None:
@@ -141,7 +151,6 @@ def sync_transfers():
 
 def _import(wh_product_id):
     """Pull one warehouse item in by its id, or None if it cannot be read."""
-    from app import warehouse_items as wh
     con = wh._connect()
     if con is None:
         return None

@@ -425,6 +425,15 @@ class PurchaseLine(Base):
     # itself match like a breakdown row rather than on its description alone.
     brand = Column(String)
     design_no = Column(String)
+    # The rest of what a line can say it is, set on the GRN screen — style,
+    # material, pattern, sleeve and type. Applied to the product at post, and
+    # inherited by any breakdown row that leaves them blank, the same way the
+    # line's prices are.
+    style = Column(String)
+    material = Column(String)
+    pattern = Column(String)
+    sleeve = Column(String)
+    product_type = Column(String)
     # Retail, per piece. `mrp` is off the invoice — suppliers print it and it was
     # being dropped here, so an undivided line created a product with no MRP even
     # though the bill stated one. The other two are not on any bill: nobody prints
@@ -1070,6 +1079,10 @@ class StockOutward(Base):
     to_destination = Column(String)             # store / customer
     to_warehouse_id = Column(Integer, ForeignKey("warehouses.id"), index=True)
     to_store_id = Column(Integer, ForeignKey("stores.id"), index=True)
+    # A store sending goods BACK (Store → Transfer Goods): the branch it came
+    # from. Raised by the shop with the stock already off its shelves, so it
+    # arrives here posted, and the warehouse's Stock Inward counts it in.
+    from_store_id = Column(Integer, ForeignKey("stores.id"), index=True)
     packed_by = Column(String)
     received_by = Column(String)                # who accepted it at the far end
     received_date = Column(String)              # the date they wrote on the note
@@ -1083,6 +1096,7 @@ class StockOutward(Base):
     from_warehouse = relationship("Warehouse", foreign_keys=[from_warehouse_id])
     to_warehouse = relationship("Warehouse", foreign_keys=[to_warehouse_id])
     to_store = relationship("Store", foreign_keys=[to_store_id])
+    from_store = relationship("Store", foreign_keys=[from_store_id])
 
     @property
     def is_transfer(self):

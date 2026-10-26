@@ -20,10 +20,10 @@
     {% if current_user.is_admin %}
     <form method="post" action="{{ url_for('promotions.delete', sid=scheme.id) }}"
           onsubmit="return confirm('Delete this scheme? A scheme that has been used on bills is switched off instead, so its history stays reportable.')">
-      <button class="btn btn-outline-danger btn-sm"><i class="bi bi-trash"></i></button>
+      <button class="btn btn-outline-danger btn-sm" title="Delete" aria-label="Delete"><i class="bi bi-trash"></i></button>
     </form>
     {% endif %}
-    <a href="{{ url_for('promotions.index') }}" class="btn btn-outline-secondary btn-sm">All schemes</a>
+    <a href="{{ url_for('promotions.legacy_index') }}" class="btn btn-outline-secondary btn-sm">All schemes</a>
   </div>
 </div>
 

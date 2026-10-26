@@ -16,8 +16,13 @@ MODULES = [
      "blurb": "Build a sale on the phone while walking the floor"},
 
     {"key": "counter", "endpoint": "pos.counter", "icon": "bi-cart-check",
-     "label": "Billing Counter", "owns": ["pos.counter", "pos.checkout", "drawer."], "manager": False,
-     "blurb": "Scan, bill and take payment at the counter"},
+     "label": "Billing Counter", "owns": ["pos.counter", "pos.checkout",
+                                         "pos.last_invoice", "drawer."], "manager": False,
+     "blurb": "Scan and bill, and print the delivery copy"},
+
+    {"key": "settlement", "endpoint": "pos.settle", "icon": "bi-cash-coin",
+     "label": "Settlement", "owns": ["pos.settle"], "manager": False,
+     "blurb": "Take payment for billed bills and print the customer copy"},
 
     {"key": "delivery", "endpoint": "delivery.index", "icon": "bi-bag-check",
      "label": "Delivery", "owns": ["delivery."], "manager": False,
@@ -26,6 +31,14 @@ MODULES = [
     {"key": "inventory", "endpoint": "inventory.list_products", "icon": "bi-box-seam",
      "label": "Inventory", "owns": ["inventory."], "manager": False,
      "blurb": "What the shop holds, with the warehouse QR on every item"},
+
+    {"key": "stock_inward", "endpoint": "storestock.inward", "icon": "bi-box-arrow-in-down",
+     "label": "Stock Inward", "owns": ["storestock.inward"], "manager": False,
+     "blurb": "Count in what the warehouse or another branch sent here"},
+
+    {"key": "transfer_goods", "endpoint": "storestock.transfer", "icon": "bi-box-arrow-up-right",
+     "label": "Transfer Goods", "owns": ["storestock.transfer"], "manager": False,
+     "blurb": "Send goods back to a warehouse, or across to another branch"},
 
     {"key": "audits", "endpoint": "audits.index", "icon": "bi-clipboard-check",
      "label": "Stock audit", "owns": ["audits."], "manager": False,
@@ -84,7 +97,7 @@ STORE_HEADER = "X-Essa-Store-Access"
 #: The modules a Store user sees: the floor's day — billing, handing over,
 #: looking up stock, the customer, taking goods back, alterations. Nothing that
 #: reports on the store or configures it.
-STORE_USER_MODULES = ("counter", "delivery", "inventory", "customers", "returns",
+STORE_USER_MODULES = ("counter", "settlement", "delivery", "inventory", "customers", "returns",
                       "alterations")
 
 #: …and what billing needs that belongs to no menu entry of its own: signing in

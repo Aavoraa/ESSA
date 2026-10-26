@@ -68,6 +68,23 @@ COLUMNS = [
     ("products", "fit", "VARCHAR(64)"),
     ("products", "design_no", "VARCHAR(64)"),
     ("invoices", "staff_id", "INTEGER"),           # who served the sale
+    ("invoice_items", "staff_id", "INTEGER"),      # …and who sold each line
+    ("invoice_items", "list_price", "FLOAT"),      # price before the line's discount
+    # Sales promotion schemes — see app/schemes.py.
+    ("invoice_items", "scheme_id", "INTEGER"),
+    ("invoice_items", "scheme_pct", "FLOAT"),
+    ("invoices", "agreement_code", "VARCHAR(64)"),
+    ("invoices", "scheme_discount", "FLOAT"),
+    ("products", "brand", "VARCHAR(64)"),
+    ("products", "style", "VARCHAR(64)"),
+    ("products", "sleeve", "VARCHAR(64)"),
+    ("products", "supplier", "VARCHAR(128)"),
+    ("products", "purchase_invoice", "VARCHAR(64)"),
+    ("products", "purchase_date", "DATE"),
+    ("products", "marker", "VARCHAR(64)"),
+    ("sales_schemes", "mode", "VARCHAR(16)"),
+    ("sales_scheme_benefits", "flat", "BOOLEAN"),
+    ("sales_scheme_benefits", "item_code", "VARCHAR(64)"),
     # Which entity billed it, from where, and at which till — see app/places.py.
     # Nullable: every invoice raised before there were counters has no answer,
     # and inventing one would be worse than leaving it blank.
@@ -111,6 +128,8 @@ COLUMNS = [
     ("invoices", "cancel_reason", "VARCHAR(256)"),
     # The coupon's share of a bill's discount — see app/vouchers.py.
     ("invoices", "coupon_discount", "FLOAT"),
+    # Who approved a bill's discounts — the discount card's E.Code.
+    ("invoices", "discount_by_id", "INTEGER"),
     # Which till raised a credit note, so a cash refund comes out of its drawer.
     ("credit_notes", "counter_id", "INTEGER"),
 ]

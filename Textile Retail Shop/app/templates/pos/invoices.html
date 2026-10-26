@@ -113,8 +113,8 @@
           <td class="text-end fw-bold" style="color:var(--brand-dark)">{{ i.total|inr }}</td>
           {% endif %}
           <td>
-            <a href="{{ url_for('pos.view_invoice', iid=i.id) }}" class="btn btn-sm btn-outline-primary"><i class="bi bi-eye"></i></a>
-            <a href="{{ url_for('pos.print_invoice', iid=i.id) }}" class="btn btn-sm btn-outline-secondary"><i class="bi bi-printer"></i></a>
+            <a href="{{ url_for('pos.view_invoice', iid=i.id) }}" class="btn btn-sm btn-outline-primary" title="View bill" aria-label="View bill"><i class="bi bi-eye"></i></a>
+            <a href="{{ url_for('pos.print_invoice', iid=i.id) }}" class="btn btn-sm btn-outline-secondary" title="Print bill" aria-label="Print bill"><i class="bi bi-printer"></i></a>
           </td>
         </tr>
         {% else %}

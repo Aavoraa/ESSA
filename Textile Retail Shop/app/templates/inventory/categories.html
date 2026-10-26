@@ -17,7 +17,7 @@
         every start. Add one here only for something the master doesn't carry yet.
       </p>
       <input class="form-control mb-2" name="name" placeholder="Name" required>
-      <select class="form-select mb-2" name="section">
+      <select class="form-select mb-2" name="section" aria-label="Section">
         <option value="">Section — none</option>
         {% for s in sections %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
       </select>

@@ -269,8 +269,10 @@ def receive_outward(db, outward, accepted=None, received_by=None, date=None):
                 db, prod, outward.to_warehouse_id, float(l.accepted_qty or 0),
                 kind="inward", ref_type="transfer_in", ref_id=outward.id,
                 rate=l.rate or prod.avg_cost or 0,
-                note=f"Transfer {outward.code} from "
-                     f"{outward.from_warehouse.name if outward.from_warehouse else ''}".strip())
+                note=(f"Store return {outward.code} from {outward.from_location or ''}".strip()
+                      if outward.from_store_id else
+                      f"Transfer {outward.code} from "
+                      f"{outward.from_warehouse.name if outward.from_warehouse else ''}".strip()))
             if mv is not None:
                 landed += 1
         db.flush()

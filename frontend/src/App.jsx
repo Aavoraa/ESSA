@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react'
+import React, { useEffect, useLayoutEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { api, session, warehouse, setUnauthorizedHandler, swr, readCache } from './api.js'
 import { parseDictation, coerceSpoken, dictationTargets } from './voicefill.js'
 
@@ -72,32 +72,91 @@ function useReshow(active, reload) {
 // how many dashboards (per warehouse) stay open at once
 const STASH_MAX = 8
 
+// "Fit": as many rows as the window has room for, so a list pages instead of
+// scrolling. It is the default page size; the fixed sizes are still offered.
+const PAGE_FIT = -1
+
+// How many rows fit, read off the screen as it is drawn. `anchor` is a marker
+// the Pager leaves right after the list; the list is whatever sits before it.
+// The rows are sized against the nearest scrolling box: if it overflows, drop
+// as many rows as the overflow is tall; if it has a row's worth of room to
+// spare, add rows. Two or three renders and it settles.
+function fitRows(anchor, cur, total) {
+  let list = anchor.parentElement?.previousElementSibling
+  if (list && !list.querySelector('tbody, li, tr') && list.previousElementSibling) list = list.previousElementSibling
+  const body = list?.querySelector('tbody') || list
+  const n = body?.children?.length || 0
+  if (!n) return cur
+  const rowH = body.getBoundingClientRect().height / n
+  if (!(rowH > 4)) return cur
+  let sc = anchor.parentElement
+  while (sc && sc !== document.body) {
+    const oy = getComputedStyle(sc).overflowY
+    if ((oy === 'auto' || oy === 'scroll') && sc.clientHeight > 80) break
+    sc = sc.parentElement
+  }
+  if (!sc || sc === document.body) sc = document.documentElement
+  const over = sc.scrollHeight - sc.clientHeight
+  if (over > 1) return Math.max(3, cur - Math.ceil(over / rowH))
+  if (cur >= total) return cur
+  const box = sc === document.documentElement ? { bottom: window.innerHeight } : sc.getBoundingClientRect()
+  const padB = parseFloat(getComputedStyle(sc).paddingBottom) || 0
+  let low = 0
+  for (const c of sc.children) low = Math.max(low, c.getBoundingClientRect().bottom + (parseFloat(getComputedStyle(c).marginBottom) || 0))
+  const spare = box.bottom - padB - low
+  return spare >= rowH ? Math.min(total, cur + Math.floor(spare / rowH)) : cur
+}
+
 function usePaged(rows, initial = 50) {
   const [page, setPage] = useState(1)
-  const [size, setSize] = useState(initial)
+  const [size, setSize] = useState(PAGE_FIT)
+  const [fitN, setFitN] = useState(Math.min(initial, 12))
+  const [tick, setTick] = useState(0)
+  const anchor = useRef(null)
+  const tries = useRef(0)
   const list = rows || []
   const total = list.length
-  const pages = size === 0 ? 1 : Math.max(1, Math.ceil(total / size))
+  const eff = size === PAGE_FIT ? fitN : size
+  const pages = eff === 0 ? 1 : Math.max(1, Math.ceil(total / eff))
   // A filter that shortens the list must not strand you on page 9 of 3 looking
   // at an empty screen — which reads as "the search found nothing".
   useEffect(() => { if (page > pages) setPage(1) }, [pages, page])
-  const start = size === 0 ? 0 : (page - 1) * size
+  // a resized window is a new amount of room
+  useEffect(() => {
+    if (size !== PAGE_FIT) return undefined
+    let t
+    const on = () => { clearTimeout(t); t = setTimeout(() => { tries.current = 0; setTick((x) => x + 1) }, 120) }
+    window.addEventListener('resize', on)
+    return () => { window.removeEventListener('resize', on); clearTimeout(t) }
+  }, [size])
+  useEffect(() => { tries.current = 0 }, [total, size])
+  useLayoutEffect(() => {
+    if (size !== PAGE_FIT || !anchor.current || tries.current > 6) return
+    if (anchor.current.offsetParent === null) return        // a hidden tab: nothing to measure
+    const n = fitRows(anchor.current, fitN, total)
+    if (n !== fitN) { tries.current += 1; setFitN(n) }
+  })
+  void tick
+  const start = eff === 0 ? 0 : (page - 1) * eff
   return {
-    page, setPage, size, setSize, total, pages,
+    page, setPage, size, setSize, total, pages, anchor, fit: size === PAGE_FIT,
     from: total === 0 ? 0 : start + 1,
-    to: size === 0 ? total : Math.min(total, start + size),
-    slice: size === 0 ? list : list.slice(start, start + size),
+    to: eff === 0 ? total : Math.min(total, start + eff),
+    slice: eff === 0 ? list : list.slice(start, start + eff),
   }
 }
 
-function Pager({ page, setPage, size, setSize, total, pages, from, to,
+function Pager({ page, setPage, size, setSize, total, pages, from, to, anchor, fit,
                  noun = 'row', nouns, style }) {
   // Nothing to page through, and no page-size choice worth offering: a bar under
-  // a list of four is noise. The screens carry their own counts already.
-  if (total <= PAGE_SIZES[0]) return null
+  // a list of four is noise. The screens carry their own counts already. The
+  // marker stays either way — it is what "Fit" measures from.
+  const mark = <span ref={anchor} className="pager-anchor" aria-hidden="true" />
+  if (pages <= 1 && total <= PAGE_SIZES[0]) return <div className="pager-mark">{mark}</div>
   const go = (p) => setPage(Math.min(pages, Math.max(1, p)))
   return (
     <div className="pager" style={style}>
+      {mark}
       <span className="pager-count">
         <b>{from.toLocaleString('en-IN')}–{to.toLocaleString('en-IN')}</b>
         {' of '}<b>{total.toLocaleString('en-IN')}</b>{' '}
@@ -106,6 +165,7 @@ function Pager({ page, setPage, size, setSize, total, pages, from, to,
       <label className="pager-size">
         Show
         <select value={size} onChange={(e) => { setSize(+e.target.value); setPage(1) }}>
+          <option value={PAGE_FIT}>Fit</option>
           {PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}
           <option value={0}>All</option>
         </select>
@@ -118,6 +178,124 @@ function Pager({ page, setPage, size, setSize, total, pages, from, to,
         <button className="btn" disabled={page >= pages} onClick={() => go(pages)} title="Last page">»</button>
       </div>
     </div>
+  )
+}
+
+// ---------- one screen, no scrolling ----------
+// A screen with more panels than the window holds is shown a window at a time.
+// The first `keep` children always stay on top (the ask box, the headline
+// figures); the rest are flowed, in order, into pages that each fit what is
+// left of the window, and a slim bar underneath turns between them. Every panel
+// stays mounted — a hidden page keeps its data, its scroll and its open state —
+// so turning a page is instant and changes nothing. A panel taller than the
+// window gets a page of its own.
+function blockHeight(el) {
+  const cs = getComputedStyle(el)
+  return el.getBoundingClientRect().height + (parseFloat(cs.marginTop) || 0) + (parseFloat(cs.marginBottom) || 0)
+}
+// The room taken under `el` by the boxes between it and its scroller: their
+// bottom padding and borders, which the scroller's own height does not show.
+function padBelow(el, sc) {
+  let n = 0
+  for (let p = el.parentElement; p; p = p.parentElement) {
+    const cs = getComputedStyle(p)
+    n += (parseFloat(cs.paddingBottom) || 0) + (parseFloat(cs.borderBottomWidth) || 0)
+    if (p === sc) break
+  }
+  return n
+}
+function scrollBox(el) {
+  for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+    const oy = getComputedStyle(p).overflowY
+    if (oy === 'auto' || oy === 'scroll') return p
+  }
+  return document.documentElement
+}
+function FitPages({ children, keep = 0 }) {
+  const blocks = React.Children.toArray(children).filter(Boolean)
+  const head = blocks.slice(0, keep)
+  const rest = blocks.slice(keep)
+  const bodyRef = useRef(null)
+  const refs = useRef([])
+  const heights = useRef([])
+  const [plan, setPlan] = useState(null)            // { groups: [[i…]…], titles: [..] }
+  const [page, setPage] = useState(0)
+  const [, setTick] = useState(0)
+  const BAR = 58                                   // the page bar, its gap and its rule
+
+  useLayoutEffect(() => {
+    const body = bodyRef.current
+    if (!body || body.offsetParent === null) return  // a hidden tab: nothing to measure
+    const titles = []
+    rest.forEach((_, i) => {
+      const r = refs.current[i]
+      if (!r) return
+      if (r.style.display !== 'none') heights.current[i] = blockHeight(r)
+      const h = r.querySelector('h4, h5, h3, h2')
+      titles[i] = h ? h.innerText.trim().split('\n')[0] : ''
+    })
+    const sc = scrollBox(body)
+    const bottom = sc === document.documentElement ? window.innerHeight : sc.getBoundingClientRect().bottom
+    const padB = padBelow(body, sc)
+    const avail = bottom - padB - (body.getBoundingClientRect().top + sc.scrollTop * (sc === document.documentElement ? 0 : 1)) - BAR
+    const gap = parseFloat(getComputedStyle(body).rowGap) || 0   // a flex column's spacing
+    const groups = []
+    let cur = []
+    let h = 0
+    rest.forEach((_, i) => {
+      const bh = (heights.current[i] || 0) + (cur.length ? gap : 0)
+      if (cur.length && h + bh > avail) { groups.push(cur); cur = []; h = 0 }
+      cur.push(i)
+      h += bh
+    })
+    if (cur.length) groups.push(cur)
+    const next = { groups, titles }
+    if (JSON.stringify(next) !== JSON.stringify(plan)) setPlan(next)
+  })
+  // new room: a resized window, or a panel that grew when its data arrived
+  useEffect(() => {
+    const bump = () => setTick((t) => t + 1)
+    window.addEventListener('resize', bump)
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(bump) : null
+    refs.current.forEach((r) => r && ro?.observe(r))
+    return () => { window.removeEventListener('resize', bump); ro?.disconnect() }
+  }, [rest.length])
+  const groups = plan?.groups || [rest.map((_, i) => i)]
+  const pg = Math.min(page, groups.length - 1)
+  const go = (p) => {
+    setPage(p)
+    const sc = bodyRef.current && scrollBox(bodyRef.current)
+    if (sc) sc.scrollTop = 0
+  }
+  const label = (g) => {
+    const t = plan?.titles?.[g[0]] || ''
+    return t.length > 28 ? t.slice(0, 27) + '…' : t
+  }
+  return (
+    <>
+      {head}
+      <div ref={bodyRef} className="fitpages">
+        {rest.map((b, i) => (
+          <div key={i} ref={(r) => { refs.current[i] = r }} className="fitblock"
+            style={plan && !groups[pg].includes(i) ? { display: 'none' } : undefined}>{b}</div>
+        ))}
+      </div>
+      {plan && groups.length > 1 && (
+        <nav className="fitbar" aria-label="Pages of this screen">
+          <button className="btn" disabled={pg === 0} onClick={() => go(pg - 1)}>‹ Previous</button>
+          <div className="fitbar-pages">
+            {groups.map((g, i) => (
+              <button key={i} className={'fitbar-pg' + (i === pg ? ' on' : '')}
+                aria-current={i === pg ? 'page' : undefined} onClick={() => go(i)}
+                title={g.map((j) => plan.titles[j]).filter(Boolean).join(' · ')}>
+                <b>{i + 1}</b>{label(g) && <span>{label(g)}</span>}
+              </button>
+            ))}
+          </div>
+          <button className="btn" disabled={pg >= groups.length - 1} onClick={() => go(pg + 1)}>Next ›</button>
+        </nav>
+      )}
+    </>
   )
 }
 
@@ -635,6 +813,12 @@ const nf = (v) => {
 const r2 = (v) => (v == null ? null : Math.round(v * 100) / 100)
 // quantities are floats — rounded, and compared, the way the server posts them
 const round3 = (n) => Math.round((+n || 0) * 1000) / 1000
+// Shop prices go on a tag, and the tags are priced in tens: 343 is shown as 340,
+// 345 as 350. Only prices this screen WORKS OUT are rounded — a price somebody
+// types stands as typed.
+// Settled to the paisa first: 175 + 40% computes as 244.99999…, which must
+// still go UP to 250 like any price ending in 5.
+const round10 = (v) => (v == null ? null : Math.round(Math.round(v * 100) / 1000) * 10)
 
 // Fields a human can type on a line, and what each one drives. `amount` and
 // `taxable_value` are outputs of the row above them but inputs when typed
@@ -708,7 +892,7 @@ function markup(base, pct) {
   // is what makes the chain produce prices that can go on a label, and it
   // closes the round trip: 320 + 40% → 448, and 448 against 320 reads back as
   // 40%.
-  return Math.round(base * (1 + pct / 100))
+  return round10(base * (1 + pct / 100))
 }
 function unmarkup(top, pct) {
   if (top == null || pct == null || pct <= -100) return null
@@ -730,8 +914,11 @@ const SALE_KEYS = { mrp: 'mrp', sale_discount_pct: 'pct', sale_price: 'price' }
 function recalcSale(row, edited, blank = '') {
   const corner = SALE_KEYS[edited]
   if (!corner) return row
-  const [pct, price] = fromMrp(nf(row.mrp), nf(row.sale_discount_pct),
-                               nf(row.sale_price), corner)
+  let [pct, price] = fromMrp(nf(row.mrp), nf(row.sale_discount_pct),
+                             nf(row.sale_price), corner)
+  // a sell price worked out from MRP − Sale disc % is rounded to the tag's tens;
+  // the percentage typed stays as typed
+  if (corner !== 'price' && price != null) price = round10(price)
   return { ...row, sale_discount_pct: pct ?? blank, sale_price: price ?? blank }
 }
 
@@ -782,10 +969,27 @@ function recalcLine(row, edited, prev = row) {
   // The MRP-down block above is untouched and still runs for a bill that STATES
   // its retail price and a discount off it; this is the other half, for goods
   // that arrive with no tag.
-  const mrpBuffer = nf(L.mrp_buffer_pct)
+  const typedMrpBuffer = nf(L.mrp_buffer_pct)
   let sell = nf(L.sale_price)
 
-  if (CHAIN_KEYS.has(edited)) {
+  // A buffer that was SET — typed, or filled down the column — is a pricing
+  // rule for the line, not a figure read off it: it stays at what was set and
+  // the prices follow it, whichever of the two is set first and whatever is
+  // edited afterwards. Setting a price by hand at that end hands control back
+  // (a typed sell price drops the buffer rule, a typed MRP the MRP buffer rule;
+  // a typed sell price keeps the MRP buffer, so the MRP follows it).
+  if (edited === 'buffer_pct') L.buffer_set = buffer != null
+  if (edited === 'sale_price') L.buffer_set = false
+  if (edited === 'mrp_buffer_pct') L.mrp_buffer_set = typedMrpBuffer != null
+  if (edited === 'mrp') L.mrp_buffer_set = false
+  // The MRP buffer is ONLY ever what somebody filled in. It is never worked
+  // out from the prices and shown back, so the column stays empty until it is
+  // set, and a value left over from before is not a rule nobody chose.
+  const mrpBuffer = L.mrp_buffer_set ? typedMrpBuffer : null
+  const keepBuffer = !!L.buffer_set && buffer != null
+  const keepMrpBuffer = !!L.mrp_buffer_set && mrpBuffer != null
+
+  if (CHAIN_KEYS.has(edited) || ((keepBuffer || keepMrpBuffer) && PRICE_KEYS.has(edited))) {
     // A sell price that was TYPED stands — it is the decision, and the buffer
     // above the cost is what follows from it (restated at the foot of this
     // function). Recomputing it from the cost here would overwrite the number
@@ -801,7 +1005,8 @@ function recalcLine(row, edited, prev = row) {
     // says, so it stands. The chain fills it only where there is none — except
     // when the MRP buffer is what was just typed, which is somebody saying
     // plainly what the tag should be.
-    if (mrpBuffer != null && sell != null && (mrp == null || edited === 'mrp_buffer_pct')) {
+    if (mrpBuffer != null && sell != null
+        && (mrp == null || edited === 'mrp_buffer_pct' || keepMrpBuffer)) {
       mrp = markup(sell, mrpBuffer)
     }
     // Both discounts restated from wherever the prices landed. They are the
@@ -837,12 +1042,10 @@ function recalcLine(row, edited, prev = row) {
   // the cost, and sale_price is deliberately not a PRICE_KEY — it says nothing
   // about what the supplier charged, so it must not stir the purchase discount.
   const movedPrices = PRICE_KEYS.has(edited) || CHAIN_KEYS.has(edited)
-  if (movedPrices && edited !== 'buffer_pct') {
+  if (movedPrices && edited !== 'buffer_pct' && !keepBuffer) {
     L.buffer_pct = bufferFrom(L.sale_price, rate)
   }
-  if (movedPrices && edited !== 'mrp_buffer_pct') {
-    L.mrp_buffer_pct = bufferFrom(mrp, L.sale_price)
-  }
+  if (!L.mrp_buffer_set) L.mrp_buffer_pct = null
   // The taxable value is the line amount unless the invoice states its own. It
   // keeps up while it merely echoes the amount; the moment someone types a
   // different figure into it, that is an assertion about the invoice and nothing
@@ -911,10 +1114,30 @@ function recalcTotals(data) {
   tot.taxable_total = taxable || sub
   tot.tax_total = r2((nf(tax.cgst_amount) || 0) + (nf(tax.sgst_amount) || 0)
                      + (nf(tax.igst_amount) || 0))
-  tot.grand_total = r2((tot.taxable_total || 0) + tot.tax_total
-                       + (nf(tax.other_charges) || 0) + (nf(tax.freight) || 0)
-                       - (nf(tax.special_discount) || 0) + (nf(tax.round_off) || 0))
+  tot.grand_total = r2(preRoundTotal(data, tot) + (nf(tax.round_off) || 0))
   return tot
+}
+
+// The invoice before rounding: taxable + tax + charges + freight − special discount.
+function preRoundTotal(data, tot) {
+  const tax = data.taxes || {}
+  return r2((tot.taxable_total || 0) + (tot.tax_total || 0)
+            + (nf(tax.other_charges) || 0) + (nf(tax.freight) || 0)
+            - (nf(tax.special_discount) || 0))
+}
+
+// The foot, with the invoice rounded to the nearest rupee: Round Off is what it
+// takes to get there (₹1,234.56 → ₹1,235.00, round off +0.44; 50 paise rounds
+// up). Worked out every time the foot is — unless Round Off itself is the field
+// just typed in, when the figure typed is kept (a supplier's own round-off).
+// The server applies the same rule (extraction/validate.py).
+function settleFoot(next, edited) {
+  const base = recalcTotals({ ...next, taxes: { ...(next.taxes || {}), round_off: 0 } })
+  const pre = preRoundTotal(next, base)
+  const taxes = { ...(next.taxes || {}) }
+  if (edited !== 'round_off') taxes.round_off = r2(Math.floor(pre + 0.5) - pre)
+  const withRound = { ...next, taxes }
+  return { ...withRound, totals: recalcTotals(withRound) }
 }
 
 // --- size runs: "28-2-38" is six rows of three ---
@@ -1019,7 +1242,15 @@ function useProductOptions() {
 // it the input and moves the others instead (see recalcLine).
 const ITEM_COLS = [
   ['description', 'Description', false, 200],
+  // From the receiving warehouse's category master; carried onto the GRN line,
+  // which is why the GRN screen no longer asks for it.
+  ['category', 'Category', false, 140],
   ['brand', 'Brand', false, 90], ['design', 'Design', false, 90], ['size', 'Size', false, 116],
+  // What the goods are, beyond brand / design / size — carried onto the GRN line
+  // and from there onto the product when it posts.
+  ['style', 'Style', false, 96], ['material', 'Material', false, 96],
+  ['pattern', 'Pattern', false, 96], ['sleeve', 'Sleeve', false, 86],
+  ['product_type', 'Type', false, 96],
   ['hsn', 'HSN', false, 80], ['qty', 'Qty', true, 60], ['uom', 'UOM', false, 60],
   // MRP → less the discount → Rate, read left to right, every one of them PER
   // PIECE so the row can be checked against the invoice by eye: 995 − 345 = 650.
@@ -1039,7 +1270,7 @@ const ITEM_COLS = [
   // The second half of the chain. Two markups because they answer two
   // questions: what to charge, and how much room to leave above that for a
   // discount the customer can see on the tag.
-  ['mrp_buffer_pct', 'MRP Buffer %', true, 128, 'On top of the SELL price: MRP = Sell × (1 + this) — e.g. 448 + 25% = 560. The room above your price that the printed tag shows.'],
+  ['mrp_buffer_pct', 'MRP Buffer %', true, 128, 'On top of the SELL price: MRP = Sell × (1 + this) — e.g. 448 + 25% = 560. The room above your price that the printed tag shows. Empty until you fill it.'],
   ['sale_discount_pct', 'Sale Disc %', true, 96, 'Off MRP for the SHOP — what the tag shows the customer saving. Follows from the two buffers; type a sell price instead and this fills itself.'],
   ['sale_price', 'Sell Price', true, 92, 'What you CHARGE: MRP less the sale discount — e.g. 995 − 20% = 796. Type it and its % follows.'],
   ['taxable_value', 'Taxable', true, 90, 'Line total. The Amount, unless the invoice states its own.'],
@@ -1052,7 +1283,8 @@ const ITEM_COLS = [
 //: cure is showing the three hundred that exist before somebody types the three
 //: hundred and first. `uom` and `size` have lists too and take one line each,
 //: but a size cell on this screen is as often a run as a size.
-const ITEM_LISTED = { brand: 'brand' }
+const ITEM_LISTED = { category: 'category', brand: 'brand', style: 'style', material: 'material',
+                      pattern: 'pattern', sleeve: 'sleeve', product_type: 'product_type' }
 
 //: Columns where ONE value for the whole invoice is a sensible thing to say, and
 //: what kind of box says it. A supplier's bill is very often all one brand, all
@@ -1070,7 +1302,8 @@ const ITEM_LISTED = { brand: 'brand' }
 //:   amount           with one number back-solves a different rate onto every
 //:                    line, which is arithmetic nobody asked for.
 const ITEM_FILL = {
-  brand: 'text', design: 'text', size: 'text', hsn: 'text', uom: 'text',
+  category: 'text', brand: 'text', design: 'text', size: 'text', hsn: 'text', uom: 'text',
+  style: 'text', material: 'text', pattern: 'text', sleeve: 'text', product_type: 'text',
   mrp: 'num', discount_pct: 'pct', rate: 'num',
   buffer_pct: 'pct', mrp_buffer_pct: 'pct',
   sale_discount_pct: 'pct', sale_price: 'num',
@@ -1111,7 +1344,7 @@ const groupItems = (items) => {
   }
   return out
 }
-const ITEM_CALC = new Set(['rate', 'discount_pct', 'buffer_pct', 'mrp_buffer_pct',
+const ITEM_CALC = new Set(['rate', 'discount_pct', 'buffer_pct',
   'mrp', 'amount', 'taxable_value', 'sale_discount_pct', 'sale_price'])
 
 function LineItems({ items, setItems }) {
@@ -1128,7 +1361,12 @@ function LineItems({ items, setItems }) {
   const view = useMemo(() => groupItems(items), [items])
   const [folded, setFolded] = useState({})       // group signature -> folded away
   const page = usePaged(view, 25)
-  const opts = useProductOptions()
+  const prodOpts = useProductOptions()
+  const [cats, setCats] = useState([])
+  useEffect(() => {
+    api.categories().then((c) => setCats((c.items || []).map((i) => i.name))).catch(() => {})
+  }, [])
+  const opts = useMemo(() => ({ ...prodOpts, category: cats }), [prodOpts, cats])
   // Which line has its size run open, and what has been typed into it. One box
   // serves the whole table because only one line is ever being split.
   const [runFor, setRunFor] = useState(null)
@@ -1153,10 +1391,6 @@ function LineItems({ items, setItems }) {
   const cell = (it, k) => {
     if (k === 'buffer_pct' && (it.buffer_pct == null || it.buffer_pct === '')) {
       const b = bufferFrom(nf(it.sale_price), nf(it.rate))
-      return b == null ? '' : b
-    }
-    if (k === 'mrp_buffer_pct' && (it.mrp_buffer_pct == null || it.mrp_buffer_pct === '')) {
-      const b = bufferFrom(nf(it.mrp), nf(it.sale_price))
       return b == null ? '' : b
     }
     return it[k] ?? ''
@@ -1405,7 +1639,7 @@ function LineItems({ items, setItems }) {
         <thead><tr><th style={{ minWidth: 34 }} title="Line number on the invoice">#</th>
           {ITEM_COLS.map(([k, l, , w, tip]) =>
           <th key={k} style={{ minWidth: w }} title={tip}
-            className={ITEM_CALC.has(k) ? 'calc' : undefined}>{l}{tip ? ' ƒ' : ''}</th>)}<th></th></tr>
+            className={ITEM_CALC.has(k) ? 'calc' : undefined}>{l}{ITEM_CALC.has(k) ? ' ƒ' : ''}</th>)}<th></th></tr>
           {/* Under the headings, not in a toolbar above the table: the control
               belongs to the column it fills, and aligned under it there is
               nothing to explain about which is which. */}
@@ -2369,7 +2603,7 @@ function Review({ docId, onSaved, onCreateGrn, toast, onBack, purchaseId, posted
       onChange={(v) => {
         const taxes = recalcTaxes({ ...tax, [key]: num(v) }, taxBase(data), key)
         const next = { ...data, taxes }
-        setData({ ...next, totals: recalcTotals(next) })
+        setData(settleFoot(next, key))
       }} />
   )
   // Recompute the whole foot from the lines up. Explicit, and never automatic on
@@ -2377,7 +2611,14 @@ function Review({ docId, onSaved, onCreateGrn, toast, onBack, purchaseId, posted
   // quietly restated its own figures would hide the very disagreement the checks
   // above are reporting.
   const recalcAll = () => {
-    const items = (data.line_items || []).map((it) => recalcLine(it, 'qty'))
+    // …and every sell price onto the nearest 10, with its discount and buffers
+    // restated from where it lands
+    const items = (data.line_items || []).map((it) => {
+      const l = recalcLine(it, 'qty')
+      const sp = nf(l.sale_price)
+      return sp != null && sp !== round10(sp)
+        ? recalcLine({ ...l, sale_price: round10(sp) }, 'sale_price', l) : l
+    })
     let next = { ...data, line_items: items }
     const base = taxBase(next)
     let taxes = { ...(next.taxes || {}) }
@@ -2386,7 +2627,7 @@ function Review({ docId, onSaved, onCreateGrn, toast, onBack, purchaseId, posted
       else if (nf(taxes[ak])) taxes = recalcTaxes(taxes, base, ak)
     }
     next = { ...next, taxes }
-    setData({ ...next, totals: recalcTotals(next) })
+    setData(settleFoot(next))
     toast('⟲ Recalculated from the lines up — check it against the image before saving', 'ok')
   }
   // a date read off the page: same review flags and LR-source badge as any other
@@ -2587,8 +2828,9 @@ function Review({ docId, onSaved, onCreateGrn, toast, onBack, purchaseId, posted
                 posted; the server refuses a posted one anyway, because its GRN
                 was built from the reading being replaced. */}
             {doc && doc.has_image !== false && doc.status !== 'posted' && (
-              <div style={{ marginTop: 10 }}>
-                <button className="btn" disabled={reading} onClick={readAgain}>
+              <div className="reread" style={{ marginTop: 10 }}>
+                <button className="btn" disabled={reading} onClick={readAgain}
+                  title="Replaces this reading with a fresh one from the stored page(s). Anything typed here by hand and not yet confirmed is lost.">
                   {reading ? 'Reading — this can take a minute…' : 'Read it again'}</button>
                 <span className="small" style={{ marginLeft: 10 }}>
                   Replaces this reading with a fresh one from the
@@ -2627,7 +2869,9 @@ function Review({ docId, onSaved, onCreateGrn, toast, onBack, purchaseId, posted
 
           {tab === 'party' && (
           <div className="section">
+            <FitPages keep={1}>
             <h4>Supplier &amp; Buyer</h4>
+            <div>
             <h5>Supplier</h5>
             <div className="grid">
               {f('supplier.name', 'Name', { raw: true })}
@@ -2636,11 +2880,16 @@ function Review({ docId, onSaved, onCreateGrn, toast, onBack, purchaseId, posted
               {f('supplier.pan', 'PAN', { raw: true })}
               {f('supplier.state', 'State', { raw: true })}
               {f('supplier.state_code', 'State Code', { raw: true })}
+            </div>
+            </div>
+            <div>
+            <div className="grid">
               {f('supplier.cin', 'CIN', { raw: true })}
               {f('supplier.phone', 'Phone', { raw: true })}
               {f('supplier.email', 'Email', { raw: true })}
               {f('supplier.manufacturer', 'Manufacturer / MFG by', { raw: true })}
               {f('supplier.address', 'Address', { raw: true, wide: true })}
+            </div>
             </div>
             {/* the bank and the buyer are short blocks — side by side they cost
                 one screen between them instead of two */}
@@ -2664,16 +2913,19 @@ function Review({ docId, onSaved, onCreateGrn, toast, onBack, purchaseId, posted
                 </div>
               </div>
             </div>
+            </FitPages>
           </div>
           )}
 
           {tab === 'invoice' && (
           <div className="section">
+            <FitPages keep={1}>
             <h4>Invoice &amp; Transport
               <button className="h4btn" disabled={saving} onClick={fetchFromLr}
                 title="Fill LR No, LR Date, Transporter and Book City from the matching LR register row">
                 ⟲ fetch from LR register</button>
             </h4>
+            <div>
             <h5>Invoice</h5>
             <div className="grid">
               {f('invoice.number', 'Invoice No', { raw: true })}
@@ -2687,6 +2939,8 @@ function Review({ docId, onSaved, onCreateGrn, toast, onBack, purchaseId, posted
               {f('invoice.agent', 'Agent', { raw: true })}
               {f('invoice.broker', 'Broker', { raw: true })}
             </div>
+            </div>
+            <div>
             <h5>E-invoice &amp; Transport</h5>
             <div className="grid">
               {f('invoice.irn', 'IRN', { raw: true, wide: true })}
@@ -2701,8 +2955,10 @@ function Review({ docId, onSaved, onCreateGrn, toast, onBack, purchaseId, posted
               {f('invoice.book_city', 'Book City', { raw: true })}
               {f('invoice.delivery_note', 'Delivery Note', { raw: true })}
             </div>
+            </div>
             {lrCands && <LrCandidates info={lrCands} busy={saving}
               onLink={linkLrRow} onClose={() => setLrCands(null)} />}
+            </FitPages>
           </div>
           )}
 
@@ -2713,6 +2969,7 @@ function Review({ docId, onSaved, onCreateGrn, toast, onBack, purchaseId, posted
               against the wrong taxable value looked perfectly fine. */}
           {tab === 'money' && (
           <div className="section money">
+            <FitPages keep={1}>
             <h4>Line Items, Taxes &amp; Totals
               <span className="calcbase" title="The figure every tax rate below is charged on">
                 taxable base ₹ {money(taxBase(data))}</span>
@@ -2723,10 +2980,9 @@ function Review({ docId, onSaved, onCreateGrn, toast, onBack, purchaseId, posted
             <LineItems items={data.line_items || []}
               setItems={(it) => {
                 const next = { ...data, line_items: it }
-                setData({ ...next, totals: recalcTotals(next) })
+                setData(settleFoot(next))
               }} />
 
-            <div className="moneysplit">
               <div>
                 <h5>Taxes</h5>
                 <div className="grid">
@@ -2740,7 +2996,7 @@ function Review({ docId, onSaved, onCreateGrn, toast, onBack, purchaseId, posted
                   {ft('special_discount', 'Special Discount', { calc: '% × taxable base. Type an amount to see its %. Deducted from the grand total.' })}
                   {ft('other_charges', 'Other Charges')}
                   {ft('freight', 'Freight')}
-                  {ft('round_off', 'Round Off')}
+                  {ft('round_off', 'Round Off', { calc: 'Takes the grand total to the nearest rupee — worked out by itself. Type a figure to use the supplier’s own.' })}
                   {ft('tds_amount', 'TDS', { note: 'Deducted when the bill is paid, not from the invoice total.' })}
                 </div>
               </div>
@@ -2755,7 +3011,7 @@ function Review({ docId, onSaved, onCreateGrn, toast, onBack, purchaseId, posted
                   {f('totals.amount_in_words', 'Amount in Words', { raw: true, wide: true })}
                 </div>
               </div>
-            </div>
+            </FitPages>
           </div>
           )}
 
@@ -3020,6 +3276,8 @@ const receivedQty = (l) => +(l.received_qty != null ? l.received_qty : l.qty) ||
 // (a list to refresh), `onDeleted` when the draft is deleted.
 function GrnWork({ selId, toast, onChanged, onDeleted, embedded }) {
   const [grn, setGrn] = useState(null)
+  // the lines page to fit the window, like every other list
+  const linePage = usePaged(grn?.lines || [], 25)
   const opts = useProductOptions()                 // attribute option lists
   const [cats, setCats] = useState([])             // category master names
   const [splitFor, setSplitFor] = useState(null)   // line id whose breakdown is open
@@ -3459,6 +3717,7 @@ function GrnWork({ selId, toast, onChanged, onDeleted, embedded }) {
         <div className={embedded ? 'grn-embed' : undefined}
           style={embedded ? undefined : { flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
           <div className={embedded ? 'section' : 'editor'}>
+            <FitPages keep={1}>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 14 }}>
               {embedded
                 ? <h4 style={{ margin: 0 }}>Receive &amp; Post</h4>
@@ -3503,7 +3762,7 @@ function GrnWork({ selId, toast, onChanged, onDeleted, embedded }) {
               <div className="tablewrap">
               <table className="items">
                 <thead><tr><th>Product</th><th>QR code</th><th>Description</th>
-                  <th style={{ minWidth: 150 }}>Category</th><th>HSN</th>
+                  <th>HSN</th>
                   <th style={{ textAlign: 'right' }} title="What the supplier invoiced">Billed</th>
                   <th style={{ textAlign: 'right' }} title="What actually came out of the boxes">Received</th>
                   <th style={{ minWidth: 190 }} title="What one of these is — piece, pair, dozen — and what the billed quantity becomes because of it. This is what reaches stock, and how many QR labels print.">Unit → stock</th>
@@ -3531,7 +3790,6 @@ function GrnWork({ selId, toast, onChanged, onDeleted, embedded }) {
                   {editable && (
                     <tr className="fillrow">
                       <th /><th /><th />
-                      <th>{gfillCell('category', 'Category')}</th>
                       <th /><th /><th />
                       <th>{gfillCell('unit_type', 'Unit')}</th>
                       <th /><th />
@@ -3543,35 +3801,12 @@ function GrnWork({ selId, toast, onChanged, onDeleted, embedded }) {
                   )}
                 </thead>
                 <tbody>
-                  {grn.lines.map((l) => (
+                  {linePage.slice.map((l) => (
                     <React.Fragment key={l.id}>
                       <tr>
                         <td className="mono" style={{ color: 'var(--muted)' }}>{l.product_sku || '—'}</td>
                         <td className="mono">{l.qr_code || (l.splits.length ? '—' : <span style={{ color: 'var(--muted)' }}>on post</span>)}</td>
                         <td>{l.description}</td>
-                        {/* category chosen here means the product is born mapped, instead of
-                            landing "unmapped" for someone to fix product by product */}
-                        <td>{editable ? (
-                          <>
-                            <input size={1} list="essa-cats" className="mono" style={{ fontSize: 11 }}
-                              placeholder={l.category_suggestion?.best || 'unmapped'}
-                              value={pcat[l.id] ?? l.category ?? ''}
-                              onChange={(e) => setPcat({ ...pcat, [l.id]: e.target.value })}
-                              onBlur={() => { const v = pcat[l.id]
-                                if (v !== undefined && v !== (l.category ?? '')) setLineCat(l, v)
-                                setPcat((p) => { const c = { ...p }; delete c[l.id]; return c }) }}
-                              onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur() }} />
-                            {!l.category && l.category_suggestion?.best && (
-                              <button className="catchip" title={l.category_suggestion.confident
-                                ? 'Mapped from the description — click to lock it in'
-                                : 'Best guess (not confident) — click to accept'}
-                                onClick={() => setLineCat(l, l.category_suggestion.best)}>
-                                use {l.category_suggestion.best}{l.category_suggestion.confident ? '' : ' ?'}
-                              </button>
-                            )}
-                          </>
-                        ) : (l.category || l.product_category
-                          || <span className="badge review">unmapped</span>)}</td>
                         <td>{l.hsn}</td>
                         <td style={{ textAlign: 'right' }}>{l.qty}</td>
                         {/* the number that becomes stock. Equal to billed unless a
@@ -3627,29 +3862,13 @@ function GrnWork({ selId, toast, onChanged, onDeleted, embedded }) {
                           {!editable && splitToggle(l)}</td>
                         {editable && (
                           <td style={{ whiteSpace: 'nowrap' }}>
-                            <button className={'btn' + (!l.splits.length && l.size_breakdown?.rows?.length ? ' primary' : '')}
-                              style={{ padding: '2px 8px' }}
-                              onClick={() => (splitFor === l.id ? setSplitFor(null) : openSplit(l))}
-                              title={!l.splits.length && l.size_breakdown?.rows?.length
-                                ? `The invoice already carries the mix — ${l.size_breakdown.rows
-                                    .map((r) => `${r.size} → ${r.qty}`).join(', ')}`
-                                  + `\nTotal ${l.size_breakdown.total} of ${receivedQty(l)} received.`
-                                  + '\nClick to open it filled in, ready to check.'
-                                : 'Break the bundle into what actually arrived — size, colour, material…'}>
-                              {splitFor === l.id ? 'Close'
-                                : l.splits.length ? 'Edit breakdown'
-                                : l.size_breakdown?.rows?.length
-                                  ? `Break down · ${l.size_breakdown.rows.length} sizes`
-                                  : 'Break down'}</button>
-                            <button className="btn" style={{ padding: '2px 8px', marginLeft: 4 }}
+                            {/* Break down and QR are not offered here — a line is received
+                                as billed; only a shortage is recorded against it */}
+                            <button className="btn" style={{ padding: '2px 8px' }}
                               onClick={() => (shortFor === l.id ? setShortFor(null) : openShortage(l))}
                               title="Record what the supplier billed and the boxes didn't hold — it stays out of stock and becomes a claim">
                               {shortFor === l.id ? 'Close' : l.has_shortage ? '⚠ Shortage' : 'Shortage'}</button>
                             {splitToggle(l)}
-                            {!l.splits.length && (
-                              <button className="btn" style={{ padding: '2px 8px', marginLeft: 4 }} onClick={() => scanInto(l, null)}
-                                title="Scan a QR code to pin this line to an existing product">⌗ QR</button>
-                            )}
                           </td>
                         )}
                       </tr>
@@ -3665,7 +3884,7 @@ function GrnWork({ selId, toast, onChanged, onDeleted, embedded }) {
                             <span className="small" style={{ marginLeft: 8, color: 'var(--muted)' }}>
                               {s.reason || 'no reason given'}{s.recorded_by ? ` · by ${s.recorded_by}` : ''}</span>
                           </td>
-                          <td colSpan={2} className="small" style={{ color: 'var(--muted)' }}>
+                          <td className="small" style={{ color: 'var(--muted)' }}>
                             {s.claimable ? 'never entered stock — claimable' : 'extra goods, taken into stock'}</td>
                           <td style={{ textAlign: 'right' }}>—</td>
                           <td style={{ textAlign: 'right', color: 'var(--warn)' }}>
@@ -3706,8 +3925,6 @@ function GrnWork({ selId, toast, onChanged, onDeleted, embedded }) {
                           {/* the prices used to be repeated here as chips; they
                               have columns of their own now, beside the line's */}
                           <td style={{ paddingLeft: 22 }}>↳ <b>{s.label}</b></td>
-                          <td className="mono" style={{ fontSize: 11 }}>{s.category || l.category
-                            || <span style={{ color: 'var(--muted)' }}>auto</span>}</td>
                           <td>{l.hsn}</td>
                           {/* a variant row IS a received quantity — the supplier never
                               billed it separately, so there is nothing under "Billed" */}
@@ -3733,9 +3950,7 @@ function GrnWork({ selId, toast, onChanged, onDeleted, embedded }) {
                           <td>{s.product_id
                             ? <span className="badge confirmed">{s.is_new_product ? 'created' : 'matched'}</span>
                             : <span className="badge review">new</span>}</td>
-                          {editable && <td>{!s.product_id && (
-                            <button className="btn" style={{ padding: '2px 8px' }} onClick={() => scanInto(l, s.id)}
-                              title="Scan the QR of an existing product for this variant">⌗ QR</button>)}</td>}
+                          {editable && <td />}
                         </tr>
                       ))}
 
@@ -3749,7 +3964,7 @@ function GrnWork({ selId, toast, onChanged, onDeleted, embedded }) {
                         const over = missing > (+l.qty || 0) + 0.001
                         return (
                           <tr>
-                            <td colSpan={editable ? 15 : 14} style={{ background: 'var(--warn-bg)', padding: '12px 14px' }}>
+                            <td colSpan={editable ? 14 : 13} style={{ background: 'var(--warn-bg)', padding: '12px 14px' }}>
                               <div className="rowedit-bar"
                                 style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 4 }}>
                                 <b>Shortage on “{l.description}”</b>
@@ -3817,7 +4032,7 @@ function GrnWork({ selId, toast, onChanged, onDeleted, embedded }) {
                       {/* attribute-breakdown editor */}
                       {splitFor === l.id && (
                         <tr>
-                          <td colSpan={editable ? 15 : 14} style={{ background: 'var(--panel-2)', padding: '12px 14px' }}>
+                          <td colSpan={editable ? 14 : 13} style={{ background: 'var(--panel-2)', padding: '12px 14px' }}>
                             <div className="rowedit-bar"
                               style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 8 }}>
                               <b>Breakdown of “{l.description}”</b>
@@ -3976,6 +4191,7 @@ function GrnWork({ selId, toast, onChanged, onDeleted, embedded }) {
                 </tbody>
               </table>
               </div>
+              <Pager {...linePage} noun="line" />
               <div className="items-foot"><span>{grn.lines.length} lines</span>
                 {shortage.claimable_qty > 0 && (
                   <span style={{ color: 'var(--warn)' }}>
@@ -3986,6 +4202,7 @@ function GrnWork({ selId, toast, onChanged, onDeleted, embedded }) {
                 )}
                 <span>{grn.new_products} will be created as new products</span></div>
             </Section>
+            </FitPages>
           </div>
           <div className={'actionbar' + (embedded ? ' sticky' : '')}>
             <span className="small">{grn.status === 'posted'
@@ -5311,13 +5528,15 @@ function StockOutward({ toast }) {
           <div className="actionbar">
             <span className="small">{detail.status === 'received'
               ? `Received at ${detail.to_destination || 'the destination'}.`
-                + (detail.kind === 'transfer' ? ' The accepted quantity is now that warehouse’s stock.' : '')
+                + (detail.kind === 'transfer' || detail.kind === 'return' ? ' The accepted quantity is now that warehouse’s stock.' : '')
+              : detail.status === 'posted' && detail.kind === 'return'
+                ? `Sent back by ${detail.from_store || detail.from_location || 'the store'} — in transit until ${detail.to_warehouse || 'the warehouse'} counts it in on Stock Inward.`
               : detail.status === 'posted'
                 ? 'Dispatched — stock is out of ' + (detail.from_warehouse || 'the warehouse') + '. '
                   + (detail.kind === 'transfer'
                     ? `In transit until ${detail.to_warehouse} counts it in on Stock Inward.`
                     : detail.kind === 'store'
-                      ? 'The shop’s till takes it from here.'
+                      ? 'The store counts it in on its own Stock Inward (Store → Stock Inward).'
                       : 'Accept it on Stock Inward when it lands.')
                 : 'Posting takes the stock out of ' + (detail.from_warehouse || 'the warehouse') + '.'}</span>
             <div className="spacer" />
@@ -5420,7 +5639,7 @@ function StockInward({ toast }) {
           <DateField label="Date from" value={f.date_from || ''} onChange={(v) => flt.set('date_from', v)} />
           <DateField label="Date to" value={f.date_to || ''} onChange={(v) => flt.set('date_to', v)} />
           <FilterSelect label="Type" value={f.kind} onChange={(v) => flt.set('kind', v)}
-            options={[['transfer', 'Warehouse transfer'], ['store', 'To a store'], ['dispatch', 'Somewhere else']]} />
+            options={[['transfer', 'Warehouse transfer'], ['return', 'Store return'], ['store', 'To a store'], ['dispatch', 'Somewhere else']]} />
           <FilterSelect label="From warehouse" value={f.from_wh} onChange={(v) => flt.set('from_wh', v)}
             options={uniqOf(list, 'from_warehouse')} />
           <FilterSelect label="Destination" value={f.dest} onChange={(v) => flt.set('dest', v)}
@@ -6372,18 +6591,42 @@ function Reports() {
   // Dismissing a miss puts the previously selected report back, rather than
   // leaving the pane empty with a live selection behind it
   const dismissReading = () => { setAsked(null); if (!rep && key) load(key, filters) }
+  // One group at a time, picked from a dropdown, so a hundred reports in
+  // nineteen groups fit the window instead of scrolling: the group shown is the
+  // one holding the report on screen until another is picked. A search shows
+  // every group's matches, under their group names, since the matches are what
+  // is being looked for.
+  const curGroup = storeKey ? 'store:' + (store.reports.find((r) => r.key === storeKey)?.group || '')
+    : (cat.find((r) => r.key === key)?.group || '')
+  const [openGrp, setOpenGrp] = useState(null)
+  const grpChoices = [
+    ...order.filter((g) => grouped[g.key]?.length).map((g) => ({ key: g.key, name: g.name, n: grouped[g.key].length })),
+    ...store.groups.map((g) => ({ key: 'store:' + g.key, name: 'Store · ' + g.name,
+      n: store.reports.filter((r) => r.group === g.key).length })).filter((g) => g.n),
+  ]
+  const shownGrp = (openGrp && grpChoices.some((g) => g.key === openGrp)) ? openGrp
+    : (grpChoices.some((g) => g.key === curGroup) ? curGroup : grpChoices[0]?.key)
+  const isOpen = (gk) => !!rqn || shownGrp === gk
+  // under a search, each group's matches carry the group's name
+  const grpHead = (gk, name, count) => (rqn ? (
+    <div className="rep-grp">{name} <span style={{ opacity: 0.6 }}>({count})</span></div>
+  ) : null)
   return (
     <div className="body">
       <Sidebar id="reports" label="Reports">
         <div className="head"><h3>Reports · {cat.length + store.reports.length}</h3></div>
         <SearchBox value={rq} onChange={setRq} placeholder="Search reports…" />
+        {!rqn && (
+          <select className="rep-pick" value={shownGrp || ''} aria-label="Report group"
+            onChange={(e) => setOpenGrp(e.target.value)}>
+            {grpChoices.map((g) => <option key={g.key} value={g.key}>{g.name} ({g.n})</option>)}
+          </select>
+        )}
         <div className="list" style={{ padding: '6px 0' }}>
           {order.filter((g) => grouped[g.key]?.length).map((g) => (
             <div key={g.key}>
-              <div style={{ padding: '10px 14px 4px', fontSize: 11, textTransform: 'uppercase', color: 'var(--muted)', letterSpacing: '.5px' }}>
-                {g.name} <span style={{ opacity: 0.6 }}>({grouped[g.key].length})</span>
-              </div>
-              {grouped[g.key].map(r => (
+              {grpHead(g.key, g.name, grouped[g.key].length)}
+              {isOpen(g.key) && grouped[g.key].map(r => (
                 // A question nothing answered leaves no report on screen, so
                 // nothing in this list is highlighted either — a highlight with
                 // no table next to it reads as "this is what you are looking at".
@@ -6394,7 +6637,7 @@ function Reports() {
               ))}
             </div>
           ))}
-          {store.groups.length > 0 && (
+          {store.groups.length > 0 && (rqn || String(shownGrp).startsWith('store:')) && (
             <div style={{ padding: '14px 14px 2px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase',
               letterSpacing: '.5px', borderTop: '1px solid var(--line)', marginTop: 8 }}>
               Store reports <span style={{ opacity: 0.6, fontWeight: 400 }}>· from the shop</span></div>
@@ -6405,10 +6648,8 @@ function Reports() {
             if (!list.length) return null
             return (
               <div key={'store:' + g.key}>
-                <div style={{ padding: '10px 14px 4px', fontSize: 11, textTransform: 'uppercase', color: 'var(--muted)', letterSpacing: '.5px' }}>
-                  {g.name} <span style={{ opacity: 0.6 }}>({list.length})</span>
-                </div>
-                {list.map((r) => (
+                {grpHead('store:' + g.key, g.name, list.length)}
+                {isOpen('store:' + g.key) && list.map((r) => (
                   <div key={r.key} className={'doc-row' + (storeKey === r.key ? ' sel' : '')}
                     style={{ padding: '8px 14px', opacity: r.unavailable ? 0.55 : 1 }} onClick={() => pickStore(r.key)}
                     title={r.unavailable || undefined}>
@@ -7771,6 +8012,7 @@ function PriceChanger({ toast, role }) {
       </div>
 
       <div className="screenbody">
+        <FitPages>
         {!mayChange && (
           <div className="warnbox" style={{ marginBottom: 14 }}>
             <h4>You can look, but not change</h4>
@@ -7979,6 +8221,7 @@ function PriceChanger({ toast, role }) {
             </table>
           </div>
         </Section>
+        </FitPages>
 
         {open && (
           <div className="modal-back" onClick={() => setOpen(null)}>
@@ -8708,6 +8951,7 @@ function PhysicalAuditView({ toast, role, head }) {
             {activeFilters > 0 && <span className="badge pending">{activeFilters}</span>}
           </h3></div>
           <div className="psafilters">
+            <FitPages>
             <p className="small psanote">
               {shown
                 ? <>These narrow what the grid <b>shows</b>. What <b>{shown.code}</b> covers
@@ -8814,6 +9058,7 @@ function PhysicalAuditView({ toast, role, head }) {
                 title={activeFilters ? 'Remove every filter' : 'Nothing to clear'}>
                 Clear all</button>
             </div>
+            </FitPages>
           </div>
         </Sidebar>
 
@@ -10262,6 +10507,8 @@ function Masters({ toast }) {
         </div>
       </div>
       <div className="screenbody">
+      <FitPages>
+      <div>
       <h5 className="masterhead" style={{ marginTop: 0 }}>ERP masters</h5>
       <div style={grid}>
         {erp.map((m, i) => (
@@ -10274,7 +10521,9 @@ function Masters({ toast }) {
             onClick={() => setOpen({ kind: 'erp', key: m.key })} />
         ))}
       </div>
+      </div>
 
+      <div>
       <h5 className="masterhead">In use by this app</h5>
       <div style={grid}>
         {BUILTIN_MASTERS.map(([key, label, sub, icon, note]) => (
@@ -10283,6 +10532,8 @@ function Masters({ toast }) {
             onClick={() => setOpen({ kind: 'builtin', key })} />
         ))}
       </div>
+      </div>
+      </FitPages>
       </div>
     </div>
   )
@@ -11960,7 +12211,7 @@ function DeadStock({ toast, go, intent, onIntentUsed }) {
         </div>}
 
         {tab === 'dashboard' && sum && (
-          <>
+          <FitPages>
             <DsAlerts alerts={alerts?.alerts} go={openRegister} />
             <Section id="ds-tiles" title="Dead stock at a glance"
               summary={`${c.dead_total.lines} line(s) past ${c.thresholds.dead} days`}>
@@ -12016,7 +12267,7 @@ function DeadStock({ toast, go, intent, onIntentUsed }) {
                 </div>
               </Section>
             )}
-          </>
+          </FitPages>
         )}
 
         {tab === 'register' && <DsRegister toast={toast} status={regStatus} setStatus={setRegStatus}
@@ -12447,7 +12698,7 @@ function DsSummary({ sum }) {
   const t = sum.totals
   const maxCat = Math.max(1, ...sum.by_category.map((g) => g.stock_value))
   return (
-    <>
+    <FitPages>
       <Section id="ds-sum-tiles" title="Dead stock summary" summary={`${t.lines} line(s)`}>
         <DsTiles tiles={[
           { label: 'Dead stock', value: t.qty + ' pcs', accent: 'stock', sub: `${t.lines} product line(s)` },
@@ -12506,7 +12757,7 @@ function DsSummary({ sum }) {
           </div>
         )}
       </Section>
-    </>
+    </FitPages>
   )
 }
 
@@ -12600,7 +12851,7 @@ function DsRules({ toast, onSaved }) {
   }
 
   return (
-    <>
+    <FitPages>
       <Section id="ds-ladder" title="Discount ladder"
         summary={`${rules.buckets.length} band(s)`}
         actions={<button className="btn" onClick={() => setRules({ ...rules, ...defaults })}
@@ -12649,7 +12900,7 @@ function DsRules({ toast, onSaved }) {
             {busy ? 'Saving…' : 'Save rules'}</button>
         </div>
       </Section>
-    </>
+    </FitPages>
   )
 }
 
@@ -15213,6 +15464,7 @@ function AuditTrail({ go }) {
   const set = (k, v) => setF((old) => ({ ...old, [k]: v }))
   const [filtersOpen, setFiltersOpen] = useState(false)
   const activeF = ['user', 'screen', 'date_from', 'date_to'].filter((k) => f[k]).length
+  const page = usePaged(rows, 50)
   return (
     <div className="screen scrolls">
       <div className="pagehead">
@@ -15262,7 +15514,7 @@ function AuditTrail({ go }) {
                   <tr><td colSpan={6} className="small" style={{ padding: 16 }}>
                     Nothing on the trail for these filters.</td></tr>
                 )}
-                {rows.map((e) => (
+                {page.slice.map((e) => (
                   <tr key={e.id} className={e.outcome !== 'ok' ? 'warnrow' : undefined}>
                     <td className="small mono">{(e.local || '').replace('T', ' ')}</td>
                     <td className="small"><b>{e.who}</b>
@@ -15279,6 +15531,7 @@ function AuditTrail({ go }) {
               </tbody>
             </table>
           </div>
+          <Pager {...page} noun="event" />
           <div className="items-foot">
             <span className="small">{rows.length} line(s)</span>
             <span className="spacer" />
@@ -15398,7 +15651,7 @@ function CentralDashboard({ toast, go, onEnter, active = true }) {
           <div className="small" style={{ color: 'var(--text-2)' }}>{err}</div></div>}
 
         {!ov ? <div className="empty" style={{ marginTop: 40 }}>Loading…</div> : (
-          <>
+          <FitPages>
             <div className="dgrid" style={{ marginBottom: 'var(--sp-4)' }}>
               <DashTile label="Total Warehouses" value={t.warehouses ?? 0}
                 accent="count" sub={scoped ? scoped.name : 'active'}
@@ -15756,7 +16009,7 @@ function CentralDashboard({ toast, go, onEnter, active = true }) {
                       Nothing moved in this window.</div>}
               </ChartCard>
             </div>
-          </>
+          </FitPages>
         )}
       </div>
     </div>
@@ -15858,7 +16111,7 @@ function ImportBox({ label, hint, accept, onPreview, onCommit, onDone, toast }) 
     <div className="infobox" style={{ marginTop: 'var(--sp-3)' }}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <b>{label}</b>
-        <input ref={input} type="file" accept={accept} style={{ flex: 1, minWidth: 220 }}
+        <input ref={input} type="file" accept={accept} aria-label={label} style={{ flex: 1, minWidth: 220 }}
           onChange={(e) => pick(e.target.files?.[0])} />
         {busy && <span className="small">Reading…</span>}
       </div>
@@ -15988,7 +16241,7 @@ function Catalogues({ toast }) {
         </div>
 
         {detail && (
-          <>
+          <FitPages>
             <Section id="cat.about" title={`${detail.name} · ${detail.code}`}
               summary={`${detail.product_count} product(s) filed under it`}>
               <div className="kv" style={{ gridTemplateColumns: '150px 1fr' }}>
@@ -16226,7 +16479,7 @@ function Catalogues({ toast }) {
                 }}
                 onDone={() => { load(); loadDetail() }} />
             </Section>
-          </>
+          </FitPages>
         )}
       </div>
 
@@ -16423,11 +16676,17 @@ const POS_SCREENS = [
   { key: 'pos:floor', icon: '📱', label: 'Floor Sales', path: '/floor/',
     blurb: 'Build a sale on the phone while walking the floor' },
   { key: 'pos:counter', icon: '🧮', label: 'Billing Counter', path: '/pos/',
-    blurb: 'Scan, bill and take payment at the counter' },
+    blurb: 'Scan and bill, and print the delivery copy' },
+  { key: 'pos:settlement', icon: '💵', label: 'Settlement', path: '/pos/settle',
+    blurb: 'Take payment for billed bills and print the customer copy' },
   { key: 'pos:delivery', icon: '🛍', label: 'Delivery', path: '/delivery/',
     blurb: 'Scan the bill, scan each garment, hand the goods over' },
   { key: 'pos:inventory', icon: '📦', label: 'Store Stock', path: '/inventory/',
     blurb: 'What is on the store floor, with the warehouse QR on every item' },
+  { key: 'pos:stock_inward', icon: '📥', label: 'Stock Inward', path: '/stock-inward/',
+    blurb: 'Count in what the warehouse or another branch sent here' },
+  { key: 'pos:transfer_goods', icon: '📤', label: 'Transfer Goods', path: '/transfer-goods/',
+    blurb: 'Send goods back to a warehouse, or across to another branch' },
   { key: 'pos:audits', icon: '📋', label: 'Physical Stock Audit', path: '/audits/',
     blurb: 'Count a store floor item by item and see where the books disagree' },
   { key: 'pos:checker', icon: '🔍', label: 'Stock Check', path: '/stock-check/',
@@ -16458,7 +16717,7 @@ const POS_ITEMS = [POS_HOME, null, ...POS_SCREENS]
 // mount), so this is the menu agreeing with the server, not the enforcement.
 // The floor's day: billing, handing over, stock, the customer, taking goods
 // back, alterations. Kept in step with STORE_USER_MODULES in the shop.
-const POS_USER_KEYS = new Set(['pos:counter', 'pos:delivery', 'pos:inventory',
+const POS_USER_KEYS = new Set(['pos:counter', 'pos:settlement', 'pos:delivery', 'pos:inventory',
   'pos:customers', 'pos:returns', 'pos:alterations'])
 
 // One frame, keyed on the path so choosing another screen from the menu loads
@@ -16570,8 +16829,9 @@ const NAV_ICON = {
   outward: 'outward', inward: 'inward', returns: 'undo', payments: 'rupee',
   reports: 'spreadsheet', suppliers: 'factory', masters: 'sliders', catalogues: 'book',
   locations: 'pin', users: 'users',
-  'pos:home': 'dashboard', 'pos:floor': 'trending', 'pos:counter': 'card',
+  'pos:home': 'dashboard', 'pos:floor': 'trending', 'pos:counter': 'card', 'pos:settlement': 'rupee',
   'pos:delivery': 'truck', 'pos:inventory': 'boxes', 'pos:audits': 'clipcheck',
+  'pos:stock_inward': 'truck', 'pos:transfer_goods': 'truck',
   'pos:checker': 'search', 'pos:customers': 'usercheck', 'pos:invoices': 'receipt',
   'pos:returns': 'undo', 'pos:alterations': 'scissors', 'pos:stores': 'layers',
   'pos:promotions': 'percent', 'pos:staff': 'users', 'pos:reports': 'spreadsheet',
@@ -16671,6 +16931,174 @@ function NavSidebar({ kind, context, items, tab, go, online, foot, drawer, onClo
       <div className="navdrawer-back" onClick={onClose} aria-hidden="true" />
       {panel}
     </div>
+  )
+}
+
+// ---------- the side rail ----------
+// A narrow column of categories, each opening a fly-out of its screens. Each
+// workspace has its OWN set, named for the work done there: the warehouse buys,
+// holds, moves and labels stock; the store bills, keeps its floor stock and
+// looks after customers; Central oversees both. A store screen is never filed
+// in the warehouse's rail — the workspace switch above is the way across.
+// A screen a list does not name falls into the workspace's last category, so a
+// new screen is never lost from the rail.
+const NAV_RAIL = {
+  central: [
+    { key: 'home', label: 'Home', icon: 'dashboard', screens: ['command', 'central', 'pickwh'] },
+    { key: 'stock', label: 'Stock', icon: 'boxes', screens: ['locator'] },
+    { key: 'reports', label: 'Reports', icon: 'trending', screens: ['reports', 'audit'] },
+    { key: 'setup', label: 'Setup', icon: 'sliders', screens: ['locations', 'users'] },
+  ],
+  warehouse: [
+    { key: 'home', label: 'Home', icon: 'dashboard', screens: ['dashboard'] },
+    { key: 'purchase', label: 'Purchase', icon: 'filetext',
+      screens: ['purchase_orders', 'lr', 'documents', 'purchases', 'returns', 'payments', 'suppliers'] },
+    { key: 'stock', label: 'Stock', icon: 'boxes',
+      screens: ['inventory', 'locator', 'stock_audit', 'physical_audit', 'pricing', 'deadstock'] },
+    { key: 'transfers', label: 'Transfers', icon: 'truck', screens: ['outward', 'inward'] },
+    { key: 'labels', label: 'Labels', icon: 'qr', screens: ['labels', 'labelprint'] },
+    { key: 'reports', label: 'Reports', icon: 'trending', screens: ['reports', 'audit'] },
+    { key: 'setup', label: 'Setup', icon: 'sliders', screens: ['masters', 'catalogues', 'locations', 'users'] },
+  ],
+  store: [
+    { key: 'home', label: 'Home', icon: 'dashboard', screens: ['pos:home'] },
+    { key: 'billing', label: 'Billing', icon: 'receipt',
+      screens: ['pos:floor', 'pos:counter', 'pos:settlement', 'pos:delivery', 'pos:invoices', 'pos:returns'] },
+    { key: 'stock', label: 'Stock', icon: 'boxes',
+      screens: ['pos:inventory', 'pos:stock_inward', 'pos:transfer_goods', 'pos:audits', 'pos:checker', 'pos:alterations'] },
+    { key: 'customers', label: 'Customers', icon: 'users', screens: ['pos:customers', 'pos:promotions'] },
+    { key: 'reports', label: 'Reports', icon: 'trending', screens: ['pos:reports'] },
+    { key: 'setup', label: 'Setup', icon: 'sliders', screens: ['pos:stores', 'pos:staff'] },
+  ],
+}
+// the rail's categories for one workspace, each holding the screens on offer
+function railGroups(ws, items) {
+  const defs = NAV_RAIL[ws] || NAV_RAIL.warehouse
+  const shown = tidyRules(items).filter(Boolean)
+  const named = new Set(defs.flatMap((d) => d.screens))
+  const last = defs[defs.length - 1].key
+  return defs.map((d) => ({
+    ...d,
+    items: shown.filter((m) => d.screens.includes(m.key) || (d.key === last && !named.has(m.key))),
+  })).filter((g) => g.items.length)
+}
+
+// One category's screens as a page of their own — what the fly-out's heading
+// opens. Laid over the work area rather than opened as a tab, so the screens
+// already open underneath stay exactly as they were; picking one, or Back,
+// puts the work area back.
+function CategoryPage({ group, context, tab, go, onClose }) {
+  useEffect(() => {
+    const esc = (e) => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('keydown', esc)
+    return () => document.removeEventListener('keydown', esc)
+  }, [onClose])
+  return (
+    <div className="catpage" role="region" aria-label={group.label}>
+      <div className="pagehead">
+        <button className="btn" onClick={onClose} title="Back to the open screen (Esc)">← Back</button>
+        <h2 style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          <Icon name={group.icon} size={20} /> {group.label}</h2>
+        <div className="pagesub small">{context} · {group.items.length} screen{group.items.length === 1 ? '' : 's'}</div>
+      </div>
+      <div className="screenbody">
+        <div className="catgrid">
+          {group.items.map((m) => (
+            <button key={m.key} className={'catcard' + (m.key === tab ? ' on' : '')}
+              onClick={() => { go(m.key); onClose() }}>
+              <span className="ico" aria-hidden="true"><Icon name={NAV_ICON[m.key]} size={20} /></span>
+              <span className="tx">
+                <span className="lbl">{m.label}{m.badge && <span className="nb">{m.badge}</span>}</span>
+                {m.blurb && <span className="blurb">{m.blurb}</span>}
+              </span>
+              <span className="go" aria-hidden="true">→</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function NavRail({ ws, items, tab, go, online, foot, context, onOpenGroup, page }) {
+  const [open, setOpen] = useState(null)          // the category whose fly-out is showing
+  const [pinned, setPinned] = useState(false)     // opened by a click: stays until used
+  const [top, setTop] = useState(0)
+  const btns = useRef({})
+  const fly = useRef(null)
+  const timer = useRef(null)
+  const groups = railGroups(ws, items)
+  // a category's page on show is where you are; otherwise the open screen's
+  const current = page || groups.find((g) => g.items.some((m) => m.key === tab))?.key
+  const show = (k, pin) => {
+    clearTimeout(timer.current)
+    const b = btns.current[k]
+    setTop(b ? b.offsetTop : 0)
+    setOpen(k)
+    if (pin !== undefined) setPinned(pin)
+  }
+  const hideSoon = () => {
+    if (pinned) return
+    clearTimeout(timer.current)
+    timer.current = setTimeout(() => setOpen(null), 180)
+  }
+  const close = () => { clearTimeout(timer.current); setOpen(null); setPinned(false) }
+  // the fly-out is kept inside the window: a long list starts higher up
+  useLayoutEffect(() => {
+    const f = fly.current
+    if (!f) return
+    const room = window.innerHeight - f.getBoundingClientRect().top - 8
+    if (room < f.offsetHeight) setTop((t) => Math.max(0, t - (f.offsetHeight - room)))
+  }, [open])
+  useEffect(() => {
+    if (!open) return undefined
+    const esc = (e) => { if (e.key === 'Escape') close() }
+    const away = (e) => { if (pinned && !e.target.closest('.navrail')) close() }
+    document.addEventListener('keydown', esc)
+    document.addEventListener('mousedown', away)
+    return () => { document.removeEventListener('keydown', esc); document.removeEventListener('mousedown', away) }
+  }, [open, pinned])
+  useEffect(() => () => clearTimeout(timer.current), [])
+  const g = groups.find((x) => x.key === open)
+  return (
+    <aside className="navrail" aria-label="Main menu" onMouseLeave={hideSoon}>
+      <nav className="navrail-list">
+        {groups.map((x) => (
+          <button key={x.key} ref={(el) => { btns.current[x.key] = el }} type="button"
+            className={'navrail-btn' + (x.key === current ? ' cur' : '') + (x.key === open ? ' open' : '')}
+            aria-expanded={x.key === open} aria-haspopup="menu"
+            onMouseEnter={() => show(x.key)}
+            onClick={() => (open === x.key && pinned ? close() : show(x.key, true))}
+            onKeyDown={(e) => { if (e.key === 'ArrowRight' || e.key === 'Enter') { e.preventDefault(); show(x.key, true) } }}>
+            <Icon name={x.icon} size={22} />
+            <span>{x.label}</span>
+          </button>
+        ))}
+      </nav>
+      <div className="navrail-foot" title={(online ? 'Server connected' : 'Connecting…') + (foot ? ` · ${foot}` : '')}>
+        <i className={online ? '' : 'off'} aria-hidden="true" />
+      </div>
+      {g && (
+        <div ref={fly} className="navrail-fly" role="menu" aria-label={g.label} style={{ top }}
+          onMouseEnter={() => clearTimeout(timer.current)}>
+          <button type="button" className="navrail-flyhead"
+            title={`Open ${g.label} — every screen in it, on one page`}
+            onClick={() => { onOpenGroup?.(g); close() }}>
+            <span className="t">{g.label} <span className="arr" aria-hidden="true">→</span></span>
+            {context && <small title={context}>{context}</small>}</button>
+          {g.items.map((m) => (
+            <button key={m.key} type="button" role="menuitem"
+              className={'navrail-item' + (m.key === tab ? ' on' : '')}
+              aria-current={m.key === tab ? 'page' : undefined} title={m.blurb}
+              onClick={() => { go(m.key); close() }}>
+              <Icon name={NAV_ICON[m.key]} size={15} />
+              <span className="nm">{m.label}</span>
+              {m.badge && <span className="nb">{m.badge}</span>}
+            </button>
+          ))}
+        </div>
+      )}
+    </aside>
   )
 }
 
@@ -16793,8 +17221,12 @@ const niceTicks = (max, count = 4) => {
   const raw = max / count
   const mag = Math.pow(10, Math.floor(Math.log10(raw)))
   const step = [1, 2, 2.5, 5, 10].find((m) => mag * m >= raw) * mag
+  // The top tick is the first one AT OR ABOVE the largest value. Stopping at the
+  // last tick below it made that tick the chart's ceiling, so a 58k peak on a
+  // 0/20k/40k scale was drawn far above the plot and over the card's title.
+  const top = Math.ceil(max / step - 1e-9) * step
   const out = []
-  for (let v = 0; v <= max + step * 0.001; v += step) out.push(v)
+  for (let v = 0; v <= top + step * 0.001; v += step) out.push(v)
   return out
 }
 const compact = (v) => {
@@ -17518,7 +17950,7 @@ function Dashboard({ modules, go, company, docs, refreshDocs, user, openDeadStoc
 
       <div className="dash">
         {view === 'graphical' && <DashboardCharts money={money} />}
-        {view === 'static' && <>
+        {view === 'static' && <FitPages>
         {partial && <div className="warnbox" style={{ marginBottom: 'var(--sp-5)' }}>
           <h4>Some figures did not load</h4>
           <div className="small" style={{ color: 'var(--text-2)' }}>
@@ -17646,7 +18078,7 @@ function Dashboard({ modules, go, company, docs, refreshDocs, user, openDeadStoc
             </div>
           </div>
         </Section>
-        </>}
+        </FitPages>}
       </div>
     </div>
   )
@@ -18306,6 +18738,11 @@ export default function App() {
          ...(canCentral ? [] : [{ key: 'pickwh', label: 'Choose a warehouse',
            blurb: 'Pick the building you are working in' }]),
          null, ...modules.filter((m) => m.key !== 'central' && m.key !== 'command')]
+  // the category page opened from the rail (see CategoryPage); it belongs to the
+  // workspace it was opened in, and is gone once that changes
+  const [catPage, setCatPage] = useState(null)
+  const catGroup = catPage ? railGroups(ws, navItems).find((g) => g.key === catPage) : null
+  useEffect(() => { setCatPage(null) }, [ws, here?.id])
   const companyName = status?.company?.name || 'Essa'
   const navKind = ws === 'store' ? 'Retail Store' : ws === 'warehouse' ? 'Warehouse Ops' : 'Central Admin'
   const navContext = ws === 'store' ? `${storeLabel} · ${here.name}`
@@ -18474,9 +18911,13 @@ export default function App() {
 
       {/* 4. The sidebar beside the open screen. */}
       <div className="shell">
-      <NavSidebar kind={navKind} context={navContext} items={navItems} tab={tab} go={setTab}
-        online={!!status} foot={navFoot} />
+      {/* the category rail; on a narrow window the same screens open from the
+          menu button as a drawer (below) */}
+      <NavRail ws={ws} items={navItems} tab={tab} go={setTab} online={!!status} foot={navFoot}
+        context={navContext} onOpenGroup={(g) => setCatPage(g.key)} page={catGroup ? catPage : null} />
       <main className="shellmain">
+      {catGroup && <CategoryPage group={catGroup} context={navContext} tab={tab}
+        go={setTab} onClose={() => setCatPage(null)} />}
       {/* Keyed on the warehouse. Switching one remounts every screen below, so
           each refetches its own data under the new context — the alternative is
           asking fifty components to notice a change, and the one that forgets

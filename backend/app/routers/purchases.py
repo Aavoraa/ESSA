@@ -62,6 +62,13 @@ class LineEdit(BaseModel):
     mrp: Optional[float] = None
     sale_price: Optional[float] = None
     sale_discount_pct: Optional[float] = None
+    # What the goods are, beyond size / brand / design — applied to the product
+    # at post and inherited by breakdown rows that leave them blank.
+    style: Optional[str] = None
+    material: Optional[str] = None
+    pattern: Optional[str] = None
+    sleeve: Optional[str] = None
+    product_type: Optional[str] = None
 
 
 def _unit_view(db, line, split=None, qty=None, rate=None):
@@ -136,6 +143,8 @@ def _line_out(l: models.PurchaseLine, db: Session = None, suggest: bool = True):
         "mrp": l.mrp, "sale_price": l.sale_price,
         "sale_discount_pct": l.sale_discount_pct,
         "size": l.size, "brand": l.brand, "design_no": l.design_no,
+        "style": l.style, "material": l.material, "pattern": l.pattern,
+        "sleeve": l.sleeve, "product_type": l.product_type,
         # "30:2, 32:4, 34:4, 36:2" read back as rows. The supplier already
         # counted the mix; offering it here means nobody re-keys a count that has
         # been done, and each size still becomes its own product with its own SKU
@@ -727,6 +736,9 @@ def edit_line(line_id: int, body: LineEdit, db: Session = Depends(get_db)):
                 f"that is already on the shelf")
         if code:
             ut.learn(db, line.description, code)
+    for fld in ("style", "material", "pattern", "sleeve", "product_type"):
+        if fld in fields:
+            setattr(line, fld, (fields[fld] or "").strip() or None)
     # MRP − sale discount % = sell price, kept in step here too, so the figure a
     # GRN carries is the same one the review screen would have computed
     for fld in ("mrp", "sale_price", "sale_discount_pct"):

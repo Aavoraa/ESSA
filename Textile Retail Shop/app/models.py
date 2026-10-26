@@ -106,6 +106,20 @@ class Product(db.Model):
     pattern = db.Column(db.String(64))
     fit = db.Column(db.String(64))
     design_no = db.Column(db.String(64))
+    # What the sales-promotion schemes can filter on beyond the tuple above —
+    # see app/schemes.py. `supplier` comes over from the warehouse with the item;
+    # the rest are filled in on the product (Inventory → edit) until the
+    # warehouse records them. Empty is "not known", and a filter naming a value
+    # never matches an item that doesn't have one.
+    brand = db.Column(db.String(64))
+    style = db.Column(db.String(64))
+    sleeve = db.Column(db.String(64))
+    supplier = db.Column(db.String(128))
+    purchase_invoice = db.Column(db.String(64))
+    purchase_date = db.Column(db.Date)
+    #: A marker tag on the item ("OLD STOCK", "FESTIVE") — what a scheme's
+    #: Marked Item / Excluded Marker filter picks out.
+    marker = db.Column(db.String(64), index=True)
     #: Which storey of the store this item is held on — where you go to find it.
     #:
     #: It is a PLACE, not a quantity. The shop's stock figure is `stock_qty` and
@@ -371,6 +385,61 @@ class TransferReceipt(db.Model):
     product = db.relationship("Product")
 
 
+#: Where a store transfer stands. `sent` — the goods are off this branch's
+#: shelves and on their way; `received` — counted in at the other end.
+STORE_TRANSFER_STATUSES = ("sent", "received")
+
+
+class StoreTransfer(db.Model):
+    """Goods a branch sends away (Store → Transfer Goods): back to a warehouse,
+    or across to another branch.
+
+    The stock leaves this branch the moment it is saved. Sent to a WAREHOUSE it
+    is also written to the warehouse as a posted dispatch from this store
+    (`wh_outward_id`), and the warehouse counts it in on its own Stock Inward.
+    Sent to another BRANCH it waits in that branch's Stock Inward — or, ticked
+    Immediate Transfer, is moved straight in.
+    """
+    __tablename__ = "store_transfers"
+    id = db.Column(db.Integer, primary_key=True)
+    code = db.Column(db.String(32), unique=True, index=True)      # the package code
+    date = db.Column(db.String(10))
+    packed_by = db.Column(db.String(128))
+    from_location_id = db.Column(db.Integer, db.ForeignKey("locations.id"), index=True)
+    #: one of these two: another branch here, or a warehouse
+    to_location_id = db.Column(db.Integer, db.ForeignKey("locations.id"), index=True)
+    to_warehouse_id = db.Column(db.Integer, index=True)
+    to_name = db.Column(db.String(128))
+    immediate = db.Column(db.Boolean, default=False)
+    remarks = db.Column(db.Text)
+    filename = db.Column(db.String(255))        # the barcode file the lines came from
+    status = db.Column(db.String(16), default="sent", index=True)
+    wh_outward_id = db.Column(db.Integer, index=True)
+    received_by = db.Column(db.String(128))
+    received_at = db.Column(db.DateTime)
+    created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    from_location = db.relationship("Location", foreign_keys=[from_location_id])
+    to_location = db.relationship("Location", foreign_keys=[to_location_id])
+    lines = db.relationship("StoreTransferLine", backref="transfer", lazy=True,
+                            cascade="all, delete-orphan", order_by="StoreTransferLine.id")
+
+    @property
+    def total_qty(self):
+        return round(sum(l.qty or 0 for l in self.lines), 3)
+
+
+class StoreTransferLine(db.Model):
+    __tablename__ = "store_transfer_lines"
+    id = db.Column(db.Integer, primary_key=True)
+    transfer_id = db.Column(db.Integer, db.ForeignKey("store_transfers.id"), index=True)
+    product_id = db.Column(db.Integer, db.ForeignKey("products.id"), index=True)
+    barcode = db.Column(db.String(64))
+    qty = db.Column(db.Float, default=0.0)
+    accepted_qty = db.Column(db.Float)          # counted in at the other end
+    product = db.relationship("Product")
+
+
 class Invoice(db.Model):
     __tablename__ = "invoices"
     id = db.Column(db.Integer, primary_key=True)
@@ -440,6 +509,16 @@ class Invoice(db.Model):
     #: two apart. `discount` stays the whole reduction every total is built on.
     coupon_discount = db.Column(db.Float, default=0.0)
     cancelled_by = db.relationship("User", foreign_keys=[cancelled_by_id])
+    #: Who approved the discounts on this bill — the E.Code typed in the
+    #: counter's discount card. Null when nobody was named.
+    discount_by_id = db.Column(db.Integer, db.ForeignKey("users.id"))
+    discount_by = db.relationship("User", foreign_keys=[discount_by_id])
+    #: The agreement code the bill was raised under (the discount card's P.Code),
+    #: which a scheme's Agreement Code filter can ask for.
+    agreement_code = db.Column(db.String(64))
+    #: What On Settlement schemes took off when the bill was paid — part of
+    #: `discount`, kept apart so the bill can say where it came from.
+    scheme_discount = db.Column(db.Float, default=0.0)
 
     items = db.relationship("InvoiceItem", backref="invoice", lazy=True, cascade="all, delete-orphan")
     payments = db.relationship("InvoicePayment", backref="invoice", lazy=True,
@@ -565,10 +644,26 @@ class InvoiceItem(db.Model):
     product_id = db.Column(db.Integer, db.ForeignKey("products.id"), nullable=False)
     quantity = db.Column(db.Float, nullable=False)
     unit_price = db.Column(db.Float, nullable=False)  # pre-tax
+    #: The price before this line's own discount, when it had one. `unit_price`
+    #: is what was actually charged — so GST, refunds and every report read the
+    #: discounted figure without knowing discounts exist — and this is kept so
+    #: the bill can still print the rate and the % taken off. Null: no discount.
+    list_price = db.Column(db.Float)
+    #: The sales scheme that took something off this line, and how much (%) —
+    #: already inside `unit_price`; recorded so the bill and reports can say why.
+    scheme_id = db.Column(db.Integer, db.ForeignKey("sales_schemes.id"), index=True)
+    scheme_pct = db.Column(db.Float)
+    scheme = db.relationship("SalesScheme")
     gst_rate = db.Column(db.Float, default=0.0)
     line_total = db.Column(db.Float, nullable=False)  # taxable amount (qty*price)
     tax_amount = db.Column(db.Float, default=0.0)
     product = db.relationship("Product")
+    # Who sold THIS line. One bill can carry garments sold by different people,
+    # so the counter scans the staff ID after each product and it lands here.
+    # Nullable: lines billed before this existed, and free reward lines, have
+    # only the bill's `staff_id` to go by.
+    staff_id = db.Column(db.Integer, db.ForeignKey("users.id"), index=True)
+    staff = db.relationship("User", foreign_keys=[staff_id])
 
     # What a promotion did to this line. All null on an ordinary sale, which is
     # nearly every line — see app/promotions.py.
@@ -1810,3 +1905,165 @@ class StaffAdvanceRecovery(db.Model):
     note = db.Column(db.String(256))
     created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+# ---------------------------------------------------------------------------
+# Sales promotion schemes — the store's own offers, as the shop's billing
+# software has always laid them out: a header (when, where, at which point in a
+# sale), FILTERS saying which goods or bills qualify, and BENEFITS saying what
+# they get. The engine that reads them is app/schemes.py; the screen that writes
+# them is routes/promotions.py. The older buy-X-get-Y schemes (PromotionScheme
+# above) still run alongside, unchanged.
+# ---------------------------------------------------------------------------
+
+#: When in a sale a scheme pays out. (code, label)
+SCHEME_APPLICABLE = (
+    ("same_bill", "On Same Bill"),
+    ("next_bill", "On Next Bill"),
+    ("next_day_bill", "On Next Day Bill"),
+    ("settlement", "On Settlement"),
+    ("addon", "On Bill (Addon)"),
+    ("simulation", "On Simulation"),
+)
+
+#: What a scheme's filter rows can say. (code, label)
+SCHEME_FILTER_MODES = (
+    ("product_attr", "Product Attribute"),
+    ("invoice", "Invoice"),
+    ("barcode", "Barcode"),
+    ("marker", "Marked Item"),
+    ("ex_barcode", "Excluded Barcode"),
+    ("ex_marker", "Excluded Marker"),
+    ("ex_discount", "Excluded Discount"),
+    ("ex_product_attr", "Excluded Product Attribute"),
+    ("bill_value", "Bill/Bill Item Value"),
+    ("agreement_code", "Agreement Code"),
+    ("barcode_prefix", "Barcode Prefix"),
+)
+
+#: Where a scheme's condition is measured: the bill as a whole, or each item.
+SCHEME_MODES = (
+    ("bill_value", "On Bill Value"),
+    ("bill_item", "On Bill Item"),
+)
+
+#: What a benefit row gives, in the order the screen offers them. (code, label)
+SCHEME_BENEFIT_MODES = (
+    ("discount_pct", "Discount In Percentage"),
+    ("fixed", "Discount In Fixed Value"),
+    ("points", "Reward Points"),
+    ("free_item", "Discount In Qty"),
+    ("combo", "Combo Offer"),
+    ("discounted_item", "Discounted Item"),
+    ("coupon", "Coupon for next bill"),
+)
+#: Older rows may still carry these; the engine reads them, the screen no longer offers them.
+SCHEME_BENEFIT_LEGACY = (("flat", "Flat ₹ off"),)
+
+
+class SalesScheme(db.Model):
+    __tablename__ = "sales_schemes"
+    id = db.Column(db.Integer, primary_key=True)
+    code = db.Column(db.String(32), unique=True, nullable=False, index=True)
+    name = db.Column(db.String(128), nullable=False)
+    #: Null = every company / every location.
+    company_id = db.Column(db.Integer, db.ForeignKey("companies.id"), index=True)
+    location_id = db.Column(db.Integer, db.ForeignKey("locations.id"), index=True)
+    valid_from = db.Column(db.Date, index=True)
+    valid_to = db.Column(db.Date, index=True)
+    applicable = db.Column(db.String(16), nullable=False, default="same_bill")
+    #: bill_value — the Rate condition is the qualifying goods' total;
+    #: bill_item — it is each item's own price. See SCHEME_MODES.
+    mode = db.Column(db.String(16), default="bill_item")
+    active = db.Column(db.Boolean, default=True, index=True)
+    created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    company = db.relationship("Company")
+    location = db.relationship("Location")
+    filters = db.relationship("SalesSchemeFilter", backref="scheme", lazy=True,
+                              cascade="all, delete-orphan",
+                              order_by="SalesSchemeFilter.sort_order")
+    benefits = db.relationship("SalesSchemeBenefit", backref="scheme", lazy=True,
+                               cascade="all, delete-orphan",
+                               order_by="SalesSchemeBenefit.sort_order")
+
+    def runs_on(self, day):
+        return ((self.valid_from is None or self.valid_from <= day)
+                and (self.valid_to is None or day <= self.valid_to))
+
+    def status(self, today=None):
+        today = today or date.today()
+        if not self.active:
+            return "inactive"
+        if self.valid_from and today < self.valid_from:
+            return "scheduled"
+        if self.valid_to and today > self.valid_to:
+            return "expired"
+        return "active"
+
+    @property
+    def applicable_label(self):
+        return dict(SCHEME_APPLICABLE).get(self.applicable, self.applicable)
+
+    @property
+    def mode_label(self):
+        return dict(SCHEME_MODES).get(self.mode or "bill_item", self.mode)
+
+
+class SalesSchemeFilter(db.Model):
+    """One FILTER row — which goods, or which bills, the scheme is for.
+
+    `data` is JSON, its shape set by `mode` (see app/schemes.py): attribute
+    values for Product Attribute, a list of codes for Barcode, two amounts for
+    Bill Value, and so on.
+    """
+    __tablename__ = "sales_scheme_filters"
+    id = db.Column(db.Integer, primary_key=True)
+    scheme_id = db.Column(db.Integer, db.ForeignKey("sales_schemes.id"), nullable=False, index=True)
+    mode = db.Column(db.String(24), nullable=False)
+    data = db.Column(db.Text, default="{}")
+    sort_order = db.Column(db.Integer, default=0)
+
+
+class SalesSchemeBenefit(db.Model):
+    """One BENEFIT row — what qualifying goods get, within a qty and price range.
+
+    Ranges are inclusive and a 0 / empty upper end means "no limit". What
+    `value` and `additional` mean depends on `mode` — see app/schemes.py.
+    """
+    __tablename__ = "sales_scheme_benefits"
+    id = db.Column(db.Integer, primary_key=True)
+    scheme_id = db.Column(db.Integer, db.ForeignKey("sales_schemes.id"), nullable=False, index=True)
+    mode = db.Column(db.String(16), nullable=False)
+    qty_from = db.Column(db.Float, default=0.0)
+    qty_to = db.Column(db.Float, default=0.0)
+    price_from = db.Column(db.Float, default=0.0)
+    price_to = db.Column(db.Float, default=0.0)
+    value = db.Column(db.Float, default=0.0)
+    additional = db.Column(db.Float, default=0.0)
+    #: Fixed Value / Combo Offer: the amount comes off ONCE for the bill rather
+    #: than per piece / per set (the screen's "Flat Discount" tick).
+    flat = db.Column(db.Boolean, default=False)
+    #: Discounted Item: the barcode / SKU of the item that gets the discount.
+    item_code = db.Column(db.String(64))
+    #: The coupon campaign a Coupon benefit issues from, made when it is saved.
+    campaign_id = db.Column(db.Integer, db.ForeignKey("coupon_campaigns.id"))
+    sort_order = db.Column(db.Integer, default=0)
+    campaign = db.relationship("CouponCampaign")
+
+
+class SalesSchemeUse(db.Model):
+    """What a scheme did on one bill — for the reports and for undoing it."""
+    __tablename__ = "sales_scheme_uses"
+    id = db.Column(db.Integer, primary_key=True)
+    scheme_id = db.Column(db.Integer, db.ForeignKey("sales_schemes.id"), nullable=False, index=True)
+    invoice_id = db.Column(db.Integer, db.ForeignKey("invoices.id"), nullable=False, index=True)
+    #: bill · settlement · next_bill
+    stage = db.Column(db.String(16), nullable=False)
+    benefit_value = db.Column(db.Float, default=0.0)
+    coupon_id = db.Column(db.Integer, db.ForeignKey("coupons.id"))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    scheme = db.relationship("SalesScheme")
+    coupon = db.relationship("Coupon")

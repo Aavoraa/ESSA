@@ -869,6 +869,11 @@ def confirm(doc_id: int, req: ConfirmRequest, db: Session = Depends(get_db)):
                                description=it.get("description"), hsn=it.get("hsn"),
                                qty=it.get("qty"), uom=it.get("uom"),
                                rate=it.get("rate"), amount=it.get("amount")))
+    # a draft GRN already made from this invoice takes the categories set here —
+    # the GRN screen no longer edits them
+    from ..services import inventory as inv
+    inv.sync_draft_categories(db, db.query(models.Purchase).filter(
+        models.Purchase.document_id == doc.id).first(), corrected.get("line_items"))
     doc.status = "confirmed"
     db.commit()
 

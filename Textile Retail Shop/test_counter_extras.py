@@ -391,7 +391,8 @@ for url, needle in [(f"/customers/{IDS['kumar']}", "Advance in hand"),
                     ("/drawer/", "Open the drawer"),
                     ("/staff/advances", "Priya S"),
                     (f"/pos/invoice/{BILL1}", "Rate your visit"),
-                    ("/pos/", 'id="couponCode"')]:
+                    # the coupon is entered as the discount card's P.Code
+                    ("/pos/", 'id="dcPCode"')]:
     r = client.get(url)
     ok(f"{url} opens", r.status_code == 200 and needle in r.get_data(as_text=True),
        f"HTTP {r.status_code}")

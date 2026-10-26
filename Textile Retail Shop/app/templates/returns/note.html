@@ -5,6 +5,10 @@
   <h4><i class="bi bi-arrow-return-left"></i> Credit note {{ note.number }}</h4>
   <div>
     <button onclick="window.print()" class="btn btn-brand btn-sm"><i class="bi bi-printer"></i> Print</button>
+    {% if note.refund_method == 'store_credit' %}
+    <a href="{{ url_for('pos.counter', credit_note=note.number) }}" class="btn btn-outline-primary btn-sm"
+       title="Open a new bill with this store credit applied"><i class="bi bi-arrow-left-right"></i> New bill with this credit</a>
+    {% endif %}
     <a href="{{ url_for('returns.index') }}" class="btn btn-outline-secondary btn-sm">New return</a>
   </div>
 </div>

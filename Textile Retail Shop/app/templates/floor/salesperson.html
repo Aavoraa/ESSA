@@ -120,7 +120,7 @@
         <label class="form-label small mb-1">Customer</label>
         <div class="input-group input-group-sm mb-2">
           <input id="custLookup" class="form-control" placeholder="Mobile / invoice # / scan">
-          <button id="custLookupBtn" class="btn btn-outline-primary" type="button"><i class="bi bi-search"></i></button>
+          <button id="custLookupBtn" class="btn btn-outline-primary" type="button" title="Search" aria-label="Search customer"><i class="bi bi-search"></i></button>
           <button id="custScanBtn" class="btn btn-outline-primary" type="button" title="Scan barcode"><i class="bi bi-camera"></i></button>
         </div>
         <div id="custScannerBox" style="display:none">
@@ -315,7 +315,7 @@ function itemRow(it, editable){
       <button class="qty-btn dec" data-id="${it.id}">−</button>
       <span class="qty-val">${it.quantity}</span>
       <button class="qty-btn inc" data-id="${it.id}">+</button>
-      <button class="btn btn-sm btn-outline-danger rm ms-2" data-id="${it.id}"><i class="bi bi-trash"></i></button>
+      <button class="btn btn-sm btn-outline-danger rm ms-2" data-id="${it.id}" title="Remove" aria-label="Remove"><i class="bi bi-trash"></i></button>
     </div>` : `<span class="text-muted small">Qty: ${it.quantity}</span>`;
   return `
     <div class="basket-item">

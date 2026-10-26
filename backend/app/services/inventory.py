@@ -59,7 +59,12 @@ def _clean(v):
     return v or None
 
 
-def named_attrs(size=None, brand=None, design_no=None):
+#: What a GRN LINE can say about its goods beyond size, brand and design — set
+#: on the GRN screen. Part of identity like every SPLIT_ATTRS key.
+LINE_ATTRS = ("style", "material", "pattern", "sleeve", "product_type")
+
+
+def named_attrs(size=None, brand=None, design_no=None, **extra):
     """The identity attributes a LINE names about itself, shaped like a split row.
 
     An invoice keyed size by size — one line per size of a run, each carrying its
@@ -80,13 +85,15 @@ def named_attrs(size=None, brand=None, design_no=None):
     if size and size_split.parse(size)["rows"]:
         size = None
     got = {"size": size, "brand": _clean(brand), "design_no": _clean(design_no)}
+    got.update({a: _clean(extra.get(a)) for a in LINE_ATTRS})
     return {a: got.get(a) for a in SPLIT_ATTRS} if any(got.values()) else None
 
 
 def line_named_attrs(line):
     """`named_attrs` for a PurchaseLine."""
     return named_attrs(getattr(line, "size", None), getattr(line, "brand", None),
-                       getattr(line, "design_no", None))
+                       getattr(line, "design_no", None),
+                       **{a: getattr(line, a, None) for a in LINE_ATTRS})
 
 
 def match_product(db, barcode, description, hsn, supplier_id, attrs=None,
@@ -175,11 +182,40 @@ def next_grn_no(db, when=None, warehouse_id=None):
             models.Purchase.grn_no == code).first() is not None)
 
 
+def _known_categories(db, cat_id):
+    """The category master a GRN may use, keyed lower-case -> master spelling.
+    A category typed on the invoice's Line Items grid is kept only when it is in
+    here (the rule the GRN line edit enforces); anything else is left to the
+    auto-classifier rather than inventing a category."""
+    return {c.name.strip().lower(): c.name for c in db.query(models.Category).filter(
+        (models.Category.catalogue_id == cat_id) | (models.Category.catalogue_id.is_(None)))}
+
+
+def sync_draft_categories(db, purchase, items):
+    """Category is set on the invoice, not on the GRN, so a DRAFT GRN built
+    before it was typed picks it up here. Lines pair up by position; when the
+    invoice and the GRN no longer have the same number of lines, nothing is
+    guessed."""
+    if purchase is None or purchase.status != "draft" or not items:
+        return
+    lines = sorted(purchase.lines, key=lambda l: l.id)
+    if len(items) != len(lines):
+        return
+    known = _known_categories(db, purchase_catalogue_id(db, purchase))
+    for it, line in zip(items, lines):
+        name = known.get(str(it.get("category") or "").strip().lower())
+        if name and name != line.category:
+            line.category = name
+    db.flush()
+
+
 def build_grn_from_document(db, doc):
     """Create (or return existing) a draft GRN for a confirmed document."""
     existing = db.query(models.Purchase).filter(
         models.Purchase.document_id == doc.id).first()
     if existing:
+        ex = doc.latest_extraction
+        sync_draft_categories(db, existing, (ex.data or {}).get("line_items") if ex else None)
         return existing
 
     ex = doc.latest_extraction
@@ -217,13 +253,16 @@ def build_grn_from_document(db, doc):
     db.flush()
 
     cat_id = purchase_catalogue_id(db, purchase)
+    known_cats = _known_categories(db, cat_id)
     for it in data.get("line_items", []):
+        line_cat = known_cats.get(str(it.get("category") or "").strip().lower())
         # a line that names a size, a brand or a design is matched on that tuple,
         # the way a breakdown row is — see named_attrs
         match = match_product(db, it.get("barcode"), it.get("description"),
                               it.get("hsn"), doc.supplier_id,
                               attrs=named_attrs(it.get("size"), it.get("brand"),
-                                                it.get("design")),
+                                                it.get("design"),
+                                                **{a: it.get(a) for a in LINE_ATTRS}),
                               catalogue_id=cat_id)
         db.add(models.PurchaseLine(
             purchase_id=purchase.id,
@@ -237,6 +276,10 @@ def build_grn_from_document(db, doc):
             # the invoice's own Brand and Design columns. The document calls it
             # `design`; the stock master has always called it `design_no`.
             brand=it.get("brand"), design_no=it.get("design"),
+            category=line_cat,
+            # style, material, pattern, sleeve and type, typed on the invoice's
+            # Line Items grid — the product is born with them at post
+            **{a: (str(it.get(a)).strip() or None) if it.get(a) else None for a in LINE_ATTRS},
             amount=it.get("amount") if it.get("amount") is not None else it.get("taxable_value"),
             # retail: the MRP the supplier printed, and the shelf price someone
             # set on the review screen. Carried through so the product this line
@@ -621,6 +664,10 @@ def post_grn(db, purchase):
             continue
         if line.is_split:
             for sp in line.splits:
+                # a breakdown row inherits what the line says when it says nothing
+                for a in LINE_ATTRS:
+                    if not getattr(sp, a, None) and getattr(line, a, None):
+                        setattr(sp, a, getattr(line, a))
                 product = db.get(models.Product, sp.product_id) if sp.product_id else None
                 if not product and sp.code:
                     from . import barcode_svc      # a scanned QR/barcode wins
@@ -690,6 +737,10 @@ def post_grn(db, purchase):
             for fld in ("mrp", "sale_price", "sale_discount_pct"):
                 if getattr(line, fld, None) is not None:
                     setattr(product, fld, getattr(line, fld))
+            # …and any attribute the line names that the product was missing
+            for a, v in (line_named_attrs(line) or {}).items():
+                if v and not getattr(product, a, None):
+                    setattr(product, a, v)
         if line.hsn and not product.hsn:
             product.hsn = line.hsn
         # what arrived, not what was billed — the difference is the shortage

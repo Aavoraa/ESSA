@@ -8,7 +8,7 @@
 <div class="page-head">
   <h4><i class="bi bi-gift"></i>
     {{ 'Edit scheme — ' + scheme.code if scheme else 'New promotion scheme' }}</h4>
-  <a href="{{ url_for('promotions.index') }}" class="btn btn-outline-secondary btn-sm">
+  <a href="{{ url_for('promotions.legacy_index') }}" class="btn btn-outline-secondary btn-sm">
     <i class="bi bi-arrow-left"></i> All schemes</a>
 </div>
 
@@ -193,7 +193,7 @@
       <div class="d-flex gap-2">
         <button class="btn btn-brand"><i class="bi bi-check-circle"></i>
           {{ 'Save changes' if scheme else 'Create scheme' }}</button>
-        <a href="{{ url_for('promotions.index') }}" class="btn btn-outline-secondary">Cancel</a>
+        <a href="{{ url_for('promotions.legacy_index') }}" class="btn btn-outline-secondary">Cancel</a>
         {% if scheme %}
         <a href="{{ url_for('promotions.detail', sid=scheme.id) }}"
            class="btn btn-outline-secondary ms-auto">Performance &amp; audit</a>

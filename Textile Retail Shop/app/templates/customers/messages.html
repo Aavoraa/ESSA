@@ -43,7 +43,7 @@
         </div>
         <form method="post" action="{{ url_for('customers.queue_wishes') }}" class="d-flex gap-2 align-items-center mt-3">
           <span class="small">Queue wishes for the next</span>
-          <input class="form-control form-control-sm" type="number" name="days" value="7" min="0" max="60" style="width:70px">
+          <input class="form-control form-control-sm" type="number" aria-label="Days ahead" name="days" value="7" min="0" max="60" style="width:70px">
           <span class="small">days</span>
           <button class="btn btn-outline-primary btn-sm ms-auto">Queue wishes</button>
         </form>

@@ -64,27 +64,29 @@ const check = (ok, label, detail = '') => {
   fails++; console.error(`  FAIL  ${label}${detail ? ' — ' + detail : ''}`);
 };
 const near = (a, b, tol = 0.02) => a != null && Math.abs(a - b) < tol;
+// shop prices are worked out to the nearest 10 (5 and above goes up)
+const r10 = (v) => Math.round(Math.round(v * 100) / 1000) * 10;
 
 // ---------------------------------------------------------------------------
-console.log('the worked example: 320 → +40% → 448 → +25% → 560');
+console.log('the worked example: 320 → +40% → 448, tagged 450 → +25% → 560');
 
 // goods arrive with a cost and no tag; both buffers are the shop's decision
 let row = { qty: 1, rate: 320, buffer_pct: 40 };
 row = recalcLine(row, 'buffer_pct', {});
-check(near(row.sale_price, 448), 'rate 320 + 40% = sell 448', `got ${row.sale_price}`);
+check(near(row.sale_price, 450), 'rate 320 + 40% = 448, sold at 450', `got ${row.sale_price}`);
 
 row = recalcLine({ ...row, mrp_buffer_pct: 25 }, 'mrp_buffer_pct', row);
-check(near(row.mrp, 560), 'sell 448 + 25% = MRP 560', `got ${row.mrp}`);
+check(near(row.mrp, 560), 'sell 450 + 25% = 562.5, tagged MRP 560', `got ${row.mrp}`);
 
 console.log('\nthe percentages that follow from those prices:');
-check(near(row.sale_discount_pct, 20), 'sale disc = (560−448)/560 = 20%', `got ${row.sale_discount_pct}`);
+check(near(row.sale_discount_pct, 19.64), 'sale disc = (560−450)/560 = 19.64%', `got ${row.sale_discount_pct}`);
 check(near(row.discount_pct, 42.86), 'purchase disc = (560−320)/560 = 42.86%', `got ${row.discount_pct}`);
 
 console.log('\na printed MRP is not overwritten:');
 let printed = recalcLine({ qty: 1, rate: 320, mrp: 995, buffer_pct: 40, mrp_buffer_pct: 25 },
                          'buffer_pct', {});
 check(printed.mrp === 995, 'invoice MRP 995 stands when the buffer moves', `got ${printed.mrp}`);
-check(near(printed.sale_price, 448), 'the sell price is still priced off cost', `got ${printed.sale_price}`);
+check(near(printed.sale_price, 450), 'the sell price is still priced off cost', `got ${printed.sale_price}`);
 
 console.log('\n…but typing the MRP buffer is an instruction, and wins:');
 const retagged = recalcLine({ ...printed, mrp_buffer_pct: 25 }, 'mrp_buffer_pct', printed);
@@ -114,16 +116,16 @@ const invoice = [
   { qty: 1, rate: 320 }, { qty: 5, rate: 290 }, { qty: 15, rate: 205 },
 ];
 const withBuffer = invoice.map((it) => recalcLine({ ...it, buffer_pct: 40 }, 'buffer_pct', it));
-check(withBuffer.every((r) => near(r.sale_price, Math.round(r.rate * 1.4))),
+check(withBuffer.every((r) => near(r.sale_price, r10(r.rate * 1.4))),
   'every line priced at cost + 40%',
   withBuffer.map((r) => r.rate + '->' + r.sale_price).join(' '));
 
 const withMrp = withBuffer.map((it) => recalcLine({ ...it, mrp_buffer_pct: 25 }, 'mrp_buffer_pct', it));
-check(withMrp.every((r) => near(r.mrp, Math.round(r.sale_price * 1.25))),
+check(withMrp.every((r) => near(r.mrp, r10(r.sale_price * 1.25))),
   'every MRP is sell + 25%',
   withMrp.map((r) => r.sale_price + '->' + r.mrp).join(' '));
-check(near(withMrp[0].sale_price, 448) && near(withMrp[0].mrp, 560),
-  'the worked line still reads 320 / 448 / 560',
+check(near(withMrp[0].sale_price, 450) && near(withMrp[0].mrp, 560),
+  'the worked line still reads 320 / 450 / 560',
   withMrp[0].rate + ' / ' + withMrp[0].sale_price + ' / ' + withMrp[0].mrp);
 check(withMrp.every((r) => near(r.amount, r.qty * r.rate)),
   'line amounts are untouched by a pricing fill',
@@ -147,7 +149,7 @@ console.log('…and Apply all itself, which takes one of two paths per column:')
 
   // a price column goes through the whole chain, against each line's own cost
   const buffered = applyAll(bill, 'buffer_pct', '40');
-  check(buffered.every((r) => near(r.sale_price, Math.round(r.rate * 1.4))),
+  check(buffered.every((r) => near(r.sale_price, r10(r.rate * 1.4))),
     'a buffer fill re-prices each line off its OWN cost',
     buffered.map((r) => r.rate + '->' + r.sale_price).join(' '));
   check(applyAll(bill, 'rate', '500').every((r) => near(r.amount, r.qty * 500)),
@@ -179,7 +181,8 @@ console.log('the GRN fill row lines up with the headings it fills:');
     'and it has one cell per heading',
     `${cells(head)} headings, ${cells(fill)} fill cells`);
   // the five that are editable, and nothing else
-  for (const k of ['category', 'unit_type', 'mrp', 'sale_discount_pct', 'sale_price']) {
+  // category is set on the invoice's line items now, not on the GRN
+  for (const k of ['unit_type', 'mrp', 'sale_discount_pct', 'sale_price']) {
     check(fill.includes(`gfillCell('${k}'`), `  ${k} can be filled`);
   }
   for (const k of ['description', 'hsn', 'qty', 'rate', 'amount']) {

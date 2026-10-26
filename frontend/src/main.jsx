@@ -45,6 +45,30 @@ if (framed) {
       </p>
     </div>`
 } else {
+  // The forms draw a field as <label>Name</label> followed by its box, with no
+  // htmlFor — it reads right, but a screen reader cannot tie the two together
+  // and clicking the label does nothing. Rather than thread an id through every
+  // one of several hundred fields, each such label is linked to the control
+  // that follows it as screens render. Ids are only ever ADDED, never changed,
+  // and only where React set none.
+  let seq = 0
+  const linkLabels = () => {
+    document.querySelectorAll('label:not([for])').forEach((l) => {
+      if (l.querySelector('input, select, textarea')) return
+      let c = l.nextElementSibling
+      if (c && !c.matches('input, select, textarea')) c = c.querySelector('input, select, textarea')
+      if (!c || c.type === 'hidden') return
+      if (!c.id) c.id = 'fld-' + (++seq)
+      l.htmlFor = c.id
+    })
+  }
+  let queued = false
+  new MutationObserver(() => {
+    if (queued) return
+    queued = true
+    setTimeout(() => { queued = false; linkLabels() }, 60)
+  }).observe(document.getElementById('root'), { childList: true, subtree: true })
+
   ReactDOM.createRoot(document.getElementById('root')).render(
     <React.StrictMode>
       <App />

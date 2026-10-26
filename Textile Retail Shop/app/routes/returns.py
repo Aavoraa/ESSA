@@ -130,11 +130,11 @@ def create():
               "the scheme's return rule.", "warning")
         return redirect(url_for("returns.index", q=inv.invoice_number))
 
-    # cash · card · upi hand money back; store_credit keeps it as a note the
-    # customer spends on a later bill (see app/vouchers.py)
-    refund_method = request.form.get("refund_method") or "cash"
-    if refund_method not in ("cash", "card", "upi", "store_credit"):
-        refund_method = "cash"
+    # The shop does not refund money. Every return is an exchange: its value is
+    # kept as store credit (a credit note the customer spends — see
+    # app/vouchers.py) and goes straight onto the customer's new bill, so
+    # nothing is ever paid out of the drawer. Whatever the form says.
+    refund_method = "store_credit"
     note = CreditNote(
         number=generate_number("CRN", CreditNote, "number"),
         invoice_id=inv.id,
@@ -227,11 +227,8 @@ def create():
         customer.total_spent = round(max(0.0, (customer.total_spent or 0) - note.total), 2)
 
     db.session.commit()
-    if note.refund_method == "store_credit":
-        flash(f"Return recorded — {note.number} for {note.total:.2f} kept as store credit. "
-              "The customer spends it at the counter under Credit note.", "success")
-    else:
-        flash(f"Return recorded — {note.number}, {note.total:.2f} refunded.", "success")
+    flash(f"Return recorded — {note.number} for ₹{note.total:.2f} is applied to this "
+          "new bill. Scan the items the customer is taking in exchange.", "success")
     for f in findings:
         if f.unearned_qty > 0:
             flash(f.message, "warning")
@@ -239,7 +236,9 @@ def create():
         flash(f"₹{wanted - clawback:.2f} of free goods could not be recovered "
               f"from this refund — the return was worth less than the promotion "
               f"it broke.", "warning")
-    return redirect(url_for("returns.view_note", nid=note.id))
+    # Straight to the new bill, customer attached and the credit waiting at
+    # settlement — see pos._exchange_from.
+    return redirect(url_for("pos.counter", credit_note=note.number))
 
 
 @returns_bp.route("/<int:nid>")

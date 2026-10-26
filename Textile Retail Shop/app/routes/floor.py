@@ -126,7 +126,8 @@ def customer_new():
     if phone and Customer.query.filter_by(phone=phone).first():
         return jsonify({"error": "Phone already exists"}), 400
     c = Customer(
-        name=name, phone=phone,
+        # No phone is a missing phone, not an empty one — the number is optional.
+        name=name, phone=phone or None,
         email=(data.get("email") or "").strip(),
         state_code=(data.get("state_code") or "33").strip(),
     )

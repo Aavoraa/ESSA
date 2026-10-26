@@ -20,7 +20,7 @@
 <form class="row g-2 mb-3">
   <div class="col-md-5"><input class="form-control" name="q" placeholder="Search name, SKU, fabric, color" value="{{ q }}"></div>
   <div class="col-md-3">
-    <select class="form-select" name="category">
+    <select class="form-select" name="category" aria-label="Category">
       <option value="">All categories</option>
       {% for section, cats in category_groups %}
       <optgroup label="{{ section }}">
@@ -60,7 +60,7 @@
             <a href="{{ url_for('inventory.product_label', pid=p.id) }}" class="btn btn-sm btn-outline-secondary" title="Print QR label"><i class="bi bi-qr-code"></i></a>
             {% if p.warehouse_id %}<a href="{{ url_for('inventory.product_pieces', pid=p.id) }}" class="btn btn-sm btn-outline-secondary" title="Print a tag for every piece"><i class="bi bi-tags"></i></a>{% endif %}
             {% if current_user.is_manager %}
-            <a href="{{ url_for('inventory.edit_product', pid=p.id) }}" class="btn btn-sm btn-outline-primary"><i class="bi bi-pencil"></i></a>
+            <a href="{{ url_for('inventory.edit_product', pid=p.id) }}" class="btn btn-sm btn-outline-primary" title="Edit product" aria-label="Edit product"><i class="bi bi-pencil"></i></a>
             {% endif %}
           </td>
         </tr>

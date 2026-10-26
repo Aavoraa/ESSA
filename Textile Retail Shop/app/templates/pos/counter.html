@@ -1,103 +1,246 @@
 {% extends "base.html" %}
 {% block content %}
+{# The billing screen. Two halves, sized to the window and never scrolled:
+   a narrow column of inputs on the left — one scanner, the customer, the
+   reductions — and the bill itself, as large as the screen allows, on the right.
 
-{# Who is serving. Asked before anything is rung up, because the commission on
-   this sale is worked out from it — see routes/staff.py. Checkout stays disabled
-   until it is answered, rather than letting a cart be built and refused at the
-   very end. #}
-<div id="staffGate" class="card p-3 mb-3 pos-strip">
-  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
-    <div>
-      <h6 class="mb-1"><i class="bi bi-person-badge"></i> Who is serving this customer?</h6>
-      <div class="small text-muted">Scan the staff ID card, or enter the staff code.</div>
-    </div>
-    <div class="d-flex align-items-center gap-2 flex-wrap">
-      <div class="input-group input-group-sm" style="width:280px">
-        <input id="staffCode" class="form-control" placeholder="STF000003 or username" autocomplete="off">
-        <button id="staffScanBtn" class="btn btn-outline-primary" type="button" title="Scan the ID card">
+   Taking the money is NOT on this screen. "Proceed to settlement" carries the
+   bill to its own page (pos/settle.html); nothing is written until that page's
+   Bill & print, where the server checks the cart and the tenders together. #}
+<div class="pos-screen" id="posScreen">
+
+  <aside class="pos-side">
+    {# ONE scanner for everything. The first scan is a garment; the scan after
+       it is the staff ID of whoever sold that garment, and it lands on that line.
+       A bill can carry garments sold by different people, so it is asked per
+       line rather than once for the sale. #}
+    <div class="card p-2">
+      <div class="input-group">
+        <span class="input-group-text"><i class="bi bi-upc-scan"></i></span>
+        <input id="scanBox" class="form-control" autocomplete="off" autofocus
+               placeholder="Scan product, then staff ID">
+        <button id="camBtn" class="btn btn-outline-primary" type="button" title="Scan with the camera">
           <i class="bi bi-camera"></i></button>
-        <button id="staffGo" class="btn btn-outline-primary" type="button">Set</button>
       </div>
-      <select id="staffPick" class="form-select form-select-sm" style="width:190px">
-        <option value="">or choose…</option>
-        {% for u in staff %}
-        <option value="{{ u.id }}">{{ u.full_name }}</option>
-        {% endfor %}
-      </select>
+      <div id="scanHint" class="scan-hint mt-1">Scan a product tag.</div>
+      <div id="camBox" style="display:none" class="mt-1">
+        <div id="camReader" style="width:100%"></div>
+        <button id="camStop" class="btn btn-outline-secondary btn-sm mt-1">Stop camera</button>
+      </div>
     </div>
-  </div>
 
-  <div id="staffScanBox" style="display:none" class="mt-2">
-    <div id="staffReader" style="width:100%;max-width:320px"></div>
-    <button id="staffStopScan" class="btn btn-outline-secondary btn-sm mt-1">Stop</button>
-  </div>
+    {# Which entity is billing, from where, at which till — and the number the
+       next bill will carry. Kept on screen (small) because a till left set to
+       the wrong branch or floor is only noticed if the answer is in view. #}
+    <div class="card p-2 small">
+      <div class="d-flex align-items-center gap-2">
+        <span id="billNoBox" class="badge {{ 'text-bg-dark' if next_bill.mapped else 'text-bg-secondary' }}"
+              title="{{ 'Next bill on ' ~ next_bill.floor if next_bill.mapped else 'No floor is set for this till, so it bills on the shop’s plain series' }}">
+          <span id="pbBillNo">{{ next_bill.number }}</span></span>
+        <i id="pbUnmapped" class="bi bi-exclamation-triangle-fill till-warn {{ 'd-none' if next_bill.mapped }}"
+           title="No floor set for this till — it bills on the shop's plain series. Press Change and pick the floor you are on, or ask a manager to put this till on one in the warehouse's Locations screen."
+           aria-label="No floor set — plain series"></i>
+        <span class="d-flex gap-1 ms-auto">
+          <button class="btn btn-outline-primary btn-xs" data-bs-toggle="modal" data-bs-target="#placeModal"
+                  title="Company / location / floor / counter"><i class="bi bi-shop"></i> Change</button>
+          <a href="{{ url_for('drawer.index') }}"
+             class="btn btn-xs {{ 'btn-outline-secondary' if drawer_open else 'btn-outline-warning' }}"
+             title="{{ ('Drawer open since ' ~ drawer_open.opened_at.strftime('%H:%M')) if drawer_open else 'The cash drawer on this till has not been opened' }}">
+            <i class="bi bi-inbox"></i>{{ '' if drawer_open else ' closed' }}</a>
+        </span>
+      </div>
+      <div class="text-muted text-truncate mt-1" id="pbWhere"
+           title="{{ (chosen_company or default_company).name }} {{ (chosen_company or default_company).gstin or '' }}">
+        <span id="pbLocation">{{ chosen_location.name if chosen_location else 'No location' }}</span> ·
+        <span id="pbFloor">{{ chosen_floor.name if chosen_floor else 'no floor' }}</span> ·
+        <span id="pbCounter">{{ chosen_counter.name if chosen_counter else 'no counter' }}</span>
+      </div>
+    </div>
 
-  <div id="staffChosen" class="mt-2 d-none">
-    <span class="badge text-bg-success" style="font-size:.95rem">
-      <i class="bi bi-check-circle"></i> Serving: <span id="staffName"></span>
-      <span id="staffCodeShown" class="opacity-75"></span>
-    </span>
-    <button id="staffClear" class="btn btn-sm btn-outline-secondary ms-1">Change</button>
-  </div>
-  <div id="staffMsg" class="small text-danger mt-1"></div>
+    {# The customer is optional — a walk-in is billed without one, and a new
+       customer needs only a name. The phone number is never required. #}
+    <div class="card p-2">
+      <div class="input-group input-group-sm">
+        <input id="custLookup" class="form-control" placeholder="Customer: mobile / bill # / card (optional)">
+        <button id="custLookupBtn" class="btn btn-outline-primary" type="button" title="Search"><i class="bi bi-search"></i></button>
+        <button class="btn btn-outline-primary" type="button" title="New customer"
+                data-bs-toggle="modal" data-bs-target="#newCustModal"><i class="bi bi-person-plus"></i></button>
+      </div>
+      <div id="custCard" class="d-none mt-1 small d-flex justify-content-between align-items-center">
+        <span class="text-truncate"><b id="custName">-</b> <span class="text-muted" id="custPhone"></span>
+          <span class="badge text-bg-info" id="custPoints">0 pts</span></span>
+        <button id="custClear" class="btn btn-xs btn-outline-danger" title="Remove customer"><i class="bi bi-x"></i></button>
+      </div>
+      <div id="custWalkin" class="small text-muted mt-1"><i class="bi bi-person"></i> Walk-in customer</div>
+    </div>
+
+    {# What the discount card's P.Code applied, and a return's store credit waiting
+       for this bill — shown only when there is something to say. Discounts are
+       given in the discount card (D + Enter) and the bill's % / AddIn % columns. #}
+    <div id="billNotes" class="small px-1">
+      <div id="couponHelp" class="d-none"></div>
+      <button type="button" id="couponClear" class="btn btn-link btn-sm p-0 d-none">Remove coupon</button>
+      <div id="exchangeNote" class="d-none" style="color:var(--brand-dark)"></div>
+    </div>
+
+    <div class="d-flex gap-1">
+      {# The salesman's list of what is on offer today, without leaving the bill. #}
+      <button type="button" id="offersBtn" class="btn btn-outline-primary btn-sm flex-fill">
+        <i class="bi bi-gift"></i> Salesman scheme</button>
+      <div class="dropdown flex-fill">
+        <button type="button" id="prevBtn" class="btn btn-outline-secondary btn-sm w-100 dropdown-toggle"
+                data-bs-toggle="dropdown" aria-expanded="false"
+                data-bs-popper-config='{"strategy":"fixed"}'><i class="bi bi-clock-history"></i> Previous bill</button>
+        {# Fixed positioning lifts the list out of the left column, which hides
+           anything wider than itself — the download buttons were cut off. #}
+        <ul class="dropdown-menu dropdown-menu-end shadow" id="prevMenu"
+            style="min-width:340px; max-width:calc(100vw - 24px); max-height:70vh; overflow-y:auto">
+          <li class="dropdown-item-text small text-muted">Loading…</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="mt-auto card p-2 pos-go">
+      <div class="d-flex justify-content-between align-items-baseline">
+        <span class="text-muted small">TOTAL</span>
+        <span class="pos-total fs-3 fw-bold" id="sideTotal">₹0.00</span>
+      </div>
+      <div id="goWarn" class="small d-none" style="color:#BE123C"></div>
+      <button id="goSettle" class="btn btn-brand w-100 mt-1" disabled
+              title="Saves the bill, prints the delivery copy, then opens Settlement">
+        <i class="bi bi-printer"></i> Bill &amp; print delivery copy</button>
+      <button id="clearBill" class="btn btn-link btn-sm w-100 text-decoration-none text-muted p-0 mt-1">Clear bill</button>
+    </div>
+  </aside>
+
+  <section class="card pos-bill">
+    <div class="pos-bill-head d-flex justify-content-between align-items-center px-3 py-2">
+      <div><span class="fw-bold"><i class="bi bi-receipt"></i> BILL</span>
+        <span class="font-monospace ms-2" id="headBillNo">{{ next_bill.number }}</span></div>
+      <div class="small text-muted"><span id="headCust">Walk-in</span> · <span id="headCount">0 items</span></div>
+    </div>
+    <div class="bill-lines">
+      <table class="table table-sm align-middle mb-0 bill-table">
+        <thead><tr>
+          <th style="width:42px">S.No</th><th style="width:104px">Barcode</th><th>Product</th>
+          <th class="text-end" style="width:76px">Price</th>
+          <th class="text-end" style="width:52px">Qty</th><th class="text-end" style="width:72px">Discount</th>
+          <th class="text-end" style="width:66px" title="Additional discount %">AddIn %</th>
+          <th class="text-end" style="width:58px" title="Discount %">Disc %</th>
+          <th class="text-end" style="width:86px">Amount</th><th style="width:100px">Salesman</th><th style="width:28px"></th>
+        </tr>
+        {# The entry row: keyed in left to right, like the shop's old billing grid.
+           Every box can be typed in. Barcode → Enter, or a name typed into
+           Product, finds the item; Price, Qty, Discount (₹), AddIn.Dis (₹), % and
+           Amount can all be changed and keep each other in step; the salesman's
+           ID → Enter puts the line on the bill and starts again. #}
+        <tr class="entry-row">
+          <td class="text-muted text-center"><i class="bi bi-plus-lg" aria-hidden="true"></i></td>
+          <td><input id="enBarcode" class="form-control form-control-sm" autocomplete="off" placeholder="Barcode"></td>
+          <td><div class="position-relative">
+            <input id="enProduct" class="form-control form-control-sm" autocomplete="off" placeholder="Product name">
+            <div id="enSuggest" class="en-suggest d-none"></div>
+          </div></td>
+          <td><input id="enPrice" aria-label="Price" class="form-control form-control-sm text-end" type="number" min="0" step="0.01"></td>
+          <td><input id="enQty" aria-label="Quantity" class="form-control form-control-sm text-end" type="number" min="1" step="1"></td>
+          <td><input id="enDisc" class="form-control form-control-sm text-end" type="number" min="0" step="0.01" title="Discount, ₹"></td>
+          <td><input id="enAddin" class="form-control form-control-sm text-end" type="number" min="0" max="100" step="1" title="Additional discount %"></td>
+          <td><input id="enPct" class="form-control form-control-sm text-end" type="number" min="0" max="100" step="1" title="Discount %"></td>
+          <td><input id="enAmt" class="form-control form-control-sm text-end" type="number" min="0" step="0.01" title="Amount with GST — type a figure to work the discount out"></td>
+          <td><input id="enStaff" class="form-control form-control-sm" autocomplete="off" placeholder="Staff ID"></td>
+          <td></td>
+        </tr></thead>
+        <tbody id="billBody"></tbody>
+      </table>
+    </div>
+    {# What the cart has earned, and what it earned and cannot have — visible
+       before the money is taken, not discovered in the bag afterwards. #}
+    <div id="promoBox" class="d-none mx-3 mb-1"></div>
+    <div class="bill-foot px-3 py-2">
+      <div class="bill-sums">
+        <span>Subtotal <b id="subtotal">₹0.00</b></span>
+        <span>GST <b id="tax">₹0.00</b></span>
+        <span id="sumDisc" class="d-none">Discount <b>−<span id="discShown">₹0.00</span></b></span>
+        <span id="sumCoupon" class="d-none">Coupon <b>−<span id="couponShown">₹0.00</span></b></span>
+        <span id="sumPts" class="d-none">Points <b>−<span id="ptsShown">₹0.00</span></b></span>
+      </div>
+      <div class="d-flex align-items-baseline gap-2">
+        <span class="text-muted">TOTAL</span>
+        <strong id="grandTotal" class="pos-total bill-grand">₹0.00</strong>
+      </div>
+    </div>
+  </section>
 </div>
 
-{# Which entity is billing, from where, at which till.
-
-   Shown rather than hidden behind a settings page: it decides whose GSTIN goes
-   on the next bill, and a till that has been left set to the wrong branch is
-   only discoverable if the answer is on screen while somebody is using it. The
-   same reason the staff gate above sits here. #}
-<div id="placeBar" class="card p-2 px-3 mb-3 pos-strip">
-  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
-    <div class="d-flex align-items-center gap-3 flex-wrap small">
-      <span><span class="text-muted pos-strip-label">COMPANY</span>
-        <b id="pbCompany">{{ (chosen_company or default_company).name }}</b>
-        <span id="pbGstin" class="text-muted font-monospace">{{ (chosen_company or default_company).gstin or '' }}</span></span>
-      <span class="sep d-none d-md-inline" aria-hidden="true">|</span>
-      <span><span class="text-muted pos-strip-label">LOCATION</span>
-        <b id="pbLocation">{{ chosen_location.name if chosen_location else 'Select Location' }}</b></span>
-      <span class="sep d-none d-md-inline" aria-hidden="true">|</span>
-      <span><span class="text-muted pos-strip-label">FLOOR</span>
-        <b id="pbFloor">{{ chosen_floor.name if chosen_floor else 'Not mapped' }}</b></span>
-      <span class="sep d-none d-md-inline" aria-hidden="true">|</span>
-      <span><span class="text-muted pos-strip-label">COUNTER</span>
-        <b id="pbCounter">{{ chosen_counter.name if chosen_counter else 'Select Counter' }}</b></span>
+<!-- Quick-add customer: a name is all it needs. -->
+<div class="modal fade" id="newCustModal" tabindex="-1">
+  <div class="modal-dialog modal-sm"><div class="modal-content">
+    <div class="modal-header py-2"><h6 class="modal-title">New customer</h6>
+      <button class="btn-close" data-bs-dismiss="modal"></button></div>
+    <div class="modal-body">
+      <div class="mb-2"><label class="form-label small mb-0">Name *</label>
+        <input id="ncName" class="form-control form-control-sm" required></div>
+      <div class="mb-2"><label class="form-label small mb-0">Mobile <span class="text-muted">(optional)</span></label>
+        <input id="ncPhone" class="form-control form-control-sm" placeholder="+91 …"></div>
+      <div class="mb-2"><label class="form-label small mb-0">Email <span class="text-muted">(optional)</span></label>
+        <input id="ncEmail" class="form-control form-control-sm"></div>
+      <div class="mb-0"><label class="form-label small mb-0">State code</label>
+        <input id="ncState" class="form-control form-control-sm" value="33"></div>
     </div>
-    <div class="d-flex align-items-center gap-2">
-      {# The number the next bill will carry, on the billing screen, before any
-         money is taken. It is what the floor mapping is FOR — a till that has
-         been left set to the wrong storey is only discoverable if the series it
-         is about to print is on screen while somebody is using it.
-
-         It is the next number, not a reserved one. Reserving it for a cart that
-         is then abandoned would leave a hole in a statutory series, and "what
-         happened to TG26-007" is a question with no good answer; the committed
-         bill carries the authority and the till repaints from it. #}
-      <span id="billNoBox" class="badge {{ 'text-bg-dark' if next_bill.mapped else 'text-bg-secondary' }}"
-            style="font-size:.95rem"
-            title="{{ 'Next bill on ' ~ next_bill.floor if next_bill.mapped else 'No floor is set for this till, so it bills on the shop’s plain series' }}">
-        Bill No: <span id="pbBillNo">{{ next_bill.number }}</span>
-      </span>
-      <button class="btn btn-outline-primary btn-sm" data-bs-toggle="modal"
-              data-bs-target="#placeModal"><i class="bi bi-shop"></i> Change</button>
-      {# The drawer on this till. Billing does not wait on it — a shop that never
-         counts its drawer still has to sell — but a closed one is said out loud. #}
-      <a href="{{ url_for('drawer.index') }}"
-         class="btn btn-sm {{ 'btn-outline-secondary' if drawer_open else 'btn-outline-warning' }}"
-         title="{{ ('Drawer open since ' ~ drawer_open.opened_at.strftime('%H:%M')) if drawer_open else 'The cash drawer on this till has not been opened' }}">
-        <i class="bi bi-inbox"></i> Drawer{{ '' if drawer_open else ' closed' }}</a>
+    <div class="modal-footer py-2">
+      <button class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+      <button id="ncSave" class="btn btn-brand btn-sm">Save &amp; use</button>
     </div>
-  </div>
-  {% if not next_bill.mapped %}
-  <div id="pbUnmapped" class="small mt-1" style="color:#B45309">
-    <i class="bi bi-exclamation-triangle"></i>
-    No floor is set for this till, so its bills are numbered
-    <code>{{ next_bill.number }}</code> rather than from a floor's own series.
-    Press <b>Change</b> and pick the floor you are on — or ask a manager to put
-    this till on one for good, in the warehouse's <b>Locations</b> screen.
-  </div>
-  {% endif %}
+  </div></div>
+</div>
+
+<!-- The salesman scheme: every promotion running at this till today. -->
+<div class="modal fade" id="offersModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-scrollable"><div class="modal-content">
+    <div class="modal-header py-2"><h6 class="modal-title"><i class="bi bi-gift"></i> Running offers — tell the customer</h6>
+      <button class="btn-close" data-bs-dismiss="modal"></button></div>
+    <div class="modal-body" id="offersBody"><div class="text-muted small">Loading…</div></div>
+  </div></div>
+</div>
+
+<!-- The discount card: D + Enter in the scanner. Tick the items, then type a
+     discount (% or ₹), or the final amount wanted for them. E.Code (whoever
+     approves it) and P.Code (a promotion / coupon code) are optional. APPROVE
+     applies what is filled in and closes the card. -->
+<div class="modal fade" id="discModal" tabindex="-1">
+  <div class="modal-dialog modal-xl modal-dialog-centered"><div class="modal-content">
+    <div class="modal-body p-2">
+      <div class="dc-lines">
+        <table class="table table-sm align-middle mb-0 dc-table">
+          <thead><tr>
+            <th style="width:32px"><input type="checkbox" class="form-check-input" id="dcAll" title="All items"></th>
+            <th>Barcode</th><th>Detail</th><th class="text-end">Price</th><th class="text-end">Qty</th>
+            <th class="text-end">Discount</th><th class="text-end">Addin %</th><th class="text-end">D.Value</th><th class="text-end">Amount</th>
+          </tr></thead>
+          <tbody id="dcBody"></tbody>
+        </table>
+      </div>
+      <div id="dcMsg" class="small mt-1"></div>
+    </div>
+    <div class="modal-footer py-2 justify-content-between flex-nowrap gap-2">
+      <div class="d-flex align-items-center gap-1 dc-foot">
+        <span class="small text-nowrap me-1">Discount %/₹</span>
+        <button type="button" id="dcMode" class="btn btn-outline-secondary btn-sm" title="Switch between % and ₹">%</button>
+        <input id="dcDisc" class="form-control form-control-sm" type="number" min="0" step="0.01" placeholder="discount"
+               title="Discount on the ticked items — Enter applies it">
+        <input id="dcFinal" class="form-control form-control-sm" type="number" min="0" step="0.01" placeholder="final"
+               title="The final amount wanted for the ticked items — Enter works out the discount">
+        <input id="dcECode" class="form-control form-control-sm" autocomplete="off" placeholder="E.Code"
+               title="Staff ID of whoever approves the discount">
+        <input id="dcPCode" class="form-control form-control-sm text-uppercase" autocomplete="off" placeholder="P.Code"
+               title="Promotion / coupon code — Enter applies it">
+      </div>
+      <div class="d-flex gap-1">
+        <button id="dcApprove" class="btn btn-brand btn-sm" title="Apply what is filled in and close">APPROVE</button>
+        <button class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">CLOSE</button>
+      </div>
+    </div>
+  </div></div>
 </div>
 
 <div class="modal fade" id="placeModal" tabindex="-1">
@@ -130,593 +273,792 @@
   </div></div>
 </div>
 
-<div class="row g-3">
-  <div class="col-lg-7">
-    <div class="card p-3">
-      <h5 class="mb-2"><i class="bi bi-upc-scan"></i> Scan to bill</h5>
-      {# No product grid. Five tiles reading PILLOW COVER tell a cashier nothing
-         about which one is in their hand; the tag on the garment does. #}
-      <div class="input-group input-group-lg mb-2">
-        <span class="input-group-text"><i class="bi bi-upc-scan"></i></span>
-        <input id="productSearch" class="form-control form-control-lg"
-               autocomplete="off" autofocus
-               placeholder="Scan the tag — or type a SKU / QR and press Enter">
-        <button id="prodScanBtn" class="btn btn-outline-primary" type="button"
-                title="Scan with the camera"><i class="bi bi-camera"></i></button>
-      </div>
-      <div id="prodScannerBox" style="display:none">
-        <div id="prodReader" style="width:100%;max-width:340px;"></div>
-        <button id="prodStopScan" class="btn btn-outline-secondary btn-sm mt-1">Stop</button>
-      </div>
-
-      {# The last few scans, newest first. A scanner fires faster than anyone can
-         watch the cart, and this is how a cashier sees that the thing they just
-         beeped is the thing that went on the bill. #}
-      <div class="small text-muted mt-2 mb-1">Recently scanned</div>
-      <div id="scanLog" class="list-group list-group-flush"
-           style="max-height:44vh; overflow:auto;">
-        <div class="list-group-item text-muted text-center py-4" id="scanEmpty">
-          <i class="bi bi-upc-scan" style="font-size:2rem;opacity:.35"></i>
-          <div class="mt-2">Nothing scanned yet.</div>
-          <div class="small">Scan a garment tag, a printed barcode or a warehouse QR.</div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <div class="col-lg-5">
-    <div class="card p-3">
-      <h5><i class="bi bi-cart"></i> Cart</h5>
-      <div class="mb-2">
-        <label class="form-label small mb-1">Customer</label>
-        <div class="input-group input-group-sm mb-1">
-          <input id="custLookup" class="form-control" placeholder="Mobile / invoice # / card / scan">
-          <button id="custLookupBtn" class="btn btn-outline-primary" type="button" title="Search"><i class="bi bi-search"></i></button>
-          <button id="custScanBtn"   class="btn btn-outline-primary" type="button" title="Scan"><i class="bi bi-camera"></i></button>
-        </div>
-        <div id="custScannerBox" style="display:none">
-          <div id="custReader" style="width:100%;max-width:320px;"></div>
-          <button id="custStopScan" class="btn btn-outline-secondary btn-sm mt-1">Stop</button>
-        </div>
-
-        <div id="custCard" class="p-2 border rounded d-none" style="background:var(--brand-50);">
-          <div class="d-flex justify-content-between align-items-start">
-            <div>
-              <div class="fw-bold" id="custName">-</div>
-              <div class="small text-muted"><i class="bi bi-telephone"></i> <span id="custPhone">-</span></div>
-              <div class="small"><span class="badge text-bg-info" id="custPoints">0 pts</span>
-                <span class="text-muted ms-1" id="custStats"></span></div>
-            </div>
-            <button id="custClear" class="btn btn-sm btn-outline-danger" title="Clear"><i class="bi bi-x"></i></button>
-          </div>
-        </div>
-        <div id="custWalkin" class="small text-muted mt-1 d-flex justify-content-between align-items-center">
-          <span><i class="bi bi-person"></i> Walk-in customer</span>
-          <button class="btn btn-outline-primary btn-sm" data-bs-toggle="modal" data-bs-target="#newCustModal">
-            <i class="bi bi-person-plus"></i> New
-          </button>
-        </div>
-      </div>
-
-      <!-- Quick-add customer modal -->
-      <div class="modal fade" id="newCustModal" tabindex="-1">
-        <div class="modal-dialog"><div class="modal-content">
-          <div class="modal-header"><h5 class="modal-title">Add new customer</h5>
-            <button class="btn-close" data-bs-dismiss="modal"></button></div>
-          <div class="modal-body">
-            <div class="mb-2"><label class="form-label small">Name *</label>
-              <input id="ncName" class="form-control" required></div>
-            <div class="mb-2"><label class="form-label small">Mobile</label>
-              <input id="ncPhone" class="form-control" placeholder="+91 …"></div>
-            <div class="mb-2"><label class="form-label small">Email</label>
-              <input id="ncEmail" class="form-control"></div>
-            <div class="mb-2"><label class="form-label small">State code</label>
-              <input id="ncState" class="form-control" value="33"></div>
-          </div>
-          <div class="modal-footer">
-            <button class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
-            <button id="ncSave" class="btn btn-brand">Save &amp; use</button>
-          </div>
-        </div></div>
-      </div>
-
-      <div class="table-responsive" style="max-height:38vh; overflow:auto;">
-        <table class="table table-sm cart-table">
-          <thead><tr><th>Item</th><th style="width:80px">Qty</th><th class="text-end">Amt</th><th></th></tr></thead>
-          <tbody id="cartBody"><tr><td colspan="4" class="text-center text-muted">Cart empty</td></tr></tbody>
-        </table>
-      </div>
-
-      {# What the cart has earned, and what it earned and cannot have.
-
-         On the billing screen rather than behind a button, because the cashier
-         has to be able to answer "why is there a leggings on my bill" without
-         leaving the sale — and because a promotion the customer qualified for
-         and the shop cannot honour has to be visible BEFORE the money is taken,
-         not discovered in the bag afterwards. #}
-      <div id="promoBox" class="mb-2 d-none"></div>
-
-      <div class="border-top pt-2 mt-2">
-        <div class="d-flex justify-content-between"><span>Subtotal</span><span id="subtotal">₹0.00</span></div>
-        <div class="d-flex justify-content-between"><span>GST</span><span id="tax">₹0.00</span></div>
-        <div class="row g-2 mt-1">
-          <div class="col-6">
-            <label class="form-label small mb-1">Discount ₹</label>
-            <input id="discount" class="form-control form-control-sm" type="number" min="0" step="0.01" value="0">
-          </div>
-          <div class="col-6">
-            <label class="form-label small mb-1 d-flex justify-content-between">
-              <span>Redeem pts <span class="text-muted">(1 pt = ₹1)</span></span>
-              <button type="button" id="useAllPts" class="btn btn-link btn-sm p-0" style="display:none">Use all</button>
-            </label>
-            <input id="redeemPoints" class="form-control form-control-sm" type="number" min="0" step="1" value="0">
-            <div id="ptsHelp" class="small text-muted mt-1">Attach a customer to redeem points.</div>
-          </div>
-        </div>
-        {# A coupon comes off like a discount — the shop gives it, nobody paid for it
-           — so it sits with the discount and not among the tenders. The counter
-           shows what it is worth; checkout values it again before billing. #}
-        <div class="mt-2">
-          <label class="form-label small mb-1" for="couponCode">Coupon</label>
-          <div class="input-group input-group-sm">
-            <input id="couponCode" class="form-control text-uppercase" maxlength="32" placeholder="Coupon code" autocomplete="off">
-            <button type="button" id="couponApply" class="btn btn-outline-primary">Apply</button>
-            <button type="button" id="couponClear" class="btn btn-outline-secondary d-none" title="Remove coupon"><i class="bi bi-x"></i></button>
-          </div>
-          <div id="couponHelp" class="small mt-1 d-none"></div>
-        </div>
-        <div class="d-flex justify-content-between align-items-center mt-2 pos-total-row"><strong>Total</strong><strong id="grandTotal" class="pos-total" style="color:var(--brand-dark)">₹0.00</strong></div>
-
-        <!-- How this bill is being paid, for the sale that is paid ONE way.
-             That is nearly every sale, and sending it through the settlement
-             modal meant a popup and a second click to confirm a number the till
-             had already worked out. The method is picked here and the bill is
-             taken in one press.
-
-             The modal has not gone anywhere: the moment a bill is split across
-             two tenders there are amounts to balance to the paisa, and that is
-             what it exists for. "Split across methods" opens it, pre-filled from
-             whatever was picked here. Both paths post the same payments array to
-             the same endpoint, so a split bill and a plain one cannot come out
-             of the till differently. -->
-        <div class="mt-3">
-          <label class="form-label small mb-1">Pay by</label>
-          <div class="btn-group w-100" role="group" aria-label="Payment method">
-            <input type="radio" class="btn-check" name="qpMethod" id="qpCash" value="cash" checked>
-            <label class="btn btn-outline-primary btn-sm" for="qpCash"><i class="bi bi-cash"></i> Cash</label>
-            <input type="radio" class="btn-check" name="qpMethod" id="qpCard" value="card">
-            <label class="btn btn-outline-primary btn-sm" for="qpCard"><i class="bi bi-credit-card"></i> Card</label>
-            <input type="radio" class="btn-check" name="qpMethod" id="qpUpi" value="upi">
-            <label class="btn btn-outline-primary btn-sm" for="qpUpi"><i class="bi bi-phone"></i> UPI</label>
-          </div>
-
-          <!-- Cash is the only tender that is over-paid, so it is the only one
-               that asks what was handed over and works out the change. -->
-          <div class="row g-2 mt-1" id="qpCashRow">
-            <div class="col-6">
-              <label class="form-label small mb-1">Tendered ₹</label>
-              <input id="qpTender" class="form-control form-control-sm"
-                     type="number" min="0" step="0.01" placeholder="0.00">
-            </div>
-            <div class="col-6 d-flex align-items-end">
-              <div class="d-flex justify-content-between w-100 pb-1">
-                <span class="small text-muted">Change</span>
-                <span id="qpChange" class="fw-bold" style="color:var(--brand-dark)">₹0.00</span>
-              </div>
-            </div>
-          </div>
-
-          <div class="mt-2 d-none" id="qpRefRow">
-            <input id="qpRef" class="form-control form-control-sm" maxlength="64"
-                   placeholder="Reference (optional)">
-          </div>
-
-          <div id="qpWarn" class="small mt-1 d-none" style="color:#BE123C"></div>
-        </div>
-
-        <button id="checkoutBtn" class="btn btn-brand w-100 mt-2">
-          <i class="bi bi-cash-coin"></i> Settle &amp; bill</button>
-        <button type="button" id="splitBtn" class="btn btn-link btn-sm w-100 mt-1 text-decoration-none"
-                title="Take this bill across more than one tender, or from store credit or an advance">Split · store credit · advance ›</button>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- ==================================================================
-     Settlement — how this bill is actually being paid.
-     A separate step from the cart on purpose: it is the moment money
-     changes hands, and it is the one thing at a till that must balance
-     to the paisa before anything is committed. Any mix of the three
-     tenders is allowed; the Bill button stays dead until they add up.
-     ================================================================== -->
-<div class="modal fade" id="settleModal" tabindex="-1" data-bs-backdrop="static">
-  <div class="modal-dialog modal-lg"><div class="modal-content">
-    <div class="modal-header">
-      <h5 class="modal-title"><i class="bi bi-cash-coin"></i> Settlement</h5>
-      <button class="btn-close" data-bs-dismiss="modal"></button>
-    </div>
-    <div class="modal-body">
-      <div class="d-flex justify-content-between align-items-baseline mb-3">
-        <span class="text-muted">Amount due</span>
-        <span class="fs-3 fw-bold pos-total" id="stDue" style="color:var(--brand-dark)">₹0.00</span>
-      </div>
-
-      <div class="row g-2 mb-2 small text-muted d-none d-md-flex">
-        <div class="col-3">Method</div>
-        <div class="col-3">Amount ₹</div>
-        <div class="col-3">Tendered ₹</div>
-        <div class="col-3">Reference</div>
-      </div>
-
-      {# The last two are money the customer already has with the shop: a credit
-         note kept as store credit, and an advance. Each is spent against the
-         document it draws on, so each says what is left on it as it is typed. #}
-      {% for m, label, hint in [('cash','Cash','Notes handed over — over-tender is fine, the change is worked out'),
-                                ('card','Card','Card / approval reference'),
-                                ('upi','UPI','UPI transaction reference'),
-                                ('credit_note','Credit note','Credit note no. (required)'),
-                                ('advance','Advance','Advance no. (optional)')] %}
-      {% if m == 'credit_note' %}<div class="small text-muted border-top pt-2 mt-3 mb-2">Store credit &amp; advances</div>{% endif %}
-      <div class="row g-2 align-items-center mb-2 settle-row" data-method="{{ m }}">
-        <div class="col-12 col-md-3">
-          <button type="button" class="btn btn-outline-primary btn-sm w-100 st-rest"
-                  data-method="{{ m }}" title="Put the whole remaining balance on {{ label }}">
-            {{ label }} <span class="d-md-none text-muted">— pay rest</span>
-          </button>
-        </div>
-        <div class="col-4 col-md-3">
-          <input class="form-control form-control-sm st-amt" data-method="{{ m }}"
-                 type="number" min="0" step="0.01" placeholder="0.00">
-        </div>
-        <div class="col-4 col-md-3">
-          <input class="form-control form-control-sm st-tender" data-method="{{ m }}"
-                 type="number" min="0" step="0.01" placeholder="0.00"
-                 {% if m != 'cash' %}disabled title="Only cash is over-tendered"{% endif %}>
-        </div>
-        <div class="col-4 col-md-3">
-          <input class="form-control form-control-sm st-ref" data-method="{{ m }}"
-                 maxlength="64" placeholder="{{ hint }}" title="{{ hint }}">
-        </div>
-        {% if m in ('credit_note', 'advance') %}
-        <div class="col-12 small st-note" data-method="{{ m }}" style="margin-top:0"></div>
-        {% endif %}
-      </div>
-      {% endfor %}
-
-      <div class="border-top pt-2 mt-3">
-        <div class="d-flex justify-content-between"><span>Entered</span>
-          <span id="stEntered" class="fw-bold">₹0.00</span></div>
-        <div class="d-flex justify-content-between"><span id="stBalLabel">Balance</span>
-          <span id="stBalance" class="fw-bold">₹0.00</span></div>
-        <div class="d-flex justify-content-between" id="stChangeRow" style="display:none !important">
-          <span>Change to return</span>
-          <span id="stChange" class="fw-bold" style="color:var(--brand-dark)">₹0.00</span></div>
-      </div>
-      <div id="stWarn" class="alert alert-warning py-2 mt-2 mb-0 small d-none"></div>
-    </div>
-    <div class="modal-footer">
-      <button class="btn btn-outline-secondary" data-bs-dismiss="modal">Back to cart</button>
-      <button id="stConfirm" class="btn btn-brand" disabled>
-        <i class="bi bi-check-circle"></i> Bill &amp; print</button>
-    </div>
-  </div></div>
-</div>
+<style>
+  .pos-screen { display:grid; grid-template-columns: 290px minmax(0,1fr); gap:12px; height: calc(100vh - 150px); }
+  @media (max-width: 1399px) { .pos-screen { grid-template-columns: 280px minmax(0,1fr); } }
+  .pos-side .btn-sm, .pos-side .btn-xs { white-space:nowrap; }
+  .pos-side #scanBox::placeholder, .pos-side #custLookup::placeholder { font-size:.82rem; }
+  .pos-side { display:flex; flex-direction:column; gap:10px; min-height:0; overflow:hidden; }
+  .pos-side .card { margin:0; padding:10px !important; box-shadow:none; }
+  .pos-side .input-group-text { background:var(--panel-2, #F7F9F7); color:var(--muted, #68756E); }
+  .till-warn { color:#D97706; font-size:.85rem; cursor:help; }
+  #pbWhere { font-size:.78rem; }
+  .btn-xs { padding: 1px 6px; font-size: .75rem; }
+  .scan-hint { font-size:.8rem; color: var(--text-muted, #68756E); min-height:1.2em; }
+  .scan-hint.want-staff { color:#B45309; font-weight:600; }
+  .scan-hint.bad { color:#BE123C; font-weight:600; }
+  .pos-bill { display:flex; flex-direction:column; min-height:0; margin:0; }
+  .pos-bill-head { border-bottom:1px solid var(--border, #DCE5DF); }
+  .bill-lines { flex:1 1 auto; min-height:0; overflow:auto; }
+  .bill-table { table-layout: fixed; }
+  .bill-table thead th { position:sticky; top:0; background:var(--surface, #fff); z-index:1; font-size:.72rem;
+    color:var(--muted, #68756E); font-weight:600; letter-spacing:.03em; border-bottom:1px solid var(--line, #DCE5DF);
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .bill-table tbody td { border-color:#EDF1EE; }
+  .bill-table td { font-size:.9rem; }
+  .bill-table tr.awaiting td { background:#FFF7E6; }
+  /* the entry row sits under the headings and stays put while the lines scroll */
+  .bill-table thead tr.entry-row td { position:sticky; top:28px; z-index:1; background:#F4F8F6; padding:5px 2px;
+    border-bottom:1px solid var(--line, #DCE5DF); }
+  .bill-table .entry-row .form-control { font-size:.8rem; padding:3px 6px; min-width:0; background:#fff;
+    border-color:#D5DED8; }
+  .bill-table .entry-row .form-control:focus { border-color:var(--accent, #2F8F68); box-shadow:0 0 0 2px rgba(47,143,104,.15); }
+  .bill-table .entry-row .form-control[readonly] { background:#fff; }
+  .bill-table .pct-input, .bill-table .qty-input, .bill-table .addin-input { padding:2px 4px; }
+  .en-suggest { position:absolute; left:2px; right:2px; top:100%; z-index:5; background:#fff; border:1px solid var(--border, #DCE5DF);
+                border-radius:4px; box-shadow:0 6px 18px rgba(0,0,0,.12); max-height:240px; overflow:auto; min-width:320px; }
+  .en-suggest .en-opt { display:flex; justify-content:space-between; gap:8px; padding:4px 8px; cursor:pointer; font-size:.82rem; }
+  .en-suggest .en-opt.on, .en-suggest .en-opt:hover { background:#E3F2EA; }
+  /* the discount card */
+  .dc-lines { max-height: 52vh; min-height: 160px; overflow:auto; border:1px solid var(--border, #DCE5DF); border-radius:4px; }
+  .dc-table thead th { position:sticky; top:0; background:var(--surface, #fff); z-index:1; font-size:.8rem; }
+  .dc-foot .form-control { width: 120px; }
+  .dc-table .dc-addin { width: 76px; margin-left: auto; padding: 1px 4px; }
+  .bill-table .staff-pick { font-size:.75rem; padding:1px 4px; }
+  .bill-empty { color:var(--text-muted, #68756E); text-align:center; padding:3rem 1rem; }
+  .bill-foot { border-top:2px solid var(--border, #DCE5DF); display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; }
+  .bill-sums { display:flex; gap:16px; flex-wrap:wrap; font-size:.85rem; color:var(--text-muted, #68756E); }
+  .bill-sums b { color:var(--text, #17221D); }
+  .bill-grand { font-size:1.9rem; color:var(--brand-dark); }
+  #promoBox { max-height:84px; overflow:auto; }
+  @media (max-width: 991px) {
+    .pos-screen { grid-template-columns: 1fr; height:auto; }
+    .bill-lines { max-height: 50vh; }
+  }
+</style>
 {% endblock %}
 {% block scripts %}
 <script src="https://unpkg.com/html5-qrcode@2.3.10/html5-qrcode.min.js"></script>
 <script>
-const cart = new Map();
-let currentCustomerId = null;
-//: The coupon applied to this cart, as /pos/api/coupon described it — see below.
-let appliedCoupon = null;
-window._couponOff = 0;
+// ---- the screen fits the window ------------------------------------------------
+// Sized to what is left under the header, so the bill and the inputs are all in
+// view at once and the page itself never scrolls. Only a long bill's lines scroll,
+// inside the bill.
+const SCREEN = document.getElementById('posScreen');
+function fitScreen(){
+  if (window.innerWidth < 992){ SCREEN.style.height = ''; document.body.style.overflow = ''; return; }
+  const top = SCREEN.getBoundingClientRect().top + window.scrollY;
+  SCREEN.style.height = Math.max(420, window.innerHeight - top - 12) + 'px';
+  document.body.style.overflow = 'hidden';
+}
+window.addEventListener('resize', fitScreen);
+fitScreen();
 
-// What the cart has earned, as the server last answered it. Held here and never
-// computed on this side: the till SHOWS promotions, the server DECIDES them, and
-// `checkout` works the whole thing out again from the paid lines before it bills
-// anything. A page that could add its own free lines could give away stock.
+//: Active staff, for recognising a scanned ID card and for the pick-list fallback.
+const STAFF = [
+  {% for u in staff %}{id: {{ u.id }}, code: {{ u.staff_code | tojson }}, name: {{ u.full_name | tojson }}, username: {{ (u.username or '') | tojson }}},
+  {% endfor %}];
+const EXCHANGE = {{ exchange | tojson }};
+
+const $ = (id) => document.getElementById(id);
+function fmt(n){ return '₹' + Number(n || 0).toFixed(2); }
+function esc(s){ return String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+// ---- the bill ------------------------------------------------------------------
+// One entry per line on the bill. A line is a product AND the person who sold it:
+// the same garment sold by two people is two lines, so each gets the commission.
+let lines = [];
+let lineSeq = 0;
+//: The line the next staff-ID scan belongs to — the product scanned last.
+let awaitingKey = null;
+let customer = null;
+let appliedCoupon = null;
+let couponOff = 0;
+//: A store-credit note from a return, waiting to be spent at settlement.
+let creditNote = null;
+//: Who approved the discounts on this bill — {id, code, name}, the discount card's E.Code.
+let discountBy = null;
+//: The agreement code the bill is raised under (a P.Code a scheme asks for).
+let agreementCode = null;
+//: What the sales schemes give this bill when it is paid — shown, not applied.
+let schemesLater = [];
+
+// What the cart has earned, as the server last answered it. The till SHOWS
+// promotions; the server DECIDES them again at checkout from the paid lines.
 let promoAwards = [];
 let promoNotices = [];
-//: {scheme_id: product_id} where a scheme lets the cashier pick the reward.
 const promoChoices = {};
+let totals = {subtotal: 0, tax: 0, discount: 0, coupon: 0, redeem: 0, total: 0};
 
-function fmt(n){ return '₹' + Number(n).toFixed(2); }
+function staffLabel(s){ return s ? `${s.code}` : ''; }
 
-function renderCart(){
-  const body = document.getElementById('cartBody');
-  body.innerHTML = '';
-  let subtotal = 0, tax = 0;
-  if (cart.size === 0){
-    body.innerHTML = '<tr><td colspan="4" class="text-center text-muted">Cart empty</td></tr>';
-  } else {
-    cart.forEach((it, id) => {
-      const line = it.qty * it.price;
-      const t = line * it.gst / 100;
-      subtotal += line; tax += t;
-      body.insertAdjacentHTML('beforeend', `
-        <tr>
-          <td>${it.name}<br><small class="text-muted">${fmt(it.price)} × ${it.gst}%</small></td>
-          <td><input type="number" min="0.01" step="0.01" value="${it.qty}" class="form-control form-control-sm qty-input" data-id="${id}"></td>
-          <td class="text-end">${fmt(line + t)}</td>
-          <td><button class="btn btn-sm btn-outline-danger remove-btn" data-id="${id}"><i class="bi bi-x"></i></button></td>
-        </tr>`);
-    });
-    // The free lines, under the paid ones. No quantity box and no remove button:
-    // they are not the cashier's to change. They appear and disappear because of
-    // what is in the cart above, which is exactly what a promotion is — and a
-    // free item somebody can delete is a free item somebody can forget to give.
-    promoAwards.forEach((a) => a.rewards.forEach((r) => {
-      // A free reward is priced at zero, so these two add nothing for the
-      // ordinary case and add the right thing for a reward given at a discount.
-      const line = r.unit_price * r.qty;
-      const t = line * (r.gst || 0) / 100;
-      subtotal += line; tax += t;
-      body.insertAdjacentHTML('beforeend', `
-        <tr class="table-success">
-          <td>${r.name}
-            <span class="badge text-bg-success">${r.free ? 'FREE' : 'OFFER'}</span>
-            <br><small class="text-muted">${a.name}</small></td>
-          <td class="text-center">${r.qty}</td>
-          <td class="text-end">${fmt(line + t)}</td>
-          <td></td>
-        </tr>`);
-    }));
-  }
-  const discount = Math.min(parseFloat(document.getElementById('discount').value) || 0, subtotal);
-  const couponOff = couponValue(subtotal - discount + tax, subtotal - discount);
-  const preLoyalty = Math.max(0, subtotal - discount - couponOff + tax);
-  const requested = parseFloat(document.getElementById('redeemPoints').value) || 0;
-  const available = window._custPoints || 0;
-  const redeem = Math.min(requested, available, preLoyalty);
-  document.getElementById('subtotal').innerText = fmt(subtotal);
-  document.getElementById('tax').innerText = fmt(tax);
-  // The figure the settlement has to balance to. Kept here because this is the
-  // one place it is worked out — the modal reading its own copy of the sum is
-  // how a till comes to disagree with its own bill.
-  window._billTotal = Math.round(Math.max(0, preLoyalty - redeem) * 100) / 100;
-  document.getElementById('grandTotal').innerText = fmt(window._billTotal);
-  // The tender picker sits under this total and quotes it, so it is repainted
-  // from the same place — a discount typed after the method was chosen has to
-  // move the cash tendered and the change with it.
-  paintQuickPay();
+const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
-  // loyalty helper
-  const help = document.getElementById('ptsHelp');
-  const useAll = document.getElementById('useAllPts');
-  if (window._custPoints > 0){
-    help.innerHTML = `Available: <strong>${Math.round(available)} pts</strong> (₹${available.toFixed(0)} off) —
-      ${redeem>0 ? `applying <strong>${Math.round(redeem)} pt</strong> = ₹${redeem.toFixed(2)} off` : 'not redeeming'}`;
-    useAll.style.display = '';
-  } else {
-    help.innerText = 'Attach a customer to redeem points.';
-    useAll.style.display = 'none';
-  }
+const clampPct = (v) => Math.min(100, Math.max(0, Number(v) || 0));
+//: Every % typed or worked out at the counter is a whole number.
+const wholePct = (v) => Math.round(clampPct(v));
+//: Pieces are counted whole; metre goods are cut to the centimetre.
+const qtyStep = (unit) => ((unit || '').toLowerCase() === 'mtr' ? 0.01 : 1);
+const roundQty = (q, unit) => (qtyStep(unit) === 1 ? Math.round(q) : r2(q));
 
-  document.querySelectorAll('.qty-input').forEach(i => i.oninput = e => {
-    const id = e.target.dataset.id; const q = parseFloat(e.target.value) || 0;
-    if (q <= 0) cart.delete(id); else cart.get(id).qty = q;
-    renderCart();
-    refreshPromotions();
-  });
-  document.querySelectorAll('.remove-btn').forEach(b => b.onclick = e => {
-    cart.delete(e.currentTarget.dataset.id);
-    renderCart();
-    refreshPromotions();
-  });
+// A line's figures. Two discounts, both the line's own: its Discount % and, on
+// top of what is left, its Addin % (the additional discount — typed per item in
+// the discount card, or set on every item from the left panel). Together they
+// lower the price the line is charged at — the server gets them as one %, and
+// applies the same rounding — so GST is on the discounted amount.
+function lineMath(l){
+  const pct = wholePct(l.pct), addin = wholePct(l.addin);
+  // what was given by hand, and on top of it whatever a sales scheme gives
+  // (worked out by the server; checkout works it out again)
+  const manualEff = Math.round((1 - (1 - pct / 100) * (1 - addin / 100)) * 1000000) / 10000;
+  const scheme = clampPct(l.scheme ? l.scheme.pct : 0);
+  const eff = Math.round((1 - (1 - manualEff / 100) * (1 - scheme / 100)) * 1000000) / 10000;
+  const unit = eff ? r2(l.price * (1 - eff / 100)) : l.price;
+  const taxable = l.qty * unit, full = l.qty * l.price;
+  // the line's own discount, then the additional one (which takes the rounding)
+  // the line's own discount, the additional one, then the scheme's (which takes the rounding)
+  const disc = (addin || scheme) ? r2(full * pct / 100) : r2(full - taxable);
+  const addAmt = addin ? (scheme ? r2(full * (1 - pct / 100) * addin / 100) : Math.max(0, r2(full - taxable - disc))) : 0;
+  const schemeAmt = scheme ? Math.max(0, r2(full - taxable - disc - addAmt)) : 0;
+  return {pct, addin, scheme, manualEff, eff, unit, taxable, full, disc, addAmt, schemeAmt,
+          tax: taxable * l.gst / 100};
 }
 
-// ---- promotions ------------------------------------------------------------
-// Asked of the server on every cart change, debounced, because a scanner fires
-// faster than a round trip. Advisory: the answer is drawn on screen, and the
-// same evaluation runs again at checkout against the server's own reading of
-// the cart. If this request fails the sale is unaffected — the free item simply
-// isn't shown, and `checkout` still applies it.
-let promoTimer = null;
-let promoSeq = 0;
 
+
+function renderBill(){
+  const body = $('billBody');
+  // `subtotal` is the goods as charged (after every line's discounts); `gross`
+  // before them. The bill-wide discount the server takes is no longer used —
+  // every discount is a line's own, so GST is always on what was charged.
+  let subtotal = 0, tax = 0, count = 0, gross = 0, lineDisc = 0, addinDisc = 0;
+  lines.forEach((l) => {
+    const m = lineMath(l);
+    subtotal += m.taxable; tax += m.tax; gross += m.full; lineDisc += m.disc + m.schemeAmt; addinDisc += m.addAmt;
+  });
+  promoAwards.forEach((a) => a.rewards.forEach((r) => {
+    const amt = r.unit_price * r.qty; subtotal += amt; gross += amt; tax += amt * (r.gst || 0) / 100;
+  }));
+  const discount = 0;
+  if (!lines.length){
+    body.innerHTML = `<tr><td colspan="11" class="bill-empty">
+      <i class="bi bi-upc-scan" style="font-size:2rem;opacity:.35"></i>
+      <div class="mt-2">Scan a product tag, then the staff ID of whoever sold it — or key it into the row above.</div></td></tr>`;
+  } else {
+    body.innerHTML = lines.map((l, i) => {
+      const m = lineMath(l);
+      count += l.qty;
+      const staffCell = l.staff
+        ? `<span class="badge text-bg-light border font-monospace" title="${esc(l.staff.name)}">${esc(l.staff.code)}</span>
+           <button class="btn btn-link btn-sm p-0 ms-1 staff-redo" data-key="${l.key}" title="Change salesman"><i class="bi bi-pencil"></i></button>`
+        : `<select class="form-select form-select-sm staff-pick" data-key="${l.key}" title="Scan the staff ID, or pick">
+             <option value="">${l.key === awaitingKey ? 'Scan staff ID…' : 'Salesman?'}</option>
+             ${STAFF.map((s) => `<option value="${s.id}">${esc(s.code)} · ${esc(s.name)}</option>`).join('')}
+           </select>`;
+      return `<tr class="${l.staff ? '' : 'awaiting'}">
+        <td class="text-muted">${i + 1}</td>
+        <td class="font-monospace small">${esc(l.barc || l.sku || '')}</td>
+        <td class="fw-semibold">${esc(l.name)}${l.scheme ? `<div class="small fw-normal" style="color:var(--brand-dark)"
+              title="${esc((l.scheme.names || []).join(' + '))}"><i class="bi bi-gift"></i> ${esc((l.scheme.names || []).join(' + '))}
+              −${+m.scheme.toFixed(2)}%</div>` : ''}</td>
+        <td class="text-end">${fmt(l.price)}</td>
+        <td><input type="number" min="0" step="${qtyStep(l.unit)}" value="${l.qty}" class="form-control form-control-sm text-end qty-input" data-key="${l.key}"></td>
+        <td class="text-end" title="${m.schemeAmt ? 'includes ' + fmt(m.schemeAmt) + ' scheme discount' : ''}">${(m.disc + m.schemeAmt) ? fmt(m.disc + m.schemeAmt) : ''}</td>
+        <td><input type="number" min="0" max="100" step="1" value="${m.addin || ''}" placeholder="0"
+             class="form-control form-control-sm text-end addin-input" data-key="${l.key}"
+             title="Additional discount %${m.addAmt ? ' — ' + fmt(m.addAmt) : ''}"></td>
+        <td><input type="number" min="0" max="100" step="1" value="${m.pct || ''}" placeholder="0" class="form-control form-control-sm text-end pct-input" data-key="${l.key}" title="This line's discount %"></td>
+        <td class="text-end fw-semibold">${fmt(m.taxable + m.tax)}</td>
+        <td>${staffCell}</td>
+        <td><button class="btn btn-sm btn-outline-danger py-0 px-1 remove-btn" data-key="${l.key}" title="Remove"><i class="bi bi-x"></i></button></td>
+      </tr>`;
+    }).join('');
+    // The free lines, under the paid ones — not the cashier's to change.
+    promoAwards.forEach((a) => a.rewards.forEach((r) => {
+      const amt = r.unit_price * r.qty, t = amt * (r.gst || 0) / 100;
+      body.insertAdjacentHTML('beforeend', `<tr class="table-success">
+        <td></td><td></td><td>${esc(r.name)} <span class="badge text-bg-success">${r.free ? 'FREE' : 'OFFER'}</span>
+          <div class="small text-muted">${esc(a.name)}</div></td>
+        <td></td><td class="text-end">${r.qty}</td><td></td><td></td><td></td><td class="text-end">${fmt(amt + t)}</td><td></td><td></td></tr>`);
+    }));
+  }
+
+  const cOff = couponValue(subtotal - discount + tax, subtotal - discount);
+  const preLoyalty = Math.max(0, subtotal - discount - cOff + tax);
+  const available = customer ? Number(customer.loyalty_points || 0) : 0;
+  const redeem = 0;
+  const total = Math.round(Math.max(0, preLoyalty - redeem) * 100) / 100;
+  totals = {subtotal, tax, discount, coupon: cOff, redeem, total, gross, lineDisc: r2(lineDisc + addinDisc)};
+
+  // Shown before discounts, then the discounts, so the footer adds up:
+  // Subtotal − Discount + GST − coupon − points = Total.
+  $('subtotal').innerText = fmt(gross);
+  $('tax').innerText = fmt(tax);
+  $('sumDisc').classList.toggle('d-none', !(totals.lineDisc > 0)); $('discShown').innerText = fmt(totals.lineDisc);
+  $('sumCoupon').classList.toggle('d-none', !(cOff > 0)); $('couponShown').innerText = fmt(cOff);
+  $('sumPts').classList.toggle('d-none', !(redeem > 0)); $('ptsShown').innerText = fmt(redeem);
+  $('grandTotal').innerText = fmt(total);
+  $('sideTotal').innerText = fmt(total);
+  $('headCount').innerText = `${lines.length} line${lines.length === 1 ? '' : 's'} · ${count} pcs`;
+  $('headCust').innerText = customer ? customer.name : 'Walk-in';
+
+  document.querySelectorAll('.qty-input').forEach((el) => el.onchange = (e) => {
+    const l = lineOf(e.target.dataset.key);
+    if (!l) return;
+    const q = roundQty(parseFloat(e.target.value) || 0, l.unit);
+    if (q <= 0){ removeLine(l.key); return; }
+    if (q - l.qty > 0 && stockLeft(l.product_id) < q - l.qty){ alert('Insufficient stock'); e.target.value = l.qty; return; }
+    l.qty = q; changed();
+  });
+  // AddIn %, typed per line — on top of what is left after the line's own discount.
+  document.querySelectorAll('.addin-input').forEach((el) => el.onchange = (e) => {
+    const l = lineOf(e.target.dataset.key); if (!l) return;
+    l.addin = wholePct(parseFloat(e.target.value));
+    renderBill(); refreshPromotions();
+  });
+  document.querySelectorAll('.pct-input').forEach((el) => el.onchange = (e) => {
+    const l = lineOf(e.target.dataset.key); if (!l) return;
+    l.pct = wholePct(parseFloat(e.target.value));
+    renderBill(); refreshPromotions();
+  });
+  document.querySelectorAll('.remove-btn').forEach((b) => b.onclick = () => removeLine(b.dataset.key));
+  document.querySelectorAll('.staff-pick').forEach((s) => {
+    s.onchange = () => { const who = STAFF.find((x) => String(x.id) === s.value); if (who) assignStaff(s.dataset.key, who); };
+    s.onfocus = () => { awaitingKey = s.dataset.key; paintHint(); };
+  });
+  document.querySelectorAll('.staff-redo').forEach((b) => b.onclick = () => {
+    const l = lineOf(b.dataset.key); if (!l) return;
+    l.staff = null; awaitingKey = l.key; changed(); focusScan();
+  });
+  paintGo();
+}
+
+function lineOf(key){ return lines.find((l) => l.key === key); }
+function stockLeft(pid){
+  const any = lines.find((l) => l.product_id === pid);
+  const used = lines.filter((l) => l.product_id === pid).reduce((a, l) => a + l.qty, 0);
+  return any ? any.stock - used : Infinity;
+}
+function removeLine(key){
+  lines = lines.filter((l) => l.key !== key);
+  if (awaitingKey === key) awaitingKey = null;
+  changed();
+}
+function changed(){ renderBill(); paintHint(); refreshPromotions(); }
+
+function addProduct(p){
+  const pid = String(p.id);
+  const stock = parseFloat(p.stock);
+  if (!(stock > 0)){ say(`“${p.name}” is out of stock.`, 'bad'); return; }
+  if (!lines.length) refreshBillNumber();
+  if (stockLeft(pid) < 1){ say(`No more “${p.name}” in stock.`, 'bad'); return; }
+  // The same garment scanned again before anyone claimed the last one is one
+  // more of that line; otherwise it is a new line, waiting for its staff ID.
+  const waiting = awaitingKey && lineOf(awaitingKey);
+  if (waiting && waiting.product_id === pid && !waiting.staff){
+    waiting.qty += 1;
+  } else {
+    const key = 'L' + (++lineSeq);
+    lines.push({key, product_id: pid, name: p.name, sku: p.sku, barc: p.barcode || p.sku,
+                price: parseFloat(p.price), gst: parseFloat(p.gst), qty: 1, stock, staff: null, pct: 0, unit: p.unit,
+                addin: 0});
+    awaitingKey = key;
+  }
+  changed();
+}
+
+function assignStaff(key, who){
+  const l = lineOf(key);
+  if (!l) return;
+  // Same product, same person, already on the bill → one line, more pieces.
+  const twin = lines.find((x) => x !== l && x.product_id === l.product_id && x.staff && x.staff.id === who.id
+                                 && clampPct(x.pct) === clampPct(l.pct) && clampPct(x.addin) === clampPct(l.addin));
+  if (twin){ twin.qty += l.qty; lines = lines.filter((x) => x !== l); }
+  else l.staff = {id: who.id, code: who.code, name: who.name};
+  if (awaitingKey === key) awaitingKey = null;
+  // Another line still without a seller is the next one a staff scan goes to.
+  const next = lines.find((x) => !x.staff);
+  if (next && !awaitingKey) awaitingKey = next.key;
+  say(`${who.code} · ${who.name} → ${l.name}`);
+  changed();
+}
+
+// ---- the one scanner -------------------------------------------------------------
+// A staff ID is recognised from the staff list on this page — the code on the
+// card (STF000003) or a username — and only that. A bare number is a product, so
+// a numeric barcode is never mistaken for staff member #12.
+function matchStaff(code){
+  const c = code.trim().toUpperCase();
+  return STAFF.find((s) => (s.code || '').toUpperCase() === c)
+      || STAFF.find((s) => s.username && s.username.toUpperCase() === c)
+      || null;
+}
+
+let hintMsg = null, hintKind = '';
+function say(msg, kind){ hintMsg = msg; hintKind = kind || ''; paintHint(); }
+function paintHint(){
+  const h = $('scanHint');
+  const waiting = awaitingKey && lineOf(awaitingKey);
+  h.className = 'scan-hint mt-1';
+  if (hintKind === 'bad'){ h.classList.add('bad'); h.innerText = hintMsg; hintKind = ''; return; }
+  if (waiting && !waiting.staff){
+    h.classList.add('want-staff');
+    h.innerText = `Now scan the staff ID for: ${waiting.name}`;
+  } else {
+    h.innerText = hintMsg ? `${hintMsg} — scan the next product.` : 'Scan a product tag.';
+  }
+  hintMsg = null;
+}
+
+async function handleScan(code){
+  code = (code || '').trim();
+  if (!code) return;
+  resetScan();
+  // Shortcut: D then Enter opens the discount card.
+  if (/^d$/i.test(code)){ openDiscountCard(); return; }
+  const who = matchStaff(code);
+  if (who){
+    const target = (awaitingKey && lineOf(awaitingKey)) || lines.find((l) => !l.staff);
+    if (!target){ say(`${who.code} is a staff ID — scan a product first.`, 'bad'); return; }
+    assignStaff(target.key, who);
+    return;
+  }
+  if (/^STF\d+$/i.test(code)){ say(`No active staff member ${code}.`, 'bad'); return; }
+  try {
+    // ?code= rather than a path segment: a warehouse QR can carry '/' and '|'.
+    const r = await fetch(`${SHOP_ROOT}/pos/api/product?code=${encodeURIComponent(code)}`);
+    if (r.ok){ addProduct(await r.json()); return; }
+    say(`No product or staff ID for “${code}”.`, 'bad');
+  } catch (err){ say('Lookup failed: ' + err, 'bad'); }
+}
+
+const scanBox = $('scanBox');
+let scanTimer = null, lastAuto = null;
+scanBox.addEventListener('input', () => {
+  // Most scanners send no Enter: when a scan settles, take it.
+  clearTimeout(scanTimer);
+  scanTimer = setTimeout(() => {
+    const code = scanBox.value.trim();
+    if (!code || code === lastAuto) return;
+    const isWarehouseQr = /^EU?1\|/.test(code);
+    if (isWarehouseQr || (code.length >= 4 && !/\s/.test(code))){ lastAuto = code; handleScan(code); }
+  }, 150);
+});
+scanBox.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  e.preventDefault(); clearTimeout(scanTimer);
+  handleScan(scanBox.value);
+});
+function resetScan(){ scanBox.value = ''; lastAuto = null; scanBox.focus(); }
+
+// ---- the entry row: keyed in, left to right ----------------------------------------
+// Every box is typable. Barcode → Enter, or a name in Product, finds the item.
+// Price, Qty, Discount (₹ off before GST), AddIn.Dis (₹, the additional discount),
+// % and Amount (with GST) keep each other in step — type any one and the rest
+// follow. The salesman's ID → Enter puts the line on the bill and clears the row.
+let entryProduct = null;
+//: The row's Addin %, kept as a % so a changed price or qty carries it along.
+let entryAddin = 0;
+const enFields = ['enProduct', 'enPrice', 'enQty', 'enDisc', 'enAddin', 'enPct', 'enAmt', 'enStaff'];
+function clearEntry(){
+  entryProduct = null;
+  entryAddin = 0;
+  enFields.forEach((id) => { $(id).value = ''; });
+  $('enBarcode').value = '';
+  hideSuggest();
+}
+const enNum = (id) => parseFloat($(id).value) || 0;
+function entryLine(){
+  return {price: enNum('enPrice'), gst: parseFloat(entryProduct.gst) || 0,
+          qty: Math.max(0, enNum('enQty')), pct: $('enPct').value, addin: entryAddin};
+}
+// Repaint the worked-out boxes, all but the one being typed in.
+function paintEntry(skip){
+  if (!entryProduct){ return; }
+  const m = lineMath(entryLine());
+  const put = (id, v) => { if (id !== skip) $(id).value = v; };
+  put('enDisc', m.disc ? m.disc.toFixed(2) : '');
+  put('enAddin', m.addin || '');
+  put('enPct', m.pct || '');
+  put('enAmt', (m.taxable + m.tax).toFixed(2));
+}
+$('enPrice').addEventListener('input', () => paintEntry('enPrice'));
+$('enQty').addEventListener('input', () => paintEntry('enQty'));
+$('enPct').addEventListener('input', () => paintEntry('enPct'));
+$('enDisc').addEventListener('input', () => {
+  if (!entryProduct) return;
+  const full = enNum('enQty') * enNum('enPrice');
+  $('enPct').value = full ? wholePct(enNum('enDisc') / full * 100) : '';
+  paintEntry('enDisc');
+});
+$('enAddin').addEventListener('input', () => {
+  if (!entryProduct) return;
+  entryAddin = wholePct(enNum('enAddin'));
+  paintEntry('enAddin');
+});
+$('enAmt').addEventListener('input', () => {
+  if (!entryProduct) return;
+  // The amount wanted, with GST → the discount % that reaches it, on top of the
+  // AddIn already there.
+  const l = entryLine();
+  const fullTax = l.qty * l.price * (1 + l.gst / 100);
+  if (!fullTax) return;
+  const keep = Math.max(0, Math.min(1, enNum('enAmt') / fullTax));
+  const addKeep = 1 - clampPct(entryAddin) / 100;
+  $('enPct').value = addKeep ? wholePct((1 - Math.min(1, keep / addKeep)) * 100) : '';
+  paintEntry('enAmt');
+});
+
+function entryPick(p){
+  if (!(parseFloat(p.stock) > 0)){ say(`“${p.name}” is out of stock.`, 'bad'); return false; }
+  entryProduct = p;
+  entryAddin = 0;
+  $('enBarcode').value = p.barcode || p.sku || '';
+  $('enProduct').value = p.name;
+  $('enPrice').value = Number(p.price).toFixed(2);
+  $('enQty').value = 1;
+  $('enQty').step = qtyStep(p.unit);
+  $('enPct').value = '';
+  hideSuggest();
+  paintEntry();
+  $('enQty').select();
+  return true;
+}
+async function entryLookup(){
+  const code = $('enBarcode').value.trim();
+  if (!code) return;
+  try {
+    const r = await fetch(`${SHOP_ROOT}/pos/api/product?code=${encodeURIComponent(code)}`);
+    if (!r.ok){ say(`No product for “${code}”.`, 'bad'); $('enBarcode').select(); return; }
+    if (!entryPick(await r.json())) $('enBarcode').select();
+  } catch (err){ say('Lookup failed: ' + err, 'bad'); }
+}
+
+// Product by name: a short list under the box, newest typing wins.
+let suggest = [], suggestAt = 0, suggestTimer = null, suggestSeq = 0;
+function hideSuggest(){ $('enSuggest').classList.add('d-none'); suggest = []; }
+function paintSuggest(){
+  const box = $('enSuggest');
+  if (!suggest.length){ box.classList.add('d-none'); return; }
+  box.innerHTML = suggest.map((p, i) => `
+    <div class="en-opt ${i === suggestAt ? 'on' : ''}" data-i="${i}">
+      <span>${esc(p.name)} <span class="text-muted small font-monospace">${esc(p.barcode || p.sku)}</span></span>
+      <span class="small text-nowrap">${fmt(p.price)} · ${p.stock}</span>
+    </div>`).join('');
+  box.classList.remove('d-none');
+  box.querySelectorAll('.en-opt').forEach((o) => o.onmousedown = (e) => {
+    e.preventDefault(); entryPick(suggest[+o.dataset.i]);
+  });
+}
+$('enProduct').addEventListener('input', () => {
+  entryProduct = null;                       // a new name is a new search
+  clearTimeout(suggestTimer);
+  const q = $('enProduct').value.trim();
+  if (q.length < 2){ hideSuggest(); return; }
+  suggestTimer = setTimeout(async () => {
+    const mine = ++suggestSeq;
+    try {
+      const rows = await (await fetch(`${SHOP_ROOT}/pos/api/product-search?q=${encodeURIComponent(q)}`)).json();
+      if (mine !== suggestSeq) return;
+      suggest = rows; suggestAt = 0; paintSuggest();
+      if (!rows.length) say(`No product in stock matches “${q}”.`, 'bad');
+    } catch (e){ /* the barcode box still works */ }
+  }, 200);
+});
+$('enProduct').addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp'){
+    if (!suggest.length) return;
+    e.preventDefault();
+    suggestAt = (suggestAt + (e.key === 'ArrowDown' ? 1 : suggest.length - 1)) % suggest.length;
+    paintSuggest();
+  } else if (e.key === 'Enter'){
+    e.preventDefault();
+    if (suggest.length) entryPick(suggest[suggestAt]);
+    else if (entryProduct) $('enQty').select();
+  } else if (e.key === 'Escape') hideSuggest();
+});
+$('enProduct').addEventListener('blur', () => setTimeout(hideSuggest, 150));
+
+function entryCommit(){
+  if (!entryProduct){ say('Pick the product first — scan its barcode or type its name.', 'bad'); $('enBarcode').focus(); return; }
+  const who = matchStaff($('enStaff').value);
+  if (!who){ say('Enter the salesman’s staff ID for this line.', 'bad'); $('enStaff').select(); return; }
+  const qty = roundQty(enNum('enQty'), entryProduct.unit);
+  if (qty <= 0){ $('enQty').select(); return; }
+  const price = enNum('enPrice');
+  if (!(price > 0)){ say('Enter the price.', 'bad'); $('enPrice').select(); return; }
+  const p = entryProduct, pid = String(p.id);
+  const pct = wholePct($('enPct').value), addin = wholePct(entryAddin);
+  const stock = parseFloat(p.stock);
+  const used = lines.filter((l) => l.product_id === pid).reduce((a, l) => a + l.qty, 0);
+  if (used + qty > stock){ say(`Only ${stock - used} of “${p.name}” in stock.`, 'bad'); $('enQty').select(); return; }
+  if (!lines.length) refreshBillNumber();
+  const twin = lines.find((x) => x.product_id === pid && x.staff && x.staff.id === who.id && x.price === price
+                                 && clampPct(x.pct) === pct && clampPct(x.addin) === addin);
+  if (twin) twin.qty += qty;
+  else lines.push({key: 'L' + (++lineSeq), product_id: pid, name: p.name, sku: p.sku, barc: p.barcode || p.sku,
+                   price, gst: parseFloat(p.gst), qty, stock, pct, addin, unit: p.unit,
+                   staff: {id: who.id, code: who.code, name: who.name}});
+  say(`${p.name} × ${qty} → ${who.code}`);
+  clearEntry();
+  changed();
+  $('enBarcode').focus();
+}
+// Enter walks the row left to right; on the salesman it adds the line.
+const onEnter = (id, fn) => $(id).addEventListener('keydown', (e) => { if (e.key === 'Enter'){ e.preventDefault(); fn(); } });
+onEnter('enBarcode', entryLookup);
+const enNext = {enPrice: 'enQty', enQty: 'enDisc', enDisc: 'enAddin', enAddin: 'enPct', enPct: 'enAmt', enAmt: 'enStaff'};
+Object.entries(enNext).forEach(([from, to]) => onEnter(from, () => $(to).select()));
+onEnter('enStaff', entryCommit);
+function focusScan(){ scanBox.focus(); }
+// Keep the scanner focused unless somebody is typing elsewhere.
+document.addEventListener('click', (e) => {
+  if (e.target.closest('input, textarea, select, button, a, .modal, .dropdown-menu')) return;
+  focusScan();
+});
+
+// Camera, for a phone or a webcam — the same single scanner path.
+let cam = null;
+$('camBtn').onclick = async () => {
+  $('camBox').style.display = 'block';
+  if (cam) return;
+  cam = new Html5Qrcode('camReader');
+  try {
+    let last = '', lastAt = 0;
+    await cam.start({facingMode: 'environment'}, {fps: 12, qrbox: {width: 220, height: 140}},
+      (decoded) => {
+        // A camera reads the same tag many times a second; take it once.
+        if (decoded === last && Date.now() - lastAt < 2500) return;
+        last = decoded; lastAt = Date.now();
+        handleScan(decoded);
+      }, () => {});
+  } catch (err){ say('Camera error: ' + err, 'bad'); }
+};
+$('camStop').onclick = async () => {
+  if (cam){ try { await cam.stop(); cam.clear(); } catch(e){} cam = null; }
+  $('camBox').style.display = 'none';
+};
+
+// ---- promotions ------------------------------------------------------------------
+let promoTimer = null, promoSeq = 0;
 function refreshPromotions(){
   clearTimeout(promoTimer);
   promoTimer = setTimeout(async () => {
-    if (cart.size === 0){
-      promoAwards = []; promoNotices = [];
-      paintPromotions();
-      return;
-    }
+    if (!lines.length){ promoAwards = []; promoNotices = []; schemesLater = []; paintPromotions(); renderBill(); return; }
     const mine = ++promoSeq;
     try {
       const r = await fetch(`${SHOP_ROOT}/pos/api/promotions`, {
         method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({
-          items: [...cart.entries()].map(([id, it]) => ({product_id: id, quantity: it.qty})),
-          choices: promoChoices,
-        }),
+        body: JSON.stringify({items: lines.map((l) => ({product_id: l.product_id, quantity: l.qty,
+                                                       unit_price: l.price, discount_pct: lineMath(l).manualEff})),
+                              choices: promoChoices, agreement_code: agreementCode}),
       });
       const j = await r.json();
-      // A slower earlier request must not overwrite a newer answer — at a
-      // counter these fire on every beep and they do not come back in order.
-      if (mine !== promoSeq) return;
-      promoAwards = j.awards || [];
-      promoNotices = j.notices || [];
+      if (mine !== promoSeq) return;   // an older answer must not overwrite a newer one
+      promoAwards = j.awards || []; promoNotices = j.notices || [];
+      const sch = j.schemes || {};
+      lines.forEach((l, i) => { l.scheme = (sch.lines || {})[String(i)] || null; });
+      schemesLater = sch.later || [];
     } catch (e){
       if (mine !== promoSeq) return;
       promoAwards = []; promoNotices = [];
+      lines.forEach((l) => { l.scheme = null; }); schemesLater = [];
     }
-    renderCart();
-    paintPromotions();
+    renderBill(); paintPromotions();
   }, 250);
 }
-
 function paintPromotions(){
-  const box = document.getElementById('promoBox');
-  if (!promoAwards.length && !promoNotices.length){
-    box.classList.add('d-none');
-    box.innerHTML = '';
-    return;
-  }
+  const box = $('promoBox');
+  if (!promoAwards.length && !promoNotices.length && !schemesLater.length && !agreementCode){
+    box.className = 'd-none mx-3 mb-1'; box.innerHTML = ''; return; }
   const awards = promoAwards.map((a) => `
-    <div class="d-flex justify-content-between align-items-start gap-2 py-1">
-      <div>
-        <i class="bi bi-gift text-success"></i>
-        <strong>${a.name}</strong>${a.times > 1 ? ' × ' + a.times : ''}
-        <div class="small text-muted">${a.description}</div>
-        ${a.note ? `<div class="small" style="color:#B45309">${a.note}</div>` : ''}
+    <div class="d-flex justify-content-between gap-2 small py-1">
+      <div><i class="bi bi-gift text-success"></i> <strong>${esc(a.name)}</strong>${a.times > 1 ? ' × ' + a.times : ''}
+        <span class="text-muted">— ${esc(a.description)}</span>
+        ${a.note ? `<span style="color:#B45309"> ${esc(a.note)}</span>` : ''}
         ${a.options && a.options.length ? `
-          <select class="form-select form-select-sm mt-1 promo-pick" data-scheme="${a.scheme_id}">
-            ${a.rewards.map((r) => `<option value="${r.product_id}" selected>${r.name}</option>`).join('')}
-            ${a.options.map((o) => `<option value="${o.product_id}">${o.name} — ₹${Number(o.price).toFixed(2)}</option>`).join('')}
-          </select>` : ''}
-      </div>
-      <div class="text-end small text-nowrap">
-        <span class="badge text-bg-success">saves ${fmt(a.benefit)}</span>
-      </div>
+          <select class="form-select form-select-sm d-inline-block w-auto ms-1 promo-pick" data-scheme="${a.scheme_id}">
+            ${a.rewards.map((r) => `<option value="${r.product_id}" selected>${esc(r.name)}</option>`).join('')}
+            ${a.options.map((o) => `<option value="${o.product_id}">${esc(o.name)} — ${fmt(o.price)}</option>`).join('')}
+          </select>` : ''}</div>
+      <span class="badge text-bg-success align-self-start">saves ${fmt(a.benefit)}</span>
     </div>`).join('');
-
-  // The refusals are why this panel is on the billing screen at all. A customer
-  // who has earned a free garment the shop hasn't got must be told at the
-  // counter, by the person taking their money.
   const notices = promoNotices.map((n) => `
-    <div class="d-flex gap-2 align-items-start py-1" style="color:#9F1239">
-      <i class="bi bi-exclamation-triangle"></i>
-      <div class="small">${n.message}</div>
-    </div>`).join('');
-
-  box.className = 'mb-2 p-2 border rounded';
-  box.style.background = promoAwards.length ? '#F5FBF7' : '#FFF1F2';
-  box.style.borderColor = promoAwards.length ? '#C1DDD2' : '#FECDD3';
-  box.innerHTML = awards + notices;
-
+    <div class="small py-1" style="color:#9F1239"><i class="bi bi-exclamation-triangle"></i> ${esc(n.message)}</div>`).join('');
+  // What the sales schemes give when the bill is paid — at settlement, or as a coupon.
+  const later = schemesLater.map((a) => `
+    <div class="small py-1"><i class="bi bi-gift text-success"></i> <strong>${esc(a.name)}</strong>
+      <span class="text-muted">— ${esc(a.applicable_label)}:</span>
+      ${a.points ? `<b>${+a.points} reward points</b> when paid${customer ? '' : ' (attach the customer)'}`
+        : a.applicable === 'settlement' ? `<b>${fmt(a.amount)} off</b> when paid`
+        : `a <b>${fmt(a.coupon_value || a.amount)}</b> coupon${a.applicable === 'next_day_bill' ? ' from tomorrow' : ' for next time'}`}</div>`).join('');
+  const agree = agreementCode ? `<div class="small py-1"><i class="bi bi-patch-check text-success"></i>
+      Agreement code <b>${esc(agreementCode)}</b>
+      <button type="button" class="btn btn-link btn-sm p-0 ms-1" id="agreeClear">remove</button></div>` : '';
+  box.className = 'mx-3 mb-1 px-2 border rounded';
+  box.style.background = (promoAwards.length || schemesLater.length || agreementCode) ? '#F5FBF7' : '#FFF1F2';
+  box.innerHTML = awards + later + agree + notices;
+  if ($('agreeClear')) $('agreeClear').onclick = () => { agreementCode = null; refreshPromotions(); };
   document.querySelectorAll('.promo-pick').forEach((s) => s.onchange = (e) => {
-    promoChoices[e.target.dataset.scheme] = e.target.value;
-    refreshPromotions();
+    promoChoices[e.target.dataset.scheme] = e.target.value; refreshPromotions();
   });
 }
 
-function addProduct(p){
-  const id = String(p.id);
-  const stock = parseFloat(p.stock);
-  if (!(stock > 0)){ alert(`"${p.name}" is out of stock.`); return; }
-  // The first scan of a sale is the moment the bill number on screen starts
-  // mattering, and it is also the moment it is most likely to be stale — another
-  // till on this floor may have billed since this page was drawn. One small
-  // request per sale, at the only point anybody is about to read it.
-  if (cart.size === 0) refreshBillNumber();
-  if (cart.has(id)){
-    if (cart.get(id).qty + 1 > stock){ alert('Insufficient stock'); return; }
-    cart.get(id).qty += 1;
-  } else {
-    cart.set(id, {
-      name: p.name, price: parseFloat(p.price),
-      gst: parseFloat(p.gst), qty: 1, stock
-    });
+// ---- reductions --------------------------------------------------------------------
+
+// ---- the discount card: D + Enter in the scanner ---------------------------------
+// Tick the items, then: a discount in % or ₹ (the toggle), or the final amount
+// wanted for them — applied as each ticked line's own %. E.Code (optional) names
+// whoever approved it and is recorded on the bill. P.Code (optional) is a
+// promotion / coupon code, applied exactly as the Coupon box applies it.
+const discModal = new bootstrap.Modal($('discModal'));
+let dcMode = 'pct';
+const dcSel = new Set();
+
+function dcSay(text, bad){
+  const m = $('dcMsg');
+  m.textContent = text || '';
+  m.style.color = bad ? '#BE123C' : 'var(--brand-dark)';
+}
+function openDiscountCard(){
+  dcSel.clear();
+  lines.forEach((l) => dcSel.add(l.key));
+  $('dcDisc').value = ''; $('dcFinal').value = '';
+  $('dcECode').value = discountBy ? discountBy.code : '';
+  $('dcPCode').value = agreementCode || (appliedCoupon ? appliedCoupon.code : '');
+  dcSay(lines.length ? '' : 'The bill is empty — scan the items first.', !lines.length);
+  paintDiscountCard();
+  discModal.show();
+  setTimeout(() => $('dcDisc').focus(), 250);
+}
+function paintDiscountCard(){
+  $('dcBody').innerHTML = lines.length ? lines.map((l) => {
+    const m = lineMath(l);
+    return `<tr>
+      <td><input type="checkbox" class="form-check-input dc-pick" data-key="${l.key}" ${dcSel.has(l.key) ? 'checked' : ''}></td>
+      <td class="font-monospace small">${esc(l.barc || l.sku || '')}</td>
+      <td>${esc(l.name)}<div class="small text-muted">${l.staff ? esc(l.staff.code) : ''}</div></td>
+      <td class="text-end">${fmt(l.price)}</td>
+      <td class="text-end">${l.qty}</td>
+      <td class="text-end">${m.disc ? fmt(m.disc) : ''}${m.pct ? ` <span class="text-muted small">${m.pct}%</span>` : ''}</td>
+      <td class="text-end"><input type="number" min="0" max="100" step="1" value="${m.addin || ''}" placeholder="—"
+             class="form-control form-control-sm text-end dc-addin" data-key="${l.key}" title="Additional discount % on this item (optional)"></td>
+      <td class="text-end">${fmt(m.disc + m.addAmt)}</td>
+      <td class="text-end fw-semibold">${fmt(m.taxable + m.tax)}</td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="9" class="text-center text-muted py-4">No items on the bill.</td></tr>';
+  $('dcAll').checked = !!lines.length && lines.every((l) => dcSel.has(l.key));
+  $('dcMode').textContent = dcMode === 'pct' ? '%' : '₹';
+  // Addin %, typed per item — optional; empty means none.
+  document.querySelectorAll('.dc-addin').forEach((el) => {
+    el.onchange = () => {
+      const l = lineOf(el.dataset.key); if (!l) return;
+      l.addin = wholePct(parseFloat(el.value));
+      renderBill(); paintDiscountCard(); refreshPromotions();
+      const next = document.querySelector(`.dc-addin[data-key="${el.dataset.key}"]`)?.closest('tr')?.nextElementSibling?.querySelector('.dc-addin');
+      if (next) next.focus();
+    };
+    el.onkeydown = (e) => { if (e.key === 'Enter'){ e.preventDefault(); el.onchange(); } };
+  });
+  document.querySelectorAll('.dc-pick').forEach((c) => c.onchange = () => {
+    if (c.checked) dcSel.add(c.dataset.key); else dcSel.delete(c.dataset.key);
+    $('dcAll').checked = lines.every((l) => dcSel.has(l.key));
+  });
+}
+const dcLines = () => lines.filter((l) => dcSel.has(l.key));
+// What the ticked items come to before any discount, with GST — what a ₹ figure
+// or a final amount is measured against.
+const dcGross = (ls) => ls.reduce((a, l) => a + l.qty * l.price * (1 + l.gst / 100), 0);
+
+// E.Code, P.Code and final are all optional. An E.Code that is filled in must be
+// an active staff ID — it is recorded on the bill as the approver — and left
+// empty, nobody is named.
+function dcReadApprover(){
+  const v = $('dcECode').value.trim();
+  if (!v){ discountBy = null; return true; }
+  const who = matchStaff(v);
+  if (!who){
+    dcSay('E.Code is not an active staff ID — correct it, or leave it empty.', true);
+    $('dcECode').select();
+    return false;
   }
-  renderCart();
+  discountBy = {id: who.id, code: who.code, name: who.name};
+  return true;
+}
+// The % asked for by the discount field (in % or ₹) or, failing that, by final.
+// null when neither is filled in; false when what is there cannot be used.
+function dcAskedPct(){
+  const d = $('dcDisc').value.trim(), f = $('dcFinal').value.trim();
+  if (d === '' && f === '') return null;
+  const g = dcGross(dcLines());
+  if (d !== ''){
+    const v = parseFloat(d);
+    if (isNaN(v) || v < 0){ dcSay('Enter the discount as a number.', true); return false; }
+    if (dcMode === 'pct') return v;
+    if (!g){ dcSay('Tick the items the discount is for.', true); return false; }
+    return v / g * 100;
+  }
+  const v = parseFloat(f);
+  if (isNaN(v) || v < 0){ dcSay('Enter the final amount as a number.', true); return false; }
+  if (!g){ dcSay('Tick the items the discount is for.', true); return false; }
+  if (v > g){ dcSay(`The ticked items come to ${fmt(g)} — the final amount cannot be more.`, true); return false; }
+  return (1 - v / g) * 100;
+}
+function dcSetPct(pct){
+  const sel = dcLines();
+  if (!sel.length){ dcSay('Tick the items the discount is for.', true); return false; }
+  // A whole number — a % worked out from a ₹ figure or a final amount is rounded
+  // to the nearest one, so the result lands close to the figure asked for.
+  pct = wholePct(pct);
+  sel.forEach((l) => { l.pct = pct; });
+  $('dcDisc').value = ''; $('dcFinal').value = '';
+  dcSay(pct ? `${pct}% off ${sel.length} item${sel.length === 1 ? '' : 's'}`
+              + (discountBy ? ` — approved by ${discountBy.code} · ${discountBy.name}.` : '.')
+            : `Discount removed from ${sel.length} item${sel.length === 1 ? '' : 's'}.`);
+  return true;
+}
+// Everything filled in, in one go: the approver, the discount (or final), the
+// code. Enter in any field does it and keeps the card open; Approve does it and
+// closes the card.
+async function dcApprove(close){
+  if (!dcReadApprover()) return;
+  const pct = dcAskedPct();
+  if (pct === false) return;
+  if (pct !== null && !dcSetPct(pct)) return;
+  const code = $('dcPCode').value.trim();
+  let agreed = false;
+  if (code && code.toUpperCase() !== agreementCode
+      && !(appliedCoupon && appliedCoupon.code === code.toUpperCase())){
+    // An agreement code a running scheme asks for comes first; otherwise a coupon.
+    let ag = null;
+    try { ag = await (await fetch(`${SHOP_ROOT}/pos/api/agreement?code=${encodeURIComponent(code)}`)).json(); } catch (e) {}
+    if (ag && ag.ok){
+      agreementCode = ag.code; agreed = true;
+      $('couponHelp').classList.add('d-none');
+    } else {
+      await applyCoupon(code);
+      if (!appliedCoupon){
+        renderBill(); paintDiscountCard();
+        dcSay($('couponHelp').innerText || 'That P.Code cannot be used.', true);
+        $('dcPCode').select();
+        return;
+      }
+    }
+  }
+  renderBill();
+  paintDiscountCard();
   refreshPromotions();
+  if (close) discModal.hide();
+  else if (agreed) dcSay(`Agreement code ${agreementCode} — schemes that ask for it now apply.`);
+  else if (pct === null && code && appliedCoupon) dcSay(`Code ${appliedCoupon.code} applied — ${appliedCoupon.describe}.`);
+  else if (pct === null && discountBy) dcSay(`Approver: ${discountBy.code} · ${discountBy.name}.`);
 }
-
-// addToCart(el) is gone with the grid it read its dataset off. Everything now
-// arrives through addProduct() from a server lookup, which is the only path that
-// can resolve a warehouse QR anyway.
-
-let scanTimer = null;
-let lastServerLookup = null;   // avoid firing the same server lookup twice
-
-// The last few scans, newest first — the cashier's confirmation that the thing
-// they beeped is the thing that went on the bill. A scanner fires faster than
-// anyone can follow the cart.
-function logScan(p, ok){
-  const box = document.getElementById('scanLog');
-  const empty = document.getElementById('scanEmpty');
-  if (empty) empty.remove();
-  const when = new Date().toLocaleTimeString();
-  box.insertAdjacentHTML('afterbegin', ok ? `
-    <div class="list-group-item d-flex justify-content-between align-items-start py-2">
-      <div>
-        <div class="fw-semibold">${p.name}</div>
-        <div class="small text-muted">${[p.sku, p.unit ? ('stock ' + p.stock + ' ' + p.unit) : ''].filter(Boolean).join(' · ')}</div>
-      </div>
-      <div class="text-end">
-        <div>${fmt(p.price || 0)}</div>
-        <div class="small text-muted">${when}</div>
-      </div>
-    </div>` : `
-    <div class="list-group-item py-2 text-danger">
-      <i class="bi bi-exclamation-triangle"></i> No product for “${p}”
-      <span class="small text-muted float-end">${when}</span>
-    </div>`);
-  while (box.children.length > 12) box.removeChild(box.lastChild);
-}
-
-// Resolve a scanned/typed code to a product and add it to the cart.
-// There is no grid to check first any more: the server resolves a SKU, a printed
-// barcode or a warehouse QR against the whole catalogue, and pulls the item in
-// from the warehouse if the shop has not seen it yet. That is strictly more than
-// the grid could ever match, which is why dropping the grid costs nothing.
-// `alertOnMiss` is true for deliberate actions (Enter); the silent auto-add
-// path passes false so partial typing doesn't pop alerts.
-async function resolveAndAdd(code, alertOnMiss){
-  code = (code || '').trim();
-  if (!code) return false;
-  try {
-    // ?code= rather than a path segment: a warehouse QR payload can contain '/'
-    // and '|', which a path segment mangles before the route ever sees it.
-    const r = await fetch(`${SHOP_ROOT}/pos/api/product?code=${encodeURIComponent(code)}`);
-    if (r.ok){
-      const p = await r.json();
-      addProduct(p); logScan(p, true); resetScan(); return true;
-    }
-    if (alertOnMiss){ logScan(code, false); }
-  } catch (err){
-    if (alertOnMiss){ alert('Lookup failed: ' + err); }
-  }
-  return false;
-}
-
-document.getElementById('productSearch').oninput = e => {
-  const box = e.target;
-  // Auto-add: when a scan settles, add it without waiting for Enter — most
-  // scanners send no Enter keystroke, and making the cashier press it for every
-  // garment is how a queue forms.
-  clearTimeout(scanTimer);
-  scanTimer = setTimeout(() => {
-    const code = box.value.trim();
-    if (!code) return;
-    // A warehouse QR is a scan however it looks — its payload carries the
-    // description, so it fails the "no spaces" test that tells typing from
-    // scanning everywhere else.
-    const isWarehouseQr = /^EU?1\|/.test(code);
-    if ((isWarehouseQr || (code.length >= 4 && !/\s/.test(code))) && code !== lastServerLookup){
-      lastServerLookup = code;
-      resolveAndAdd(code, false);
-    }
-  }, 150);
+const dcEnter = (id, fn) => $(id).addEventListener('keydown', (e) => { if (e.key === 'Enter'){ e.preventDefault(); fn(); } });
+['dcDisc', 'dcFinal', 'dcECode', 'dcPCode'].forEach((id) => dcEnter(id, () => dcApprove(false)));
+$('dcApprove').onclick = () => dcApprove(true);
+$('dcMode').onclick = () => { dcMode = dcMode === 'pct' ? 'amt' : 'pct'; paintDiscountCard(); $('dcDisc').focus(); };
+$('dcAll').onchange = () => {
+  dcSel.clear();
+  if ($('dcAll').checked) lines.forEach((l) => dcSel.add(l.key));
+  paintDiscountCard();
 };
+$('discModal').addEventListener('hidden.bs.modal', focusScan);
 
-function resetScan(){
-  const box = document.getElementById('productSearch');
-  box.value = '';
-  lastServerLookup = null;
-  box.focus();
-}
-
-// Scan-mode: press Enter after typing/scanning a SKU or QR
-document.getElementById('productSearch').addEventListener('keydown', async e => {
-  if (e.key !== 'Enter') return;
-  e.preventDefault();
-  clearTimeout(scanTimer);            // cancel the auto-add timer; we handle it now
-  await resolveAndAdd(e.target.value, true);
-});
-
-document.getElementById('discount').oninput = renderCart;
-document.getElementById('redeemPoints').oninput = renderCart;
-
-// ---- Coupon ------------------------------------------------------------------
-// The server says whether a code is good (withdrawn, expired, used, someone
-// else's) and hands back its rule; the cart re-applies that rule as the bill
-// changes, the same sum vouchers.coupon_amount does. Checkout values it again.
+// The server says whether a code is good and hands back its rule; the bill
+// re-applies the rule as it changes. Checkout values it again.
 function couponValue(bill, room){
-  const help = document.getElementById('couponHelp');
-  if (!appliedCoupon){ window._couponOff = 0; return 0; }
+  const help = $('couponHelp');
+  if (!appliedCoupon){ couponOff = 0; return 0; }
   const c = appliedCoupon;
   let off = 0, note = '';
   if ((c.min_bill || 0) > bill + 0.01){
@@ -724,564 +1066,189 @@ function couponValue(bill, room){
   } else {
     off = c.kind === 'percent' ? bill * c.value / 100 : c.value;
     if (c.kind === 'percent' && c.max_discount) off = Math.min(off, c.max_discount);
-    off = Math.max(0, Math.min(off, bill, room));
-    off = Math.round(off * 100) / 100;
+    off = Math.round(Math.max(0, Math.min(off, bill, room)) * 100) / 100;
   }
   help.classList.remove('d-none');
   help.style.color = off > 0 ? 'var(--brand-dark)' : '#B45309';
-  help.innerHTML = off > 0
-    ? `<i class="bi bi-ticket-perforated"></i> <b>${c.code}</b> — ${c.describe}: <b>${fmt(off)} off</b>`
-    : note;
-  window._couponOff = off;
+  help.innerHTML = off > 0 ? `<b>${esc(c.code)}</b> — ${esc(c.describe)}: <b>${fmt(off)} off</b>` : esc(note);
+  couponOff = off;
   return off;
 }
-
 function clearCoupon(msg){
   appliedCoupon = null;
-  document.getElementById('couponCode').value = '';
-  document.getElementById('couponCode').disabled = false;
-  document.getElementById('couponApply').classList.remove('d-none');
-  document.getElementById('couponClear').classList.add('d-none');
-  const help = document.getElementById('couponHelp');
-  help.classList.toggle('d-none', !msg);
-  help.style.color = '#BE123C';
-  help.innerText = msg || '';
-  renderCart();
+  $('couponClear').classList.add('d-none');
+  const help = $('couponHelp');
+  help.classList.toggle('d-none', !msg); help.style.color = '#BE123C'; help.innerText = msg || '';
+  renderBill();
 }
-
-async function applyCoupon(){
-  const code = document.getElementById('couponCode').value.trim();
-  if (!code) return;
-  const discount = parseFloat(document.getElementById('discount').value) || 0;
-  let subtotal = 0, tax = 0;
-  cart.forEach((it) => { subtotal += it.qty * it.price; tax += it.qty * it.price * it.gst / 100; });
-  const room = Math.max(0, subtotal - Math.min(discount, subtotal));
-  const qs = new URLSearchParams({code, amount: (room + tax).toFixed(2), room: room.toFixed(2)});
-  if (currentCustomerId) qs.set('customer_id', currentCustomerId);
-  try {
-    // A bill still below the coupon's minimum comes back ok with below_min, and
-    // the cart keeps the code and applies it once the bill gets there.
-    const j = await (await fetch(`${SHOP_ROOT}/pos/api/coupon?${qs}`)).json();
-    if (!j.ok){ clearCoupon(j.error || 'That coupon cannot be used.'); return; }
-    appliedCoupon = j;
-    document.getElementById('couponCode').value = j.code;
-    document.getElementById('couponCode').disabled = true;
-    document.getElementById('couponApply').classList.add('d-none');
-    document.getElementById('couponClear').classList.remove('d-none');
-    renderCart();
-  } catch (err){
-    clearCoupon('Could not check the coupon: ' + err);
-  }
+function showCoupon(j){
+  appliedCoupon = j;
+  $('couponClear').classList.remove('d-none');
 }
-document.getElementById('couponApply').onclick = applyCoupon;
-document.getElementById('couponCode').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter'){ e.preventDefault(); applyCoupon(); }
-});
-document.getElementById('couponClear').onclick = () => clearCoupon('');
-
-// ---- Customer lookup (mobile / invoice # / camera barcode) ----
-function paintCustomer(c){
-  const card = document.getElementById('custCard');
-  const walkin = document.getElementById('custWalkin');
-  if (c){
-    currentCustomerId = c.id;
-    window._custPoints = Number(c.loyalty_points || 0);
-    document.getElementById('custName').innerText = c.name;
-    document.getElementById('custPhone').innerText = c.phone || '(no phone)';
-    document.getElementById('custPoints').innerText = Math.round(c.loyalty_points || 0) + ' pts';
-    document.getElementById('custStats').innerText =
-      `· ${c.invoice_count || 0} invoices · spent ₹${Number(c.total_spent || 0).toFixed(2)}`;
-    card.classList.remove('d-none'); walkin.classList.add('d-none');
-  } else {
-    currentCustomerId = null;
-    window._custPoints = 0;
-    document.getElementById('redeemPoints').value = 0;
-    card.classList.add('d-none'); walkin.classList.remove('d-none');
-  }
-  // A coupon issued to one customer goes with that customer.
-  if (appliedCoupon && appliedCoupon.customer_id && appliedCoupon.customer_id !== currentCustomerId){
-    clearCoupon(`${appliedCoupon.code} belongs to another customer — removed.`);
-    return;
-  }
-  renderCart();
-}
-
-// "Use all" points button
-document.getElementById('useAllPts').onclick = () => {
-  document.getElementById('redeemPoints').value = Math.floor(window._custPoints || 0);
-  renderCart();
-};
-
-async function lookupCustomer(q){
-  q = (q || '').trim(); if (!q) return;
-  const r = await fetch(`${SHOP_ROOT}/floor/api/customer-lookup?q=${encodeURIComponent(q)}`);
-  const j = await r.json();
-  if (j.error){ alert(j.error); return; }
-  paintCustomer(j);
-  document.getElementById('custLookup').value = '';
-}
-document.getElementById('custLookupBtn').onclick = () =>
-  lookupCustomer(document.getElementById('custLookup').value);
-document.getElementById('custLookup').addEventListener('keydown', e => {
-  if (e.key === 'Enter'){ e.preventDefault(); lookupCustomer(e.target.value); }
-});
-// Hands-free: a scanned membership card (e.g. "CUST000042") auto-attaches
-// the customer even if the scanner doesn't send an Enter keystroke.
-let custScanTimer = null;
-document.getElementById('custLookup').addEventListener('input', e => {
-  const v = e.target.value.trim();
-  clearTimeout(custScanTimer);
-  if (/^CUST\d{3,}$/i.test(v)){
-    custScanTimer = setTimeout(() => lookupCustomer(v), 150);
-  }
-});
-document.getElementById('custClear').onclick = () => paintCustomer(null);
-
-let custQr = null;
-document.getElementById('custScanBtn').onclick = async () => {
-  document.getElementById('custScannerBox').style.display = 'block';
-  if (custQr) return;
-  custQr = new Html5Qrcode("custReader");
-  try {
-    await custQr.start({ facingMode: "environment" },
-      { fps: 12, qrbox: { width: 240, height: 140 } },
-      async (decoded) => {
-        try { await custQr.stop(); custQr.clear(); } catch(e){}
-        custQr = null;
-        document.getElementById('custScannerBox').style.display = 'none';
-        lookupCustomer(decoded);
-      }, () => {});
-  } catch (err){ alert('Camera error: ' + err); }
-};
-document.getElementById('custStopScan').onclick = async () => {
-  if (custQr){ try { await custQr.stop(); custQr.clear(); } catch(e){} custQr = null; }
-  document.getElementById('custScannerBox').style.display = 'none';
-};
-
-// Quick-add new customer
-document.getElementById('ncSave').onclick = async () => {
-  const name = document.getElementById('ncName').value.trim();
-  if (!name){ alert('Name required'); return; }
-  const r = await fetch(`${SHOP_ROOT}/floor/api/customer/new`, {
-    method: 'POST', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({
-      name,
-      phone: document.getElementById('ncPhone').value.trim(),
-      email: document.getElementById('ncEmail').value.trim(),
-      state_code: document.getElementById('ncState').value.trim() || '33',
-    })
-  });
-  const j = await r.json();
-  if (j.error){ alert(j.error); return; }
-  paintCustomer(j);
-  bootstrap.Modal.getInstance(document.getElementById('newCustModal')).hide();
-  ['ncName','ncPhone','ncEmail'].forEach(id => document.getElementById(id).value = '');
-};
-
-// ---- Hands-free scanning: keep the scan box focused ----
-// A barcode reader types the code then sends Enter into whatever field is
-// focused, so we keep focus on the scan box unless the user is typing
-// somewhere else (qty, customer, discount, etc.).
-const scanBox = document.getElementById('productSearch');
-function focusScan(){ scanBox.focus(); }
-focusScan();
-document.addEventListener('click', (e) => {
-  if (e.target.closest('input, textarea, select, button, a, .modal')) return;
-  focusScan();
-});
-
-// ---- Who is serving -------------------------------------------------------
-// The sale is credited to this person, so the till will not take a checkout
-// without one. Resolved server-side rather than trusted from the page: the code
-// may be typed, picked, or read off an ID card, and only the server knows
-// whether that person is still active staff.
-let servingStaffId = null;
-
-function paintStaff(s){
-  servingStaffId = s ? s.id : null;
-  const chosen = document.getElementById('staffChosen');
-  document.getElementById('staffMsg').textContent = '';
-  if (s){
-    document.getElementById('staffName').textContent = s.name;
-    document.getElementById('staffCodeShown').textContent = ' · ' + s.code;
-    chosen.classList.remove('d-none');
-    document.getElementById('staffCode').value = '';
-    document.getElementById('staffPick').value = '';
-  } else {
-    chosen.classList.add('d-none');
-  }
-  updateCheckoutGate();
-}
-
-function updateCheckoutGate(){
-  const btn = document.getElementById('checkoutBtn');
-  btn.disabled = !servingStaffId;
-  btn.title = servingStaffId ? '' : 'Identify the staff member first';
-}
-
-async function setStaff(code){
+async function applyCoupon(code){
   code = (code || '').trim();
   if (!code) return;
+  const room = Math.max(0, totals.subtotal - totals.discount);
+  const qs = new URLSearchParams({code, amount: (room + totals.tax).toFixed(2), room: room.toFixed(2)});
+  if (customer) qs.set('customer_id', customer.id);
   try {
-    const r = await fetch(`${SHOP_ROOT}/pos/api/staff?code=${encodeURIComponent(code)}`);
-    if (!r.ok){
-      const j = await r.json().catch(() => ({}));
-      document.getElementById('staffMsg').textContent = j.error || 'No staff member for that code';
-      return;
-    }
-    paintStaff(await r.json());
-  } catch (e){
-    document.getElementById('staffMsg').textContent = 'Lookup failed: ' + e;
-  }
+    const j = await (await fetch(`${SHOP_ROOT}/pos/api/coupon?${qs}`)).json();
+    if (!j.ok){ clearCoupon(j.error || 'That coupon cannot be used.'); return; }
+    showCoupon(j); renderBill();
+  } catch (err){ clearCoupon('Could not check the coupon: ' + err); }
 }
+$('couponClear').onclick = () => clearCoupon('');
 
-document.getElementById('staffGo').onclick = () => setStaff(document.getElementById('staffCode').value);
-document.getElementById('staffCode').addEventListener('keydown', e => {
-  // An ID-card reader types the code then sends Enter, same as a keyboard.
-  if (e.key === 'Enter'){ e.preventDefault(); setStaff(e.target.value); }
+// ---- customer (optional) -----------------------------------------------------------
+function paintCustomer(c){
+  customer = c || null;
+  $('custCard').classList.toggle('d-none', !customer);
+  $('custWalkin').classList.toggle('d-none', !!customer);
+  if (customer){
+    $('custName').innerText = customer.name;
+    $('custPhone').innerText = customer.phone || '';
+    $('custPoints').innerText = Math.round(customer.loyalty_points || 0) + ' pts';
+  }
+  if (appliedCoupon && appliedCoupon.customer_id && appliedCoupon.customer_id !== (customer && customer.id)){
+    clearCoupon(`${appliedCoupon.code} belongs to another customer — removed.`); return;
+  }
+  renderBill();
+}
+async function lookupCustomer(q){
+  q = (q || '').trim(); if (!q) return;
+  const j = await (await fetch(`${SHOP_ROOT}/floor/api/customer-lookup?q=${encodeURIComponent(q)}`)).json();
+  if (j.error){ alert(j.error); return; }
+  paintCustomer(j); $('custLookup').value = '';
+}
+$('custLookupBtn').onclick = () => lookupCustomer($('custLookup').value);
+$('custLookup').addEventListener('keydown', (e) => { if (e.key === 'Enter'){ e.preventDefault(); lookupCustomer(e.target.value); } });
+$('custClear').onclick = () => paintCustomer(null);
+$('ncSave').onclick = async () => {
+  const name = $('ncName').value.trim();
+  if (!name){ alert('Name required'); return; }
+  const j = await (await fetch(`${SHOP_ROOT}/floor/api/customer/new`, {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({name, phone: $('ncPhone').value.trim(), email: $('ncEmail').value.trim(),
+                          state_code: $('ncState').value.trim() || '33'}),
+  })).json();
+  if (j.error){ alert(j.error); return; }
+  paintCustomer(j);
+  bootstrap.Modal.getInstance($('newCustModal')).hide();
+  ['ncName', 'ncPhone', 'ncEmail'].forEach((id) => $(id).value = '');
+};
+
+// ---- salesman scheme: what is on offer today -----------------------------------------
+const offersModal = new bootstrap.Modal($('offersModal'));
+$('offersBtn').onclick = async () => {
+  $('offersBody').innerHTML = '<div class="text-muted small">Loading…</div>';
+  offersModal.show();
+  try {
+    const j = await (await fetch(`${SHOP_ROOT}/pos/api/offers`)).json();
+    $('offersBody').innerHTML = (j.offers || []).length ? j.offers.map((o) => `
+      <div class="border rounded p-2 mb-2">
+        <div class="d-flex justify-content-between"><strong>${esc(o.name)}</strong><code>${esc(o.code)}</code></div>
+        <div class="small">${esc(o.describe)}</div>
+        ${o.until ? `<div class="small text-muted">Until ${esc(o.until)}</div>` : ''}
+        ${o.terms ? `<div class="small text-muted">${esc(o.terms)}</div>` : ''}
+      </div>`).join('') : '<div class="text-muted">No offers are running at this till today.</div>';
+  } catch (err){ $('offersBody').innerHTML = `<div class="text-danger small">Could not load offers: ${esc(err)}</div>`; }
+};
+
+// ---- previous bill: reprint or download ----------------------------------------------
+$('prevBtn').addEventListener('show.bs.dropdown', async () => {
+  const menu = $('prevMenu');
+  menu.innerHTML = '<li class="dropdown-item-text small text-muted">Loading…</li>';
+  try {
+    const j = await (await fetch(`${SHOP_ROOT}/pos/api/recent-bills`)).json();
+    menu.innerHTML = (j.bills || []).length ? j.bills.map((b) => `
+      <li class="dropdown-item-text d-flex justify-content-between align-items-center gap-2 py-1">
+        <span class="small"><b class="font-monospace">${esc(b.number)}</b>${b.cancelled ? ' <span class="badge text-bg-danger">cancelled</span>' : ''}<br>
+          <span class="text-muted">${esc(b.when)} · ${esc(b.customer)} · ${fmt(b.total)}</span></span>
+        <span class="text-nowrap">
+          <a class="btn btn-outline-primary btn-xs" href="${SHOP_ROOT}/pos/invoice/${b.id}/print" title="Print both copies"><i class="bi bi-printer"></i></a>
+          <a class="btn btn-outline-secondary btn-xs" href="${SHOP_ROOT}/pos/invoice/${b.id}?download=1" target="_blank" rel="noopener" title="Download PDF"><i class="bi bi-download"></i></a>
+        </span>
+      </li>`).join('') : '<li class="dropdown-item-text small text-muted">No bills on this till yet.</li>';
+  } catch (err){ menu.innerHTML = `<li class="dropdown-item-text small text-danger">${esc(err)}</li>`; }
 });
-document.getElementById('staffPick').onchange = e => { if (e.target.value) setStaff(e.target.value); };
-document.getElementById('staffClear').onclick = () => {
-  paintStaff(null);
-  document.getElementById('staffCode').focus();
-};
 
-// Camera scan of the ID card, reusing the same library as the customer card.
-let staffCam = null;
-document.getElementById('staffScanBtn').onclick = async () => {
-  document.getElementById('staffScanBox').style.display = 'block';
-  if (staffCam) return;
-  staffCam = new Html5Qrcode('staffReader');
-  try {
-    await staffCam.start({ facingMode: 'environment' }, { fps: 10, qrbox: 220 },
-      async (text) => { await stopStaffScan(); setStaff(text); }, () => {});
-  } catch (err){
-    document.getElementById('staffMsg').textContent = 'Camera error: ' + err;
-  }
-};
-async function stopStaffScan(){
-  if (staffCam){ try { await staffCam.stop(); staffCam.clear(); } catch(e){} staffCam = null; }
-  document.getElementById('staffScanBox').style.display = 'none';
-}
-document.getElementById('staffStopScan').onclick = stopStaffScan;
-
-updateCheckoutGate();
-
-// ---- Camera scan for a garment tag ----------------------------------------
-// The same library the customer card and the staff ID already use. A handheld
-// scanner types into the box above; this is for a phone or a webcam.
-let prodQr = null;
-document.getElementById('prodScanBtn').onclick = async () => {
-  document.getElementById('prodScannerBox').style.display = 'block';
-  if (prodQr) return;
-  prodQr = new Html5Qrcode('prodReader');
-  try {
-    await prodQr.start({ facingMode: 'environment' },
-      { fps: 12, qrbox: { width: 260, height: 160 } },
-      async (decoded) => {
-        // Kept RUNNING between garments — a counter bills several items at once,
-        // and stopping the camera after each one means reopening it every time.
-        await resolveAndAdd(decoded, true);
-      }, () => {});
-  } catch (err){ alert('Camera error: ' + err); }
-};
-document.getElementById('prodStopScan').onclick = async () => {
-  if (prodQr){ try { await prodQr.stop(); prodQr.clear(); } catch(e){} prodQr = null; }
-  document.getElementById('prodScannerBox').style.display = 'none';
-};
-
-// ---- Settlement ------------------------------------------------------------
-// The bill is not committed until the tenders add up to it, to the paisa. The
-// server checks the same thing again against ITS total (see pos.checkout) —
-// this is so the cashier sees the balance while they are still taking money,
-// not as an error after the customer has walked away.
-const settleModal = new bootstrap.Modal(document.getElementById('settleModal'));
-const METHODS = ['cash', 'card', 'upi', 'credit_note', 'advance'];
-const stAmt = (m) => document.querySelector(`.st-amt[data-method="${m}"]`);
-const stTender = (m) => document.querySelector(`.st-tender[data-method="${m}"]`);
-const stRef = (m) => document.querySelector(`.st-ref[data-method="${m}"]`);
-const stNote = (m) => document.querySelector(`.st-note[data-method="${m}"]`);
-const num = (el) => parseFloat(el && el.value) || 0;
-
-// What is left to spend on the store credit / advance being used, as the server
-// last said. null = not looked up (or nothing to look up). The server checks it
-// again at checkout, pinned to the document — this is so the cashier sees it.
-const voucherLeft = {credit_note: null, advance: null};
-const voucherErr = {credit_note: '', advance: ''};
-
-async function lookupCreditNote(){
-  const code = (stRef('credit_note').value || '').trim();
-  voucherLeft.credit_note = null; voucherErr.credit_note = '';
-  if (!code){ paintVoucherNotes(); paintSettle(); return; }
-  try {
-    const j = await (await fetch(`${SHOP_ROOT}/pos/api/credit-note?code=${encodeURIComponent(code)}`)).json();
-    if (j.ok){ voucherLeft.credit_note = j.balance; stRef('credit_note').value = j.number; }
-    else voucherErr.credit_note = j.error;
-  } catch (err){ voucherErr.credit_note = 'Could not check the credit note: ' + err; }
-  paintVoucherNotes(); paintSettle();
-}
-
-async function lookupAdvance(){
-  voucherLeft.advance = null; voucherErr.advance = '';
-  if (!currentCustomerId){
-    voucherErr.advance = 'Attach the customer to pay from their advance.';
-  } else {
-    try {
-      const j = await (await fetch(`${SHOP_ROOT}/pos/api/advance-balance?customer_id=${currentCustomerId}`)).json();
-      const ref = (stRef('advance').value || '').trim().toUpperCase();
-      const one = ref ? j.advances.find((a) => a.number.toUpperCase() === ref) : null;
-      if (ref && !one) voucherErr.advance = `No advance “${ref}” with a balance for this customer.`;
-      voucherLeft.advance = ref ? (one ? one.balance : 0) : j.balance;
-    } catch (err){ voucherErr.advance = 'Could not check the advance: ' + err; }
-  }
-  paintVoucherNotes(); paintSettle();
-}
-
-function paintVoucherNotes(){
-  ['credit_note', 'advance'].forEach((m) => {
-    const el = stNote(m);
-    if (voucherErr[m]){ el.style.color = '#BE123C'; el.innerText = voucherErr[m]; }
-    else if (voucherLeft[m] !== null){
-      el.style.color = 'var(--brand-dark)';
-      el.innerText = `${fmt(voucherLeft[m])} available${m === 'advance' && !stRef(m).value.trim() ? ' across this customer’s advances' : ''}.`;
-    } else el.innerText = '';
-  });
-}
-stRef('credit_note').addEventListener('change', lookupCreditNote);
-stRef('advance').addEventListener('change', lookupAdvance);
-
-function settleRows(){
-  return METHODS.map((m) => ({
-    method: m, amount: Math.round(num(stAmt(m)) * 100) / 100,
-    tendered: m === 'cash' ? Math.round(num(stTender(m)) * 100) / 100 : 0,
-    reference: (stRef(m).value || '').trim(),
-  })).filter((r) => r.amount > 0);
-}
-
-function paintSettle(){
-  const due = Number(window._billTotal || 0);
-  const rows = settleRows();
-  const entered = Math.round(rows.reduce((a, r) => a + r.amount, 0) * 100) / 100;
-  const balance = Math.round((due - entered) * 100) / 100;
-  // Only cash is ever over-tendered; a card is settled for an exact amount.
-  const cash = rows.find((r) => r.method === 'cash');
-  const change = cash ? Math.max(0, Math.round((cash.tendered - cash.amount) * 100) / 100) : 0;
-
-  document.getElementById('stDue').innerText = fmt(due);
-  document.getElementById('stEntered').innerText = fmt(entered);
-  document.getElementById('stBalance').innerText = fmt(Math.abs(balance));
-  document.getElementById('stBalLabel').innerText =
-    balance > 0 ? 'Still to pay' : balance < 0 ? 'Over by' : 'Balance';
-  document.getElementById('stBalance').style.color =
-    balance === 0 ? 'var(--brand-dark)' : '#BE123C';
-  const changeRow = document.getElementById('stChangeRow');
-  changeRow.style.setProperty('display', change > 0 ? 'flex' : 'none', 'important');
-  document.getElementById('stChange').innerText = fmt(change);
-
-  const warn = document.getElementById('stWarn');
+// ---- on to settlement ----------------------------------------------------------------
+function paintGo(){
   let msg = '';
-  if (due <= 0) msg = 'Nothing to settle — the cart is empty.';
-  else if (rows.length === 0) msg = 'Enter how the customer is paying.';
-  else if (balance > 0) msg = `${fmt(balance)} still to be paid.`;
-  else if (balance < 0) msg = `${fmt(-balance)} more entered than the bill comes to. `
-    + `To take extra cash and give change, put the extra in Tendered, not Amount.`;
-  for (const r of rows){
-    if (r.method === 'cash' && r.tendered < r.amount) {
-      msg = 'Cash tendered is less than the cash being settled.';
-    }
-    if (r.method === 'credit_note' || r.method === 'advance'){
-      const label = r.method === 'credit_note' ? 'store credit' : 'advance';
-      if (r.method === 'credit_note' && !r.reference) msg = 'Enter the credit note number to spend it.';
-      else if (voucherErr[r.method]) msg = voucherErr[r.method];
-      else if (voucherLeft[r.method] !== null && r.amount > voucherLeft[r.method] + 0.005)
-        msg = `Only ${fmt(voucherLeft[r.method])} ${label} is available.`;
-    }
-  }
-  warn.className = msg ? 'alert alert-warning py-2 mt-2 mb-0 small' : 'd-none';
-  warn.innerText = msg;
-  document.getElementById('stConfirm').disabled = !!msg;
+  const unclaimed = lines.filter((l) => !l.staff).length;
+  if (!lines.length) msg = '';
+  else if (unclaimed) msg = `${unclaimed} item${unclaimed === 1 ? '' : 's'} still need a staff ID.`;
+  $('goWarn').classList.toggle('d-none', !msg);
+  $('goWarn').innerText = msg;
+  $('goSettle').disabled = !lines.length || !!unclaimed;
 }
 
-document.querySelectorAll('.st-amt, .st-tender, .st-ref').forEach((el) => {
-  el.oninput = () => {
-    // Cash tendered follows the amount until somebody types over it — the common
-    // case is exact cash, and making them type the same number twice is friction
-    // on the busiest path at the till.
-    if (el.classList.contains('st-amt') && el.dataset.method === 'cash'){
-      const t = stTender('cash');
-      if (!t.dataset.touched) t.value = el.value;
-    }
-    if (el.classList.contains('st-tender')) el.dataset.touched = '1';
-    paintSettle();
-  };
-});
-
-// "pay the rest on this method" — the fast path for both a plain sale and a split
-document.querySelectorAll('.st-rest').forEach((b) => {
-  b.onclick = () => {
-    const m = b.dataset.method;
-    const due = Number(window._billTotal || 0);
-    const others = settleRows().filter((r) => r.method !== m)
-      .reduce((a, r) => a + r.amount, 0);
-    let rest = Math.round(Math.max(0, due - others) * 100) / 100;
-    // Store credit and an advance only cover what is left on them.
-    if (voucherLeft[m] !== undefined && voucherLeft[m] !== null) rest = Math.min(rest, voucherLeft[m]);
-    stAmt(m).value = rest ? rest.toFixed(2) : '';
-    if (m === 'cash'){ const t = stTender('cash'); t.value = stAmt(m).value; delete t.dataset.touched; }
-    paintSettle();
-    stAmt(m).focus();
-  };
-});
-
-// ---- the one-tender sale, taken from the cart itself ------------------------
-// Nearly every bill is paid one way. That sale has nothing to balance — the
-// single amount IS the total — so it does not need the modal, and asking for a
-// popup and a second click to confirm a figure the till already worked out was
-// the slowest part of the busiest path.
-const qpEl = (id) => document.getElementById(id);
-const qpMethod = () =>
-  (document.querySelector('input[name="qpMethod"]:checked') || {}).value || 'cash';
-
-function paintQuickPay(){
-  const due = Number(window._billTotal || 0);
-  const m = qpMethod();
-  const cash = m === 'cash';
-  // Only cash is over-tendered and only cash returns change; the others take a
-  // reference instead, which is the thing anyone ever looks up afterwards.
-  qpEl('qpCashRow').classList.toggle('d-none', !cash);
-  qpEl('qpRefRow').classList.toggle('d-none', cash);
-
-  // Tendered follows the bill until the cashier types over it — exact money is
-  // the common case, and re-keying the total is friction for nothing.
-  const t = qpEl('qpTender');
-  if (!t.dataset.touched) t.value = due ? due.toFixed(2) : '';
-  const tendered = parseFloat(t.value) || 0;
-  qpEl('qpChange').innerText = fmt(cash ? Math.max(0, Math.round((tendered - due) * 100) / 100) : 0);
-
-  // The same refusal the modal makes, for the same reason: nothing is committed
-  // until the money covers the bill.
-  let msg = '';
-  if (due <= 0) msg = 'Nothing to settle — the cart is empty.';
-  else if (cash && tendered < due) msg = `${fmt(Math.round((due - tendered) * 100) / 100)} short of the bill.`;
-  const warn = qpEl('qpWarn');
-  warn.classList.toggle('d-none', !msg);
-  warn.innerText = msg;
-  qpEl('checkoutBtn').disabled = !!msg;
-}
-
-document.querySelectorAll('input[name="qpMethod"]').forEach((r) => {
-  r.onchange = () => { delete qpEl('qpTender').dataset.touched; paintQuickPay(); };
-});
-qpEl('qpTender').oninput = (e) => { e.target.dataset.touched = '1'; paintQuickPay(); };
-// Once for the empty cart the page opens on: renderCart only runs when something
-// is in it, and until then the button has to be off rather than merely quiet.
-paintQuickPay();
-
-// Both buttons below refuse for the same two reasons, so they ask once.
-function readyToBill(){
-  if (!servingStaffId){
-    alert('Identify the staff member serving this customer first.');
-    qpEl('staffCode').focus();
-    return false;
-  }
-  if (cart.size === 0){ alert('Cart is empty'); return false; }
-  return true;
-}
-
-qpEl('checkoutBtn').onclick = () => {
-  if (!readyToBill()) return;
-  const due = Number(window._billTotal || 0);
-  const m = qpMethod();
-  submitSale([{
-    method: m, amount: due,
-    tendered: m === 'cash' ? (parseFloat(qpEl('qpTender').value) || 0) : due,
-    reference: m === 'cash' ? null : ((qpEl('qpRef').value || '').trim() || null),
-  }], qpEl('checkoutBtn'));
-};
-
-// ---- the split: the modal, opened with what was picked here already on it ----
-qpEl('splitBtn').onclick = () => {
-  if (!readyToBill()) return;
-  METHODS.forEach((m) => {
-    stAmt(m).value = ''; stRef(m).value = '';
-    const t = stTender(m); t.value = ''; delete t.dataset.touched;
-  });
-  voucherLeft.credit_note = null; voucherErr.credit_note = '';
-  paintVoucherNotes();
-  // The advance balance is looked up as the modal opens, so the cashier sees
-  // whether this customer has any before reaching for it.
-  if (currentCustomerId) lookupAdvance();
-  else { voucherLeft.advance = null; voucherErr.advance = ''; stNote('advance').style.color = ''; stNote('advance').innerText = 'Attach the customer to pay from their advance.'; }
-  const m = qpMethod();
-  stAmt(m).value = Number(window._billTotal || 0).toFixed(2);
-  if (m === 'cash') stTender('cash').value = stAmt('cash').value;
-  else stRef(m).value = (qpEl('qpRef').value || '').trim();
-  paintSettle();
-  settleModal.show();
-  setTimeout(() => stAmt(m).select(), 300);
-};
-
-document.getElementById('stConfirm').onclick = () =>
-  submitSale(settleRows().map((r) => ({
-    method: r.method, amount: r.amount,
-    tendered: r.method === 'cash' ? r.tendered : r.amount,
-    reference: r.reference || null,
-  })), document.getElementById('stConfirm'));
-
-// ---- the one way a sale is committed ---------------------------------------
-// Both paths end here. One place builds the payload, so a split bill and a plain
-// one cannot come out of the till describing themselves differently — and the
-// server checks the tenders against its OWN total either way (see pos.checkout).
-async function submitSale(payments, btn){
+// Billing raises the bill: stock comes off, the number is taken, and the
+// delivery person's copy prints. The money is Settlement's job — the print view
+// goes on there by itself once the copy has printed, carrying any exchange credit.
+$('goSettle').onclick = async () => {
+  const btn = $('goSettle');
+  if (btn.disabled) return;
   btn.disabled = true;
   const payload = {
-    staff_id: servingStaffId,
-    customer_id: currentCustomerId,
-    discount: parseFloat(document.getElementById('discount').value) || 0,
-    redeem_points: parseFloat(document.getElementById('redeemPoints').value) || 0,
-    // Only while it is taking something off — a code still short of its minimum
-    // is left behind rather than refusing the whole bill.
-    coupon_code: appliedCoupon && window._couponOff > 0 ? appliedCoupon.code : null,
-    payments,
-    // The paid lines only. Free items are not sent and would not be believed if
-    // they were — the server works out what the promotion gives from these.
-    // What IS sent is which reward the cashier picked, where the scheme allows
-    // a choice, and even that is checked against the scheme's own list.
+    settle_later: true,
+    customer_id: customer ? customer.id : null,
+    // the additional discount, as the rupees it comes to on these goods
+    discount: 0,
+    discount_by: discountBy ? discountBy.code : null,
+    agreement_code: agreementCode,
+    redeem_points: 0,
+    coupon_code: appliedCoupon && couponOff > 0 ? appliedCoupon.code : null,
     promotion_choices: promoChoices,
-    items: [...cart.entries()].map(([id, it]) => ({product_id: id, quantity: it.qty, unit_price: it.price}))
+    // Paid lines only, each with who sold it; free items are the server's to work out.
+    items: lines.map((l) => ({product_id: l.product_id, quantity: l.qty, unit_price: l.price,
+                              discount_pct: lineMath(l).manualEff,
+                              staff_id: l.staff ? l.staff.id : null})),
   };
   try {
-    const r = await fetch("{{ url_for('pos.checkout') }}", {
-      method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify(payload)
-    });
-    const j = await r.json();
-    if (j.error){
-      alert('Error: ' + j.error);
-      btn.disabled = false;
-      return;
-    }
-    // Said before the print view takes over the screen, because these are the
-    // last two things that have to physically happen at the counter: the change
-    // out of the drawer, and the free garment into the bag. A promotion nobody
-    // hands over is a promotion the shop has paid for and the customer never got.
+    const j = await (await fetch("{{ url_for('pos.checkout') }}", {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload),
+    })).json();
+    if (j.error){ alert('Error: ' + j.error); btn.disabled = false; return; }
     if (j.free_items && j.free_items.length){
       alert('Put in the bag — free with this bill:\n\n'
-        + j.free_items.map((f) => `${f.qty} × ${f.name} (${f.sku})\n   under ${f.scheme}`).join('\n'));
+        + j.free_items.map((x) => `${x.qty} × ${x.name} (${x.sku})\n   under ${x.scheme}`).join('\n'));
     }
-    if (j.change > 0) alert('Return ' + fmt(j.change) + ' change to the customer.');
-    window.location = `${SHOP_ROOT}/pos/invoice/${j.invoice_id}/print`;
+    const qs = new URLSearchParams({copy: 'delivery', then: 'settle'});
+    if (creditNote) qs.set('credit_note', creditNote.number);
+    window.location = `${SHOP_ROOT}/pos/invoice/${j.invoice_id}/print?${qs}`;
   } catch (err){
     alert('Billing failed: ' + err);
     btn.disabled = false;
   }
+};
+$('clearBill').onclick = () => {
+  if (lines.length && !confirm('Clear this bill?')) return;
+  window.location = `${SHOP_ROOT}/pos/`;
+};
+
+function paintExchange(){
+  const el = $('exchangeNote');
+  el.classList.toggle('d-none', !creditNote);
+  if (creditNote) el.innerHTML = `<i class="bi bi-arrow-left-right"></i> Exchange: <b>${esc(creditNote.number)}</b>
+    — ${fmt(creditNote.balance)} store credit is applied at settlement.`;
 }
 
-// ---- Company / Location / Counter -----------------------------------------
-// The lists are nested: a location belongs to a company and a counter to a
-// location, so choosing upward empties what is below it rather than leaving a
-// pairing that cannot be true. The server checks the same thing again when it is
-// saved — this is only so the screen never OFFERS an impossible one.
+// Opening the screen is a new bill on this counter — a refresh included; nothing
+// from the last load is kept. The one exception is an exchange: a return hands
+// its customer and store credit straight to the new bill.
+(function start(){
+  if (EXCHANGE){
+    creditNote = {number: EXCHANGE.number, balance: EXCHANGE.balance};
+    paintExchange();
+    if (EXCHANGE.customer){ paintCustomer(EXCHANGE.customer); }
+    history.replaceState(null, '', `${SHOP_ROOT}/pos/`);
+  }
+  renderBill(); paintHint(); refreshPromotions(); focusScan();
+})();
+
+// ---- Company / Location / Counter -----------------------------------------------------
+// Nested lists: choosing upward empties what is below. The server checks again.
 (function () {
   const PLACES = {{ places | tojson }};
   let picked = {
@@ -1290,11 +1257,9 @@ async function submitSale(payments, btn){
     floor_id: {{ chosen_floor.id if chosen_floor else 'null' }},
     counter_id: {{ chosen_counter.id if chosen_counter else 'null' }},
   };
-  const $ = (id) => document.getElementById(id);
   const fill = (sel, rows, chosen, blank) => {
     sel.innerHTML = '';
-    const none = new Option(blank, '');
-    sel.add(none);
+    sel.add(new Option(blank, ''));
     rows.forEach((r) => {
       const o = new Option(r.label || r.name, r.id);
       if (String(chosen) === String(r.id)) o.selected = true;
@@ -1306,23 +1271,14 @@ async function submitSale(payments, btn){
     const locs = PLACES.locations.filter((l) =>
       !picked.company_id || !l.company_id || String(l.company_id) === String(picked.company_id));
     fill($('pmLocation'), locs, picked.location_id, 'Location…');
-
-    // The floor carries its prefix into the dropdown, so the consequence of the
-    // choice is legible at the moment it is made rather than on the printed bill.
     const floors = (PLACES.floors || [])
       .filter((f) => String(f.location_id) === String(picked.location_id))
-      .map((f) => ({ id: f.id, label: `${f.name} — ${f.prefix}…` }));
-    fill($('pmFloor'), floors, picked.floor_id,
-         floors.length ? 'Any floor…' : 'no floors at this store');
-
-    // Tills narrow to the chosen floor. A till already mapped elsewhere is not
-    // offered under this floor at all — the mapping is the thing the bill number
-    // comes from, and offering a contradiction is how one gets billed.
+      .map((f) => ({id: f.id, label: `${f.name} — ${f.prefix}…`}));
+    fill($('pmFloor'), floors, picked.floor_id, floors.length ? 'Any floor…' : 'no floors at this store');
     const tills = PLACES.counters.filter((c) =>
       String(c.location_id) === String(picked.location_id)
       && (!picked.floor_id || !c.floor_id || String(c.floor_id) === String(picked.floor_id)));
     fill($('pmCounter'), tills, picked.counter_id, tills.length ? 'Counter…' : 'no counter here');
-
     const name = (rows, id) => (rows.find((r) => String(r.id) === String(id)) || {}).name;
     $('pmCurrent').textContent = [name(PLACES.companies, picked.company_id),
                                  name(PLACES.locations, picked.location_id),
@@ -1331,49 +1287,34 @@ async function submitSale(payments, btn){
       .filter(Boolean).join(' / ') || '-None-';
   };
   $('pmCompany').addEventListener('change', (e) => {
-    picked = { company_id: e.target.value || null, location_id: null,
-               floor_id: null, counter_id: null };
-    draw();
+    picked = {company_id: e.target.value || null, location_id: null, floor_id: null, counter_id: null}; draw();
   });
   $('pmLocation').addEventListener('change', (e) => {
-    picked.location_id = e.target.value || null;
-    picked.floor_id = null;
-    picked.counter_id = null;
-    draw();
+    picked.location_id = e.target.value || null; picked.floor_id = null; picked.counter_id = null; draw();
   });
   $('pmFloor').addEventListener('change', (e) => {
     picked.floor_id = e.target.value || null;
-    // A till on another storey cannot stay chosen under this one.
     const till = PLACES.counters.find((c) => String(c.id) === String(picked.counter_id));
-    if (till && till.floor_id && String(till.floor_id) !== String(picked.floor_id)) {
-      picked.counter_id = null;
-    }
+    if (till && till.floor_id && String(till.floor_id) !== String(picked.floor_id)) picked.counter_id = null;
     draw();
   });
   $('pmCounter').addEventListener('change', (e) => {
     picked.counter_id = e.target.value || null;
-    // A mapped till decides its own floor. Reflected here immediately so the
-    // dialog shows the series it is about to bill on, not the one just picked.
     const till = PLACES.counters.find((c) => String(c.id) === String(picked.counter_id));
     if (till && till.floor_id) picked.floor_id = till.floor_id;
     draw();
   });
   $('pmSelect').addEventListener('click', async () => {
-    const r = await fetch('{{ url_for("pos.place") }}', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(picked),
-    });
-    const d = await r.json();
-    // redrawn from what the SERVER settled on, not from what was sent: it drops
-    // a counter that belongs to another branch, and the strip has to say what
-    // the next bill will actually carry
-    picked = { company_id: d.company && d.company.id, location_id: d.location && d.location.id,
-               floor_id: d.floor && d.floor.id, counter_id: d.counter && d.counter.id };
-    $('pbCompany').textContent = d.company ? d.company.name : 'Select Company';
-    $('pbGstin').textContent = d.company ? (d.company.gstin || '') : '';
-    $('pbLocation').textContent = d.location ? d.location.name : 'Select Location';
-    $('pbFloor').textContent = d.floor ? d.floor.name : 'Not mapped';
-    $('pbCounter').textContent = d.counter ? d.counter.name : 'Select Counter';
+    const d = await (await fetch('{{ url_for("pos.place") }}', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(picked),
+    })).json();
+    // redrawn from what the SERVER settled on, not from what was sent
+    picked = {company_id: d.company && d.company.id, location_id: d.location && d.location.id,
+              floor_id: d.floor && d.floor.id, counter_id: d.counter && d.counter.id};
+    $('pbWhere').title = d.company ? `${d.company.name} ${d.company.gstin || ''}` : '';
+    $('pbLocation').textContent = d.location ? d.location.name : 'No location';
+    $('pbFloor').textContent = d.floor ? d.floor.name : 'no floor';
+    $('pbCounter').textContent = d.counter ? d.counter.name : 'no counter';
     paintBillNumber(d.next_bill);
     draw();
     bootstrap.Modal.getInstance($('placeModal')).hide();
@@ -1381,32 +1322,24 @@ async function submitSale(payments, btn){
   draw();
 })();
 
-// ---- the bill number ------------------------------------------------------
-// Shown, never entered. There is no input for it anywhere on this screen and
-// nothing here can change it: the series comes from the till's floor mapping and
-// the number is taken by the server inside the transaction that writes the bill.
+// ---- the bill number -------------------------------------------------------------------
+// Shown, never entered: the server takes it inside the transaction that writes the bill.
 function paintBillNumber(next){
   if (!next) return;
-  const box = document.getElementById('billNoBox');
-  document.getElementById('pbBillNo').textContent = next.number;
-  const pm = document.getElementById('pmBillNo');
-  if (pm) pm.textContent = next.number;
+  $('pbBillNo').textContent = next.number;
+  $('headBillNo').textContent = next.number;
+  const pm = $('pmBillNo'); if (pm) pm.textContent = next.number;
+  const box = $('billNoBox');
   box.className = 'badge ' + (next.mapped ? 'text-bg-dark' : 'text-bg-secondary');
-  box.title = next.mapped
-    ? 'Next bill on ' + (next.floor || 'this floor')
-    : 'This till is not mapped to a floor, so it bills on the shop’s plain series';
-  const warn = document.getElementById('pbUnmapped');
-  if (warn) warn.classList.toggle('d-none', !!next.mapped);
+  box.title = next.mapped ? 'Next bill on ' + (next.floor || 'this floor')
+                          : 'This till is not mapped to a floor, so it bills on the shop’s plain series';
+  $('pbUnmapped').classList.toggle('d-none', !!next.mapped);
 }
-
-// After a sale, so the strip shows the number the NEXT customer will get rather
-// than the one that has just been printed and walked out of the door.
 async function refreshBillNumber(){
   try {
     const r = await fetch(`${SHOP_ROOT}/pos/api/next-bill`);
     if (r.ok) paintBillNumber(await r.json());
   } catch (e){ /* the strip keeps its last reading; the bill decides anyway */ }
 }
-
 </script>
 {% endblock %}

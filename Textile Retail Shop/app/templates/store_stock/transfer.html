@@ -1,0 +1,235 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head">
+  <h4 class="mb-0"><i class="bi bi-box-arrow-up-right"></i> Store / Transfer Goods</h4>
+  <div class="d-flex flex-wrap gap-2 align-items-center">
+    <div class="input-group input-group-sm" style="width:220px">
+      <input id="pkgCode" class="form-control" placeholder="Package Code" aria-label="Package code">
+      <button id="pkgFind" class="btn btn-success" type="button" title="Find a transfer by its package code" aria-label="Find"><i class="bi bi-search"></i></button>
+    </div>
+    <button id="btnNew" type="button" class="btn btn-sm btn-outline-secondary"><i class="bi bi-file-earmark"></i> New</button>
+    <button id="btnSave" type="button" class="btn btn-sm btn-brand"><i class="bi bi-save"></i> Save</button>
+  </div>
+</div>
+
+<div id="tgMsg" class="small mb-2"></div>
+
+<div class="card p-3">
+  <div class="row g-4">
+    {# ---- the note ---- #}
+    <div class="col-lg-5">
+      <div class="tg-form">
+        <label for="tDate"><span class="text-danger">*</span> Date</label>
+        <input id="tDate" type="date" class="form-control form-control-sm" value="{{ today }}">
+
+        <label for="tPacked">Packed By</label>
+        <select id="tPacked" class="form-select form-select-sm">
+          <option value=""></option>
+          {% for u in users %}<option value="{{ u.full_name }}">{{ u.full_name }}</option>{% endfor %}
+        </select>
+
+        <label for="tFrom"><span class="text-danger">*</span> From Location</label>
+        <select id="tFrom" class="form-select form-select-sm">
+          {% for l in locations %}<option value="{{ l.id }}" {% if here and l.id == here.id %}selected{% endif %}>{{ l.name }}</option>{% endfor %}
+        </select>
+
+        <label for="tTo"><span class="text-danger">*</span> To Location</label>
+        <select id="tTo" class="form-select form-select-sm">
+          <option value=""></option>
+          {% if warehouses %}<optgroup label="Warehouse (return)">
+            {% for w in warehouses %}<option value="wh:{{ w.id }}">{{ w.name }}</option>{% endfor %}
+          </optgroup>{% endif %}
+          <optgroup label="Branch">
+            {% for l in all_locations %}<option value="loc:{{ l.id }}" data-loc="{{ l.id }}">{{ l.name }}</option>{% endfor %}
+          </optgroup>
+        </select>
+
+        <label>Filename</label>
+        <div class="d-flex align-items-center gap-2 flex-wrap">
+          <label class="btn btn-sm btn-success mb-0" for="tFile"><i class="bi bi-upload"></i> Upload</label>
+          <input id="tFile" type="file" accept=".csv,.txt" class="d-none" aria-label="Upload a barcode file">
+          <span id="tFileName" class="small text-muted"></span>
+        </div>
+
+        <label for="tImmediate">Immediate Transfer</label>
+        <div><input id="tImmediate" type="checkbox" class="form-check-input">
+          <span class="small text-muted ms-1" id="tImmHint">Branch to branch only — moves the goods straight in.</span></div>
+
+        <label for="tRemarks">Remarks</label>
+        <textarea id="tRemarks" class="form-control form-control-sm" rows="3"></textarea>
+      </div>
+    </div>
+
+    {# ---- the goods ---- #}
+    <div class="col-lg-7">
+      <div class="row g-2 align-items-end mb-2">
+        <div class="col-sm-4">
+          <label class="form-label small mb-1" for="tType">Search Type</label>
+          <select id="tType" class="form-select form-select-sm">
+            <option value="barcode">Barcode</option>
+            <option value="sku">Item code (SKU)</option>
+          </select>
+        </div>
+        <div class="col-sm-8">
+          <label class="form-label small mb-1" for="tCode">Barcode</label>
+          <div class="input-group input-group-sm">
+            <input id="tCode" class="form-control" placeholder="Barcode" autocomplete="off">
+            <button id="tAdd" type="button" class="btn btn-primary">Add</button>
+            <button id="tDel" type="button" class="btn btn-danger" title="Take one of this code off the list">Delete</button>
+          </div>
+        </div>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-sm align-middle mb-1">
+          <thead><tr><th style="width:44px">S.No</th><th>Barcode</th><th>Item</th>
+            <th class="text-end">In stock</th><th class="text-end" style="width:110px">Qty</th><th style="width:40px"></th></tr></thead>
+          <tbody id="tLines"></tbody>
+        </table>
+      </div>
+      <div class="small text-muted" id="tTotals"></div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<style>
+  .tg-form { display:grid; grid-template-columns: 150px minmax(0,1fr); gap:10px 14px; align-items:center; }
+  .tg-form > label { margin:0; font-size:.85rem; }
+  @media (max-width: 575px) { .tg-form { grid-template-columns: 1fr; gap:4px; } }
+</style>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const U = {
+    scan: "{{ url_for('storestock.transfer_scan') }}",
+    upload: "{{ url_for('storestock.transfer_upload') }}",
+    save: "{{ url_for('storestock.transfer_save') }}",
+    find: "{{ url_for('storestock.transfer_find') }}",
+  };
+  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const say = (m, bad) => { $('tgMsg').innerHTML = m || ''; $('tgMsg').style.color = bad ? '#BE123C' : 'var(--brand-dark)'; };
+  let lines = [];          // {product_id, sku, barcode, name, stock, stock_here, qty}
+  let filename = '';
+  let viewing = false;     // a saved transfer read back by package code
+
+  function paint() {
+    $('tLines').innerHTML = lines.map((l, i) => `<tr>
+        <td>${i + 1}</td><td class="font-monospace small">${esc(l.barcode || l.sku)}</td>
+        <td>${esc(l.name)}<div class="small text-muted">${esc(l.sku)}</div></td>
+        <td class="text-end small">${l.stock_here ?? l.stock ?? ''}</td>
+        <td class="text-end">${viewing ? esc(l.qty) : `<input type="number" min="1" step="1" class="form-control form-control-sm text-end t-qty" data-i="${i}" value="${l.qty}" aria-label="Quantity">`}</td>
+        <td>${viewing ? '' : `<button type="button" class="btn btn-sm btn-outline-danger py-0 t-rm" data-i="${i}" title="Remove" aria-label="Remove">×</button>`}</td>
+      </tr>`).join('') || '<tr><td colspan="6" class="text-center text-muted small py-4">Scan or type a barcode and press Add.</td></tr>';
+    const pcs = lines.reduce((s, l) => s + (+l.qty || 0), 0);
+    $('tTotals').textContent = lines.length ? `${lines.length} item(s) · ${pcs} piece(s)` : '';
+    document.querySelectorAll('.t-qty').forEach((el) => el.onchange = () => {
+      lines[+el.dataset.i].qty = Math.max(1, Math.round(+el.value || 1)); paint();
+    });
+    document.querySelectorAll('.t-rm').forEach((el) => el.onclick = () => { lines.splice(+el.dataset.i, 1); paint(); });
+  }
+  function addItem(item, qty) {
+    const hit = lines.find((l) => l.product_id === item.product_id);
+    if (hit) hit.qty += qty; else lines.push(Object.assign({}, item, {qty}));
+  }
+  async function add() {
+    if (viewing) return say('This transfer is already saved — press New to start another.', true);
+    const code = $('tCode').value.trim();
+    if (!code) return;
+    const q = new URLSearchParams({code, type: $('tType').value, location_id: $('tFrom').value});
+    const r = await fetch(U.scan + '?' + q); const j = await r.json();
+    if (!j.ok) return say(esc(j.error), true);
+    addItem(j.item, 1); say(''); $('tCode').value = ''; $('tCode').focus(); paint();
+  }
+  function del() {
+    const code = $('tCode').value.trim().toLowerCase();
+    if (!code) return say('Type or scan the code to take off.', true);
+    const i = lines.findIndex((l) => [l.barcode, l.sku].some((c) => String(c || '').toLowerCase() === code));
+    if (i < 0) return say('That code is not on the list.', true);
+    if (lines[i].qty > 1) lines[i].qty -= 1; else lines.splice(i, 1);
+    $('tCode').value = ''; say(''); paint();
+  }
+  $('tAdd').onclick = add;
+  $('tDel').onclick = del;
+  $('tCode').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } });
+  $('tType').onchange = () => { $('tCode').placeholder = $('tType').value === 'sku' ? 'Item code' : 'Barcode'; };
+
+  // Immediate Transfer is for branch-to-branch: a warehouse counts its own goods in
+  function paintTo() {
+    const toWh = $('tTo').value.startsWith('wh:');
+    $('tImmediate').disabled = toWh;
+    if (toWh) $('tImmediate').checked = false;
+    $('tImmHint').textContent = toWh ? 'The warehouse counts a return in on its own Stock Inward.'
+                                     : 'Branch to branch only — moves the goods straight in.';
+    // the branch it is leaving is not somewhere to send it
+    [...$('tTo').options].forEach((o) => { o.disabled = !!(o.dataset.loc && o.dataset.loc === $('tFrom').value); });
+    if ($('tTo').selectedOptions[0]?.disabled) $('tTo').value = '';
+  }
+  $('tTo').onchange = paintTo; $('tFrom').onchange = paintTo; paintTo();
+
+  $('tFile').onchange = async () => {
+    const f = $('tFile').files[0];
+    if (!f) return;
+    const fd = new FormData(); fd.append('file', f); fd.append('location_id', $('tFrom').value);
+    const r = await fetch(U.upload, {method: 'POST', body: fd}); const j = await r.json();
+    $('tFile').value = '';
+    if (!j.ok) return say(esc(j.error), true);
+    viewing = false;
+    j.lines.forEach((l) => addItem(l, l.qty));
+    filename = j.filename; $('tFileName').textContent = filename;
+    say(`${j.lines.length} item(s) added from ${esc(filename)}.` + (j.missing.length ? ` Not found: ${esc(j.missing.join(', '))}.` : ''), j.missing.length > 0);
+    paint();
+  };
+
+  function reset() {
+    lines = []; filename = ''; viewing = false;
+    $('tPacked').value = ''; $('tTo').value = ''; $('tRemarks').value = ''; $('tImmediate').checked = false;
+    $('tFileName').textContent = ''; $('pkgCode').value = '';
+    document.querySelectorAll('.tg-form input, .tg-form select, .tg-form textarea, #btnSave').forEach((el) => { el.disabled = false; });
+    paintTo(); paint(); say('');
+  }
+  $('btnNew').onclick = reset;
+
+  $('btnSave').onclick = async () => {
+    if (viewing) return say('This transfer is already saved — press New to start another.', true);
+    if (!$('tDate').value) return say('Enter the Date.', true);
+    if (!$('tTo').value) return say('Choose the To Location.', true);
+    if (!lines.length) return say('Add at least one item.', true);
+    $('btnSave').disabled = true;
+    try {
+      const r = await fetch(U.save, {method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({date: $('tDate').value, packed_by: $('tPacked').value,
+          from_location_id: $('tFrom').value, to: $('tTo').value, immediate: $('tImmediate').checked,
+          remarks: $('tRemarks').value, filename,
+          lines: lines.map((l) => ({product_id: l.product_id, barcode: l.barcode || l.sku, qty: l.qty}))})});
+      const j = await r.json();
+      if (!j.ok) return say(esc(j.error), true);
+      const where = $('tTo').value.startsWith('wh:') ? ' The warehouse counts it in on its Stock Inward.'
+                  : j.status === 'received' ? ' Moved straight in.' : ' It waits in that branch’s Stock Inward.';
+      reset();
+      say(`Saved <b>${esc(j.code)}</b> — ${j.pieces} piece(s) to ${esc(j.to)}.${where}`);
+    } finally { $('btnSave').disabled = false; }
+  };
+
+  async function find() {
+    const code = $('pkgCode').value.trim();
+    if (!code) return;
+    const r = await fetch(U.find + '?' + new URLSearchParams({code})); const j = await r.json();
+    if (!j.ok) return say(esc(j.error), true);
+    const t = j.transfer;
+    viewing = true;
+    lines = t.lines.map((l) => ({sku: l.sku, barcode: l.barcode, name: l.name, qty: l.qty}));
+    $('tDate').value = t.date || ''; $('tRemarks').value = t.remarks; $('tFileName').textContent = t.filename;
+    $('tImmediate').checked = t.immediate;
+    document.querySelectorAll('.tg-form input, .tg-form select, .tg-form textarea, #btnSave').forEach((el) => { el.disabled = true; });
+    say(`<b>${esc(t.code)}</b> · ${esc(t.from)} → ${esc(t.to)} · packed by ${esc(t.packed_by || '—')} · `
+        + (t.status === 'received' ? 'received' : 'on its way'));
+    paint();
+  }
+  $('pkgFind').onclick = find;
+  $('pkgCode').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); find(); } });
+  paint();
+  $('tCode').focus();
+})();
+</script>
+{% endblock %}

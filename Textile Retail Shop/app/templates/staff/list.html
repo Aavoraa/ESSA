@@ -26,7 +26,7 @@
         <td>{% if u.active %}<span class="status-badge success sm">active</span>{% else %}<span class="status-badge neutral sm">inactive</span>{% endif %}</td>
         <td class="text-nowrap">
           <a href="{{ url_for('staff.staff_card', uid=u.id) }}" class="btn btn-sm btn-outline-secondary" title="Print the ID card the counter scans"><i class="bi bi-person-badge"></i></a>
-          {% if current_user.is_admin %}<a href="{{ url_for('staff.edit_staff', uid=u.id) }}" class="btn btn-sm btn-outline-primary"><i class="bi bi-pencil"></i></a>{% endif %}
+          {% if current_user.is_admin %}<a href="{{ url_for('staff.edit_staff', uid=u.id) }}" class="btn btn-sm btn-outline-primary" title="Edit staff member" aria-label="Edit staff member"><i class="bi bi-pencil"></i></a>{% endif %}
         </td>
       </tr>
       {% endfor %}

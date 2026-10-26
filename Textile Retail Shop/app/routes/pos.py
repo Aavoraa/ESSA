@@ -5,8 +5,8 @@ from datetime import datetime
 from itsdangerous import URLSafeSerializer
 from app import db
 from app.datefilter import day_from, day_to
-from app import (billing_numbers, cancellation, drawer, places, promotions, transfers,
-                 vouchers, warehouse_items)
+from app import (billing_numbers, cancellation, drawer, places, promotions, schemes,
+                 transfers, vouchers, warehouse_items)
 from app import modules as modules_mod
 import re
 from urllib.parse import urlsplit
@@ -18,7 +18,7 @@ from app.utils import role_required
 # the worst moment, on a screen that worked in every test run standalone. See
 # backend/app/pos_mount.py, and the same note in app/places.py.
 from app.models import (Product, Coupon, Customer, Floor, Invoice, InvoiceItem,
-                        InvoicePayment, StockMovement, LoyaltyTxn, User,
+                        InvoicePayment, StockMovement, LoyaltyTxn, User, SalesSchemeUse,
                         PAYMENT_METHODS, VOUCHER_METHODS)
 
 pos_bp = Blueprint("pos", __name__)
@@ -155,8 +155,54 @@ def api_promotions():
         # misconfigured is worse than one that quietly runs no offers. The
         # counter shows nothing and the sale goes through.
         current_app.logger.warning("promotion evaluation failed", exc_info=True)
-        return jsonify({"awards": [], "notices": [], "error": str(exc)})
-    return jsonify(outcome.to_json())
+        return jsonify({"awards": [], "notices": [], "error": str(exc),
+                        "schemes": _scheme_preview(data)})
+    return jsonify(dict(outcome.to_json(), schemes=_scheme_preview(data)))
+
+
+def _scheme_preview(data):
+    """The sales schemes this cart earns, for the counter to show: a % per line
+    now (`lines`, keyed by the line's position in `items`), and what is coming
+    when the bill is paid (`later`). Advisory — checkout works it out again."""
+    try:
+        items = data.get("items")
+        if isinstance(items, str):
+            import json
+            items = json.loads(items or "[]")
+        company, location, _storey, _till = _chosen()
+        company = company or places.default_company()
+        lines = []
+        for n, it in enumerate(items or []):
+            prod = Product.query.get(int(it.get("product_id") or 0))
+            if prod is not None:
+                lines.append(schemes.Line(n, prod, it.get("quantity"),
+                                          it.get("unit_price", prod.selling_price),
+                                          prod.gst_rate, it.get("discount_pct") or 0))
+        agreement = (data.get("agreement_code") or "").strip().upper() or None
+        by_line, _awards = schemes.evaluate_bill(
+            lines, company.id if company else None, location.id if location else None, agreement)
+        later = schemes.preview_later(
+            lines, company.id if company else None, location.id if location else None, agreement)
+        return {"lines": {str(k): v for k, v in by_line.items()},
+                "later": [a.to_json() for a in later]}
+    except Exception:                                # noqa: BLE001
+        current_app.logger.warning("scheme preview failed", exc_info=True)
+        return {"lines": {}, "later": []}
+
+
+@pos_bp.route("/api/agreement")
+@login_required
+def api_agreement():
+    """Is this an agreement code a running scheme asks for?"""
+    company, location, _storey, _till = _chosen()
+    company = company or places.default_company()
+    found = schemes.agreement_schemes(request.args.get("code"),
+                                      company.id if company else None,
+                                      location.id if location else None)
+    if not found:
+        return jsonify({"ok": False})
+    return jsonify({"ok": True, "code": (request.args.get("code") or "").strip().upper(),
+                    "schemes": [s.name for s in found]})
 
 
 @pos_bp.route("/")
@@ -188,7 +234,114 @@ def counter():
                            chosen_floor=storey, chosen_counter=till,
                            next_bill=billing_numbers.peek(storey),
                            default_company=places.default_company(),
-                           drawer_open=drawer.current(till.id if till else None))
+                           drawer_open=drawer.current(till.id if till else None),
+                           exchange=_exchange_from(request.args.get("credit_note")))
+
+
+def _customer_json(c):
+    """A customer in the shape the counter's customer card paints."""
+    return {"id": c.id, "name": c.name, "phone": c.phone or "",
+            "loyalty_points": round(c.loyalty_points or 0, 2),
+            "total_spent": round(c.total_spent or 0, 2),
+            "invoice_count": len(c.invoices)}
+
+
+def _exchange_from(number):
+    """The credit note a return has just raised, for the bill that replaces it.
+
+    A return kept as store credit hands the customer straight to a new bill: the
+    counter opens with the customer attached and the note waiting on the
+    settlement page as a tender, so the exchange is one sale rather than a slip
+    of paper somebody has to remember to type in.
+    """
+    note = vouchers.find_credit_note(number) if number else None
+    if note is None or (note.refund_method or "") != "store_credit":
+        return None
+    balance = vouchers.credit_note_balance(note)
+    if balance <= SETTLE_TOLERANCE:
+        return None
+    cust = note.invoice.customer if note.invoice else None
+    return {"number": note.number, "balance": balance,
+            "customer": _customer_json(cust) if cust else None}
+
+
+@pos_bp.route("/settle")
+@login_required
+def settle():
+    """Settlement — its own tab. Every bill the counter has raised and nobody
+    has paid for yet, and the money for the one chosen.
+
+    The counter lands here straight after printing the delivery copy, with
+    `?id=` naming the bill it has just raised (and `?credit_note=` when it is an
+    exchange). Opened from the menu, it picks the newest bill waiting.
+    """
+    pending = (Invoice.query.filter(Invoice.payment_status == "pending")
+               .order_by(Invoice.id.desc()).limit(60).all())
+    iid = request.args.get("id", type=int)
+    inv = Invoice.query.get(iid) if iid else (pending[0] if pending else None)
+    settled_already = inv is not None and (inv.payment_status or "") != "pending"
+    # What the bill's settlement-stage schemes will do when it is paid — shown
+    # now so the amount due on screen is the amount the server will ask for.
+    scheme_awards, scheme_off = [], 0.0
+    if inv is not None and not settled_already and not inv.is_cancelled:
+        try:
+            scheme_awards = schemes.settlement_awards(inv)
+            scheme_off = schemes.settlement_discount(scheme_awards, inv.total)
+        except Exception:                            # noqa: BLE001
+            current_app.logger.warning("settlement schemes preview failed", exc_info=True)
+            scheme_awards, scheme_off = [], 0.0
+    return render_template(
+        "pos/settle.html", pending=pending, inv=inv, settled_already=settled_already,
+        rcpt=_receipt(inv) if inv is not None else None,
+        scheme_awards=scheme_awards, scheme_off=scheme_off,
+        due=round((inv.total or 0) - scheme_off, 2) if inv is not None else 0,
+        exchange=_exchange_from(request.args.get("credit_note")))
+
+
+@pos_bp.route("/api/offers")
+@login_required
+def api_offers():
+    """The promotion schemes running at this till today — the salesman's list."""
+    try:
+        schemes = promotions.active_schemes(place=_place())
+    except Exception as exc:                        # noqa: BLE001
+        current_app.logger.warning("could not list offers", exc_info=True)
+        return jsonify({"offers": [], "error": str(exc)})
+    return jsonify({"offers": [{
+        "code": s.code, "name": s.name, "describe": promotions.describe(s),
+        "until": s.end_date.strftime("%d-%m-%Y") if s.end_date else None,
+        "terms": s.terms or ""} for s in schemes]})
+
+
+def _recent_bills_query():
+    """Bills raised on this till — or by this login when no till is set."""
+    _company, _location, _storey, till = _chosen()
+    q = Invoice.query
+    q = q.filter(Invoice.counter_id == till.id) if till else \
+        q.filter(Invoice.cashier_id == current_user.id)
+    return q.order_by(Invoice.id.desc())
+
+
+@pos_bp.route("/api/recent-bills")
+@login_required
+def api_recent_bills():
+    """The last few bills on this till, for reprinting or downloading."""
+    return jsonify({"bills": [{
+        "id": i.id, "number": i.invoice_number, "total": i.total,
+        "when": i.invoice_date.strftime("%d-%m %H:%M") if i.invoice_date else "",
+        "customer": i.customer.name if i.customer else "Walk-in",
+        "cancelled": i.is_cancelled} for i in _recent_bills_query().limit(8)]})
+
+
+@pos_bp.route("/invoice/last")
+@login_required
+def last_invoice():
+    """The previous bill on this till, straight to its print view."""
+    inv = _recent_bills_query().first()
+    if inv is None:
+        flash("No bill has been raised on this till yet.", "info")
+        return redirect(url_for("pos.counter"))
+    return redirect(url_for("pos.print_invoice", iid=inv.id))
 
 
 def _place_json(company, location, storey, till):
@@ -309,6 +462,25 @@ def api_product(code=None):
     })
 
 
+@pos_bp.route("/api/product-search")
+@login_required
+def api_product_search():
+    """Products by name, SKU or barcode, for the bill's entry row — typed into
+    its Product box when there is no tag to scan. In-stock items only."""
+    q = (request.args.get("q") or "").strip()
+    if len(q) < 2:
+        return jsonify([])
+    like = f"%{q}%"
+    rows = (Product.query
+            .filter(Product.active.is_(True), Product.stock_qty > 0,
+                    Product.name.ilike(like) | Product.sku.ilike(like)
+                    | Product.barcode.ilike(like))
+            .order_by(Product.name).limit(15).all())
+    return jsonify([{"id": p.id, "sku": p.sku, "barcode": p.barcode, "name": p.name,
+                     "price": p.selling_price, "gst": p.gst_rate,
+                     "stock": p.stock_qty, "unit": p.unit} for p in rows])
+
+
 @pos_bp.route("/checkout", methods=["POST"])
 @login_required
 def checkout():
@@ -327,12 +499,21 @@ def checkout():
         customer_id = int(customer_id) if customer_id else None
         customer = Customer.query.get(customer_id) if customer_id else None
 
-        # Parsed before anything is written, so a malformed settlement is refused
-        # while the cart is still a cart — not after stock has come off the shelf.
-        try:
-            payments, payment_method = parse_payments(data)
-        except ValueError as exc:
-            return jsonify({"error": str(exc)}), 400
+        # `settle_later`: the counter raises the bill now — stock comes off, the
+        # number is taken, the delivery copy prints — and the money is taken
+        # afterwards at Settlement (`settle_bill`). Without it the sale is billed
+        # and paid in one go, which is how Floor Sales and older callers work.
+        settle_later = bool(data.get("settle_later"))
+        if settle_later:
+            payments, payment_method = None, "pending"
+        else:
+            # Parsed before anything is written, so a malformed settlement is
+            # refused while the cart is still a cart — not after stock has come
+            # off the shelf.
+            try:
+                payments, payment_method = parse_payments(data)
+            except ValueError as exc:
+                return jsonify({"error": str(exc)}), 400
         discount = float(data.get("discount") or 0)
         redeem_points = float(data.get("redeem_points") or 0)
 
@@ -342,13 +523,31 @@ def checkout():
         if customer and customer.state_code and customer.state_code != shop_state:
             is_interstate = True
 
-        # Who served this sale. Identified at the counter before it starts, and
-        # refused if missing: the commission is worked out from this, so a sale
-        # with nobody against it is a sale nobody gets paid for.
-        staff = resolve_staff(data.get("staff_code") or data.get("staff_id"))
-        if staff is None:
+        # Who sold each line. The counter scans a staff ID after every product,
+        # because one bill can carry garments sold by different people; each paid
+        # line names its own. A caller that names one person for the whole sale
+        # (floor sales, older pages) still works — that person covers every line
+        # that names nobody. Refused if any paid line ends up with nobody: the
+        # commission is worked out from this, and a line with nobody against it
+        # is a sale nobody gets paid for.
+        default_staff = resolve_staff(data.get("staff_code") or data.get("staff_id"))
+        line_staff = []
+        for it in items:
+            if it.get("promo_role") or it.get("free"):
+                line_staff.append(None)
+                continue
+            who = resolve_staff(it.get("staff_code") or it.get("staff_id")) or default_staff
+            if who is None:
+                return jsonify({"error": "Scan the staff ID for every item before "
+                                         "billing — one line has nobody against it."}), 400
+            line_staff.append(who)
+        sellers = [s for s in line_staff if s is not None]
+        if not sellers:
             return jsonify({"error": "Identify the staff member before billing "
                                      "— scan the ID card or enter the staff code."}), 400
+        # The bill's own `staff_id` — what the salesman reports and the receipt
+        # header read — is whoever sold the most lines, the first of them on a tie.
+        staff = max(sellers, key=lambda s: sum(1 for x in sellers if x.id == s.id))
 
         # Where this sale happened, and under whose registration. The company
         # falls back to the default rather than being left blank: a tax invoice
@@ -415,11 +614,47 @@ def checkout():
             floor_id=storey.id if storey else None,
             counter_id=till.id if till else None,
         )
+        # Who approved the discounts — the discount card's E.Code. Refused if it
+        # names nobody, so the bill never records an approver that isn't one.
+        if (data.get("discount_by") or "").strip():
+            approver = resolve_staff(data.get("discount_by"))
+            if approver is None:
+                return jsonify({"error": "The discount approver's code (E.Code) "
+                                         "is not an active staff member."}), 400
+            inv.discount_by_id = approver.id
+
+        # The agreement code the bill was raised under (the discount card's
+        # P.Code) — a scheme's Agreement Code filter asks for it.
+        agreement = (data.get("agreement_code") or "").strip().upper() or None
+        inv.agreement_code = agreement
+
         db.session.add(inv)
         db.session.flush()
 
         subtotal = 0.0
         total_tax = 0.0
+
+        # ---- sales schemes at the counter (On Same Bill / On Bill Addon) ------
+        # Worked out HERE, from the lines about to be written — the counter's
+        # own reading is only what it showed. A misconfigured scheme must not
+        # cost the shop the sale, so a failure bills without schemes.
+        scheme_by_line, scheme_awards = {}, []
+        try:
+            engine_lines = []
+            for n, it in enumerate(items):
+                if it.get("promo_role") or it.get("free"):
+                    continue
+                prod = Product.query.get(int(it["product_id"]))
+                if prod is not None:
+                    engine_lines.append(schemes.Line(
+                        n, prod, it.get("quantity"), it.get("unit_price", prod.selling_price),
+                        prod.gst_rate, it.get("discount_pct") or 0))
+            scheme_by_line, scheme_awards = schemes.evaluate_bill(
+                engine_lines, company.id if company else None,
+                location.id if location else None, agreement)
+        except Exception:                            # noqa: BLE001
+            current_app.logger.warning("sales schemes skipped for this bill", exc_info=True)
+            scheme_by_line, scheme_awards = {}, []
 
         # Stock leaves the building in exactly one place, whether it was sold or
         # given away. `where` is the branch it comes off, and `why` is what the
@@ -451,7 +686,7 @@ def checkout():
         # on two lines at two prices.
         sold_items = {}
 
-        for it in items:
+        for n, (it, seller) in enumerate(zip(items, line_staff)):
             if it.get("promo_role") or it.get("free"):
                 # Free lines are not accepted from the page. They are worked out
                 # below, from the products actually being paid for.
@@ -463,20 +698,41 @@ def checkout():
                 db.session.rollback()
                 return jsonify({"error": f"Insufficient stock for {product.name if product else 'product'}"}), 400
             unit_price = float(it.get("unit_price", product.selling_price))
+            # This line's own discount, as a percentage. It lowers the price the
+            # line is charged at, so GST is on the discounted amount and a return
+            # refunds what was actually paid; the price before it is kept to print.
+            try:
+                line_pct = min(100.0, max(0.0, float(it.get("discount_pct") or 0)))
+            except (TypeError, ValueError):
+                line_pct = 0.0
+            # …and on top of it, whatever a sales scheme gives this line.
+            sch = scheme_by_line.get(n)
+            eff = schemes.combine(line_pct, sch["pct"]) if sch else line_pct
+            list_price = None
+            if eff > 0:
+                list_price = unit_price
+                unit_price = round(unit_price * (1 - eff / 100.0), 2)
             line_total = qty * unit_price  # taxable
             tax = round(line_total * product.gst_rate / 100.0, 2)
 
             line = InvoiceItem(
                 invoice_id=inv.id, product_id=pid,
-                quantity=qty, unit_price=unit_price,
+                quantity=qty, unit_price=unit_price, list_price=list_price,
                 gst_rate=product.gst_rate,
                 line_total=line_total, tax_amount=tax,
+                staff_id=seller.id,
+                scheme_id=sch["scheme_id"] if sch else None,
+                scheme_pct=sch["pct"] if sch else None,
             )
             db.session.add(line)
             sold_items.setdefault(pid, []).append(line)
             take_stock(product, qty, "sale")
             subtotal += line_total
             total_tax += tax
+
+        for a in scheme_awards:
+            db.session.add(SalesSchemeUse(scheme_id=a.scheme.id, invoice_id=inv.id,
+                                          stage="bill", benefit_value=round(a.amount, 2)))
 
         # ---- promotions, written onto the bill --------------------------------
         # A reward line is a real invoice line at a real quantity, so its stock
@@ -560,80 +816,145 @@ def checkout():
 
         inv.total = round(pre_loyalty_total - loyalty_redeemed_value, 2)
 
-        # ---- settlement -------------------------------------------------------
-        # Checked HERE and nowhere earlier, because this is the first moment the
-        # amount to settle actually exists: the discount and the points redeemed
-        # both come off before it, and a till that balanced its tenders against
-        # the pre-loyalty figure would refuse every sale a customer used points on.
-        if payments is None:
-            # the old single-method shape — settle the whole bill that way
-            payments = [{"method": payment_method, "amount": inv.total,
-                         "tendered": inv.total, "reference": None}]
-        # Store credit and advances are checked against what is left on them and
-        # pinned to the documents they draw on — see app/vouchers.py.
-        try:
-            payments = vouchers.settle_vouchers(payments, customer_id)
-        except ValueError as exc:
-            db.session.rollback()
-            return jsonify({"error": str(exc)}), 400
-        payment_method = ("mixed" if len({p["method"] for p in payments}) > 1
-                          else payments[0]["method"])
-        settled = round(sum(p["amount"] for p in payments), 2)
-        if abs(settled - inv.total) > SETTLE_TOLERANCE:
-            db.session.rollback()
-            short = round(inv.total - settled, 2)
-            return jsonify({
-                "error": (f"Payment does not settle the bill — "
-                          f"₹{abs(short):.2f} {'short' if short > 0 else 'over'}. "
-                          f"Bill ₹{inv.total:.2f}, entered ₹{settled:.2f}."),
-                "total": inv.total, "settled": settled, "balance": short}), 400
-        for p in payments:
-            db.session.add(InvoicePayment(
-                invoice_id=inv.id, method=p["method"], amount=p["amount"],
-                tendered=p["tendered"], reference=p["reference"]))
-        inv.payment_method = payment_method
-
-        # Loyalty earning
-        if customer and inv.total >= current_app.config["LOYALTY_MIN_BILL"]:
-            earned = round(inv.total * current_app.config["LOYALTY_EARN_RATE"], 2)
-            inv.loyalty_earned = earned
-            customer.loyalty_points = (customer.loyalty_points or 0) + earned
-            customer.total_spent = (customer.total_spent or 0) + inv.total
-            db.session.add(LoyaltyTxn(
-                customer_id=customer.id, points=earned,
-                reason="earn", invoice_id=inv.id
-            ))
-        elif customer:
-            customer.total_spent = (customer.total_spent or 0) + inv.total
-
+        # The coupon is part of what the bill comes to, so it is spent with the
+        # bill — not when the money arrives.
         if coupon is not None and coupon_amt > 0:
             vouchers.redeem(coupon, inv, coupon_amt)
-        # …and whatever coupon this bill earns for next time.
-        issued = vouchers.issue_at_settlement(inv, user_id=current_user.id)
 
+        if settle_later:
+            # Raised, not paid. "pending" rather than a method: the drawer reads a
+            # bill with no settlement rows as paid in its one method, and a bill
+            # nobody has paid for yet must not count as cash in it.
+            inv.payment_status = "pending"
+            inv.payment_method = "pending"
+            db.session.commit()
+            return jsonify(dict(_sale_json(inv, []), pending=True,
+                                promo_benefit=round(promo_free_value, 2)))
+
+        refused, issued = _take_payment(inv, payments, payment_method)
+        if refused is not None:
+            db.session.rollback()
+            return refused
         db.session.commit()
-        return jsonify({"success": True, "invoice_id": inv.id,
-                        "coupons_issued": [{"code": c.code, "worth": c.campaign.describe,
-                                            "valid_to": c.valid_to.strftime("%d-%m-%Y")}
-                                           for c in issued],
-                        "invoice_number": inv.invoice_number,
-                        "total": inv.total, "payment_method": inv.payment_method,
-                        # what to hand back, so the counter can say it out loud
-                        # instead of the cashier working it out on the counter
-                        "change": inv.change_given,
-                        # …and what to put in the bag that nobody paid for, for
-                        # the same reason: it is the other thing that has to
-                        # physically happen before the customer walks away.
-                        "free_items": [
-                            {"name": l.product.name, "sku": l.product.sku,
-                             "qty": l.quantity,
-                             "scheme": l.promo_application.scheme_name
-                                       if l.promo_application else ""}
-                            for l in inv.items if l.promo_role == "reward"],
-                        "promo_benefit": round(promo_free_value, 2)})
+        return jsonify(dict(_sale_json(inv, issued),
+                            promo_benefit=round(promo_free_value, 2)))
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": str(e)}), 500
+
+
+def _take_payment(inv, payments, payment_method):
+    """Settle `inv` with these tenders. Returns (refusal response or None, coupons issued).
+
+    Checked against the bill's own total, which is the first moment the amount to
+    settle exists: the discount and the points redeemed both came off before it.
+    Writes nothing that survives a refusal — the caller rolls back.
+
+    The bill's On Settlement schemes come off its total first — this is the
+    moment they pay out — and its Next Bill / Next Day Bill schemes issue their
+    coupons once the money balances.
+    """
+    try:
+        scheme_awards = schemes.settlement_awards(inv)
+    except Exception:                                # noqa: BLE001
+        current_app.logger.warning("settlement schemes skipped", exc_info=True)
+        scheme_awards = []
+    off = schemes.settlement_discount(scheme_awards, inv.total)
+    if off > 0:
+        # Part of the bill's discount, like a coupon: it came off before the
+        # money, and the bill names it apart.
+        inv.discount = round((inv.discount or 0) + off, 2)
+        inv.scheme_discount = off
+        inv.total = round((inv.total or 0) - off, 2)
+    if payments is None:
+        # the old single-method shape — settle the whole bill that way
+        payments = [{"method": payment_method, "amount": inv.total,
+                     "tendered": inv.total, "reference": None}]
+    # Store credit and advances are checked against what is left on them and
+    # pinned to the documents they draw on — see app/vouchers.py.
+    try:
+        payments = vouchers.settle_vouchers(payments, inv.customer_id)
+    except ValueError as exc:
+        return (jsonify({"error": str(exc)}), 400), []
+    settled = round(sum(p["amount"] for p in payments), 2)
+    if abs(settled - inv.total) > SETTLE_TOLERANCE:
+        short = round(inv.total - settled, 2)
+        return (jsonify({
+            "error": (f"Payment does not settle the bill — "
+                      f"₹{abs(short):.2f} {'short' if short > 0 else 'over'}. "
+                      f"Bill ₹{inv.total:.2f}, entered ₹{settled:.2f}."),
+            "total": inv.total, "settled": settled, "balance": short}), 400), []
+    for p in payments:
+        db.session.add(InvoicePayment(
+            invoice_id=inv.id, method=p["method"], amount=p["amount"],
+            tendered=p["tendered"], reference=p["reference"]))
+    inv.payment_method = ("mixed" if len({p["method"] for p in payments}) > 1
+                          else payments[0]["method"])
+    inv.payment_status = "paid"
+
+    # Loyalty is earned on money paid, so it is earned here.
+    customer = Customer.query.get(inv.customer_id) if inv.customer_id else None
+    if customer and inv.total >= current_app.config["LOYALTY_MIN_BILL"]:
+        earned = round(inv.total * current_app.config["LOYALTY_EARN_RATE"], 2)
+        inv.loyalty_earned = earned
+        customer.loyalty_points = (customer.loyalty_points or 0) + earned
+        customer.total_spent = (customer.total_spent or 0) + inv.total
+        db.session.add(LoyaltyTxn(customer_id=customer.id, points=earned,
+                                  reason="earn", invoice_id=inv.id))
+    elif customer:
+        customer.total_spent = (customer.total_spent or 0) + inv.total
+
+    # …and whatever coupon this bill earns for next time — the coupon
+    # campaigns' own, and the sales schemes'.
+    issued = vouchers.issue_at_settlement(inv, user_id=current_user.id)
+    issued += schemes.pay_out(inv, scheme_awards, user_id=current_user.id)
+    return None, issued
+
+
+def _sale_json(inv, issued):
+    """What the till is told about a bill it has just raised or settled."""
+    return {"success": True, "invoice_id": inv.id,
+            "coupons_issued": [{"code": c.code, "worth": c.campaign.describe,
+                                "valid_to": c.valid_to.strftime("%d-%m-%Y")}
+                               for c in issued],
+            "invoice_number": inv.invoice_number,
+            "total": inv.total, "payment_method": inv.payment_method,
+            # what to hand back, so the till can say it out loud
+            "change": inv.change_given,
+            # …and what to put in the bag that nobody paid for — the other thing
+            # that has to physically happen before the customer walks away.
+            "free_items": [
+                {"name": l.product.name, "sku": l.product.sku, "qty": l.quantity,
+                 "scheme": l.promo_application.scheme_name if l.promo_application else ""}
+                for l in inv.items if l.promo_role == "reward"]}
+
+
+@pos_bp.route("/settle/<int:iid>", methods=["POST"])
+@login_required
+def settle_bill(iid):
+    """Take the money for a bill the counter has already raised."""
+    inv = Invoice.query.get_or_404(iid)
+    if inv.is_cancelled:
+        return jsonify({"error": f"{inv.invoice_number} was cancelled."}), 400
+    if (inv.payment_status or "") != "pending":
+        return jsonify({"error": f"{inv.invoice_number} is already settled."}), 400
+    data = request.get_json(silent=True) or request.form
+    if "payments" not in data:
+        return jsonify({"error": "no payment was entered"}), 400
+    try:
+        payments, method = parse_payments(data)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    try:
+        refused, issued = _take_payment(inv, payments, method)
+        if refused is not None:
+            db.session.rollback()
+            return refused
+        db.session.commit()
+    except Exception as e:                           # noqa: BLE001
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+    return jsonify(_sale_json(inv, issued))
 
 
 @pos_bp.route("/api/coupon")
@@ -728,9 +1049,81 @@ def _invoice_back_url(inv, print_view):
     return url_for("pos.invoice_list")
 
 
+def _receipt(inv):
+    """The bill in the shape the shop's printed receipt reads it.
+
+    Every figure the customer sees is tax-inclusive, as on the shop's own
+    receipts: RATE is the unit price with GST, GROSS is what the goods come to at
+    those rates, and DISCOUNT is everything that came off on the way to the net
+    total — the typed discount, a coupon, points redeemed. Each line's AMT is its
+    share of the net total, so the column adds up to the Net Total to the paisa
+    (the last paid line takes the rounding).
+
+    The tax block is the bill's stored taxable value and GST, by rate — those are
+    the figures the bill was raised with and the returns are filed from.
+    """
+    rows = []
+    for n, it in enumerate(inv.items, 1):
+        p = it.product
+        seller = it.staff or (inv.staff if it.promo_role != "reward" else None)
+        metres = (p.unit or "").lower() == "mtr" if p else False
+        gst = 1 + (it.gst_rate or 0) / 100.0
+        # The rate before this line's own discount; the line as charged.
+        before = it.list_price if it.list_price is not None else (it.unit_price or 0)
+        rows.append({
+            "sno": n, "emp": seller.id if seller else "",
+            "barc": (p.barcode or p.sku) if p else "", "product": p.name if p else "—",
+            "mtr": it.quantity if metres else None, "qty": None if metres else it.quantity,
+            "rate": round(before * gst, 2),
+            "gross": round((it.quantity or 0) * before * gst, 2),
+            "charged": round((it.line_total or 0) + (it.tax_amount or 0), 2),
+            "free": it.is_free_item, "dis": 0, "amt": 0.0,
+        })
+    gross = round(sum(r["gross"] for r in rows), 2)
+    net = round(inv.total or 0, 2)
+    discount = round(max(0.0, gross - net), 2)
+    # Each line as charged, then its share of what came off the whole bill (the
+    # bill discount, a coupon, points) — the last paid line takes the rounding.
+    charged = round(sum(r["charged"] for r in rows), 2)
+    paid = [r for r in rows if r["charged"] > 0]
+    left = net
+    for r in paid[:-1]:
+        r["amt"] = round(r["charged"] * net / charged, 2) if charged else 0.0
+        left -= r["amt"]
+    if paid:
+        paid[-1]["amt"] = round(left, 2)
+    for r in rows:
+        if r["gross"] > 0 and not r["free"]:
+            r["dis"] = round(max(0.0, 1 - r["amt"] / r["gross"]) * 100)
+    by_rate = {}
+    for it in inv.items:
+        b = by_rate.setdefault(it.gst_rate or 0, [0.0, 0.0])
+        b[0] += it.line_total or 0
+        b[1] += it.tax_amount or 0
+    taxes = [{"rate": rate, "taxable": round(t, 2), "tax": round(x, 2),
+              "half": round(x / 2, 2)} for rate, (t, x) in sorted(by_rate.items()) if t or x]
+    return {"rows": rows, "gross": gross, "discount": discount, "net": net,
+            "pcs": round(sum(r["qty"] or 0 for r in rows), 3),
+            "mtr": round(sum(r["mtr"] or 0 for r in rows), 3),
+            "taxes": taxes}
+
+
 def _invoice_page(inv, print_view):
     return render_template(
-        "pos/invoice.html", inv=inv, print_view=print_view,
+        "pos/invoice.html", inv=inv, print_view=print_view, rcpt=_receipt(inv),
+        # ?download=1 saves the bill as a PDF instead of sending it to the printer
+        download=request.args.get("download") == "1",
+        # ?fresh=1 is the hand-off right after settling: show what changed hands
+        fresh=request.args.get("fresh") == "1",
+        # ?copy=delivery — the slip printed when the bill is raised, for the
+        # delivery person; ?copy=customer — the one printed once it is paid.
+        # Neither: a reprint, both copies.
+        only_copy=(request.args.get("copy") if request.args.get("copy") in
+                   ("delivery", "customer") else None),
+        # ?then=settle — once the delivery copy has printed, on to Settlement
+        then_url=(url_for("pos.settle", id=inv.id,
+                          credit_note=request.args.get("credit_note") or None)
+                  if request.args.get("then") == "settle" else None),
         back_url=_invoice_back_url(inv, print_view),
         cancel_blocked=cancellation.why_not(inv, current_user),
         coupons_issued=Coupon.query.filter_by(issued_invoice_id=inv.id).all(),

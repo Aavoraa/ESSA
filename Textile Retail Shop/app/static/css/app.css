@@ -388,6 +388,9 @@ main.container-fluid { padding: 1.25rem 1.5rem 2rem; }
   border-bottom: 1px solid var(--line);
 }
 .page-head.align-items-start { align-items: flex-start; }
+/* the action group beside the title wraps too, or on a phone one more button
+   pushes the whole page sideways */
+.page-head > .d-flex { flex-wrap: wrap; max-width: 100%; }
 .page-head h4, .page-head .page-title {
   font-size: 1.25rem; font-weight: 700; letter-spacing: -.025em; line-height: 1.25;
   margin: 0; color: var(--text);
@@ -1171,3 +1174,48 @@ main > .alert-dismissible { display: flex; align-items: center; }
   .rpt-table thead th { position: static; }
   body { background: #fff; }
 }
+/* ==========================================================================
+   QR symbols
+   segno draws the symbol at a fixed pixel width (modules x scale). Dropped into
+   a box narrower than that — the 140px item QR on a product, 110px on Stock
+   Check, an 88px piece tile — it overflowed its box and the edge, finder
+   pattern and all, was cut off. The symbol carries a viewBox (utils._scalable),
+   so letting it shrink to its box keeps the whole code, just smaller.
+   ========================================================================== */
+svg.segno { max-width: 100%; height: auto; display: block; }
+
+/* ==========================================================================
+   Bill copies — every bill prints twice: the customer's and the delivery
+   desk's. The second copy exists only on paper; on screen one is enough.
+   ========================================================================== */
+.bill-copy-label { display: inline-block; font-size: .75rem; font-weight: 700; letter-spacing: .08em;
+  border: 1px solid currentColor; border-radius: 4px; padding: 1px 6px; margin-top: 2px; }
+.bill-copy-2 { display: none; }
+@media print {
+  .bill-copy-2 { display: block; break-before: page; page-break-before: always; }
+}
+
+/* ==========================================================================
+   One screen, no scrolling (static/js/fit.js)
+   Rows and sections on another page are hidden on screen only — printing a
+   paged list prints all of it.
+   ========================================================================== */
+@media screen { .fit-hide { display: none !important; } }
+.fit-pager, .fit-bar { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
+  font-size: .8125rem; color: var(--muted); padding: .4rem 0; }
+.fit-pager[hidden] { display: none; }
+.fit-pager .fit-count { margin-right: auto; font-variant-numeric: tabular-nums; }
+.fit-bar { border-top: 1px solid var(--line); margin-top: .5rem; }
+.fit-bar .fit-pages { flex: 1; display: flex; justify-content: center; gap: .25rem; flex-wrap: wrap; }
+.fit-pg { border: 1px solid var(--line); background: var(--panel); color: var(--muted);
+  border-radius: var(--radius-sm); padding: .2rem .6rem; font-size: .75rem; }
+.fit-pg b { color: var(--text); }
+.fit-pg:hover { border-color: var(--line-strong); color: var(--text); }
+.fit-pg.on { background: var(--brand-100); border-color: var(--brand-300); color: var(--brand); }
+.fit-pg.on b { color: var(--brand); }
+@media print { .fit-pager, .fit-bar { display: none !important; } }
+/* inside the warehouse frame every pixel of height is the page's: a little
+   less air above and below the content, and under the page title */
+html.in-frame main.container-fluid { padding-top: .6rem; padding-bottom: .6rem; }
+html.in-frame .page-head { margin-bottom: .75rem; padding-bottom: .5rem; }
+.fit-bar .fit-pg { max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

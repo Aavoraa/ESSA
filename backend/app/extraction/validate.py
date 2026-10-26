@@ -12,6 +12,7 @@ Whatever a provider returns, this module:
 Because these checks are the invoice's own internal identities, they catch OCR
 slips (a misread digit almost always breaks a total) without any ground truth.
 """
+import math
 from typing import Dict, Any, List, Tuple
 
 MONEY_TOL = 1.5          # rupees of slack for rounding
@@ -149,9 +150,20 @@ def normalise_and_check(inv: Dict[str, Any], profile: Dict[str, Any] = None,
     freight = _f(tx.get("freight")) or _f(tx.get("freight_in_total", 0))
     special = _f(tx.get("special_discount"))
     round_off = _f(tx.get("round_off"))
+    stated_grand = _f(tot.get("grand_total"))
+    # Invoices are taken to the nearest rupee (50 paise rounds up), and Round
+    # Off is what it takes to get there — the review screen's settleFoot does the
+    # same. A round-off the invoice states is kept; without one it is worked out:
+    # from the supplier's printed total when that is within a rupee of the
+    # figures, otherwise from the figures themselves.
+    pre = taxable + tax_total + other + freight - special
+    if not round_off and pre:
+        target = stated_grand if stated_grand and abs(stated_grand - pre) < 1 else math.floor(pre + 0.5)
+        round_off = round(target - pre, 2)
+        if round_off:
+            tx["round_off"] = round_off
     base = taxable + tax_total + round_off
     recon = base + other + freight - special
-    stated_grand = _f(tot.get("grand_total"))
     if not stated_grand and recon:
         tot["grand_total"] = round(recon, 2)
     elif stated_grand:

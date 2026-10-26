@@ -97,11 +97,6 @@
             <li><a class="dropdown-item" href="{{ url_for('auth.logout') }}"><i class="bi bi-box-arrow-right"></i> Logout</a></li>
           </ul>
         </li>
-        <li class="nav-item d-none d-lg-flex align-items-center"><span class="nav-divider"></span></li>
-        <li class="nav-item d-none d-lg-flex">
-          <a class="nav-link nav-icon-btn" href="{{ url_for('auth.logout') }}" title="Logout" aria-label="Logout">
-            <i class="bi bi-box-arrow-right"></i></a>
-        </li>
       </ul>
     </div>
   </div>
@@ -145,5 +140,19 @@
   }
 </script>
 {% block scripts %}{% endblock %}
+<script>
+  // Most forms put a <label> straight above its box without a for="…", so it
+  // reads right but a screen reader cannot tie the two together and clicking
+  // the label does nothing. Link each such label to the control that follows it.
+  document.querySelectorAll('label:not([for])').forEach(function (l) {
+    if (l.querySelector('input, select, textarea')) return;
+    var c = l.nextElementSibling;
+    if (c && !c.matches('input, select, textarea')) c = c.querySelector('input, select, textarea');
+    if (!c || c.type === 'hidden') return;
+    if (!c.id) c.id = 'fld-' + Math.random().toString(36).slice(2, 9);
+    l.htmlFor = c.id;
+  });
+</script>
+<script src="{{ url_for('static', filename='js/fit.js') }}"></script>
 </body>
 </html>

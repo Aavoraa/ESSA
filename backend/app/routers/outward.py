@@ -94,8 +94,11 @@ def _out(o, db: Session = None, with_lines=False, sums=None):
          "to_store": o.to_store.name if o.to_store else None,
          # What KIND of movement this is, said once here rather than re-derived
          # on every screen that has to draw it differently.
-         "kind": ("transfer" if o.to_warehouse_id else
+         "kind": ("return" if o.from_store_id else
+                  "transfer" if o.to_warehouse_id else
                   "store" if o.to_store_id else "dispatch"),
+         "from_store_id": o.from_store_id,
+         "from_store": o.from_store.name if o.from_store else None,
          "is_transfer": o.is_transfer,
          "packed_by": o.packed_by, "received_by": o.received_by,
          "received_date": o.received_date, "status": o.status,
@@ -130,8 +133,11 @@ def list_outwards(status: str = "all", kind: str = "all",
     q = db.query(models.StockOutward)
     if status and status != "all":
         q = q.filter(models.StockOutward.status == status)
-    if kind == "transfer":
-        q = q.filter(models.StockOutward.to_warehouse_id.isnot(None))
+    if kind == "return":
+        q = q.filter(models.StockOutward.from_store_id.isnot(None))
+    elif kind == "transfer":
+        q = q.filter(models.StockOutward.to_warehouse_id.isnot(None),
+                     models.StockOutward.from_store_id.is_(None))
     elif kind == "store":
         q = q.filter(models.StockOutward.to_store_id.isnot(None))
     elif kind == "dispatch":

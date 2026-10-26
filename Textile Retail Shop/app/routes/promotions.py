@@ -20,14 +20,17 @@ from flask import (Blueprint, flash, jsonify, redirect, render_template,
 from flask_login import current_user, login_required
 from sqlalchemy import func
 
-from app import db, promotions
+from app import db, promotions, schemes, warehouse_items
 from app.master_categories import grouped_categories
 from app.models import (Category, Company, Counter, Location, Product,
                         PromotionApplication, PromotionAudit,
                         PromotionCondition, PromotionConditionItem,
                         PromotionPlace, PromotionReward, PromotionRewardItem,
                         PromotionScheme, OUT_OF_STOCK_ACTIONS, RETURN_POLICIES,
-                        REWARD_SELECTION, SCHEME_TYPES)
+                        REWARD_SELECTION, SCHEME_TYPES, SalesScheme,
+                        SalesSchemeBenefit, SalesSchemeFilter, SalesSchemeUse,
+                        SCHEME_APPLICABLE, SCHEME_BENEFIT_LEGACY, SCHEME_BENEFIT_MODES,
+                        SCHEME_FILTER_MODES, SCHEME_MODES)
 from app.utils import generate_number, role_required
 
 promotions_bp = Blueprint("promotions", __name__)
@@ -276,6 +279,21 @@ def _as_json(scheme):
 @login_required
 @role_required("admin", "manager")
 def index():
+    """Store / Sales Promotions Scheme — the scheme screen. See app/schemes.py."""
+    return render_template(
+        "promotions/schemes.html",
+        companies=Company.query.order_by(Company.name).all(),
+        locations=Location.query.order_by(Location.name).all(),
+        applicable=SCHEME_APPLICABLE, filter_modes=SCHEME_FILTER_MODES,
+        benefit_modes=SCHEME_BENEFIT_MODES, attributes=schemes.ATTRIBUTES,
+        scheme_modes=SCHEME_MODES, default_mode=schemes.DEFAULT_MODE, today=date.today())
+
+
+@promotions_bp.route("/legacy")
+@login_required
+@role_required("admin", "manager")
+def legacy_index():
+    """The older buy-X-get-Y schemes, which still run alongside."""
     q = (request.args.get("q") or "").strip()
     status = (request.args.get("status") or "").strip()
 
@@ -413,7 +431,7 @@ def toggle(sid):
     db.session.commit()
     flash(f"{scheme.code} is now {'active' if scheme.active else 'inactive'}.",
           "success" if scheme.active else "info")
-    return redirect(request.referrer or url_for("promotions.index"))
+    return redirect(request.referrer or url_for("promotions.legacy_index"))
 
 
 @promotions_bp.route("/<int:sid>/delete", methods=["POST"])
@@ -440,7 +458,7 @@ def delete(sid):
     db.session.delete(scheme)
     db.session.commit()
     flash("Scheme deleted — it had never been applied to a bill.", "info")
-    return redirect(url_for("promotions.index"))
+    return redirect(url_for("promotions.legacy_index"))
 
 
 # --------------------------------------------------------------------------
@@ -465,7 +483,7 @@ def api_products():
                                     Product.sku.ilike(like),
                                     Product.barcode.ilike(like)))
     rows = query.order_by(Product.name).limit(40).all()
-    return jsonify([{"id": p.id, "sku": p.sku, "name": p.name,
+    return jsonify([{"id": p.id, "sku": p.sku, "barcode": p.barcode, "name": p.name,
                      "price": p.selling_price, "stock": p.stock_qty,
                      "category": p.category.name if p.category else ""}
                     for p in rows])
@@ -486,3 +504,266 @@ def api_preview():
     outcome = promotions.evaluate(data.get("items") or [],
                                   choices=data.get("choices") or {})
     return jsonify(outcome.to_json())
+
+
+# --------------------------------------------------------------------------
+# the scheme screen's API — Store / Sales Promotions Scheme (app/schemes.py)
+# --------------------------------------------------------------------------
+
+def _scheme_json(s):
+    return {
+        "id": s.id, "code": s.code, "name": s.name,
+        "company_id": s.company_id, "location_id": s.location_id,
+        "valid_from": s.valid_from.isoformat() if s.valid_from else "",
+        "valid_to": s.valid_to.isoformat() if s.valid_to else "",
+        "applicable": s.applicable, "mode": s.mode or "bill_item", "active": bool(s.active),
+        "status": s.status(),
+        "filters": [{"mode": f.mode, "label": schemes.filter_label(f.mode),
+                     "data": schemes._data(f), "summary": schemes.filter_summary(f)}
+                    for f in s.filters],
+        "benefits": [{"mode": b.mode, "qty_from": b.qty_from or 0, "qty_to": b.qty_to or 0,
+                      "price_from": b.price_from or 0, "price_to": b.price_to or 0,
+                      "value": b.value or 0, "additional": b.additional or 0,
+                      "flat": bool(b.flat), "item_code": b.item_code or ""}
+                     for b in s.benefits],
+    }
+
+
+def _num(v):
+    try:
+        return max(0.0, float(v or 0))
+    except (TypeError, ValueError):
+        raise Invalid(f"“{v}” is not a number")
+
+
+def _read_scheme(data):
+    """The screen's JSON, checked. Raises Invalid with the reason."""
+    name = (data.get("name") or "").strip()
+    if not name:
+        raise Invalid("Give the scheme a name.")
+    applicable = data.get("applicable") or ""
+    if applicable not in dict(SCHEME_APPLICABLE):
+        raise Invalid("Choose when the scheme applies (Applicable).")
+    mode = data.get("mode") or schemes.DEFAULT_MODE.get(applicable, "bill_item")
+    if mode not in dict(SCHEME_MODES):
+        raise Invalid("Choose the Mode — On Bill Value or On Bill Item.")
+    vf, vt = _date(data.get("valid_from")), _date(data.get("valid_to"))
+    if vf and vt and vt < vf:
+        raise Invalid("The validity ends before it starts.")
+    modes = dict(SCHEME_FILTER_MODES)
+    filters = []
+    for f in data.get("filters") or []:
+        if f.get("mode") not in modes:
+            raise Invalid(f"Unknown filter mode {f.get('mode')!r}.")
+        d = f.get("data") or {}
+        if not isinstance(d, dict):
+            raise Invalid("A filter row is malformed.")
+        filters.append((f["mode"], d))
+    bmodes = dict(SCHEME_BENEFIT_MODES + SCHEME_BENEFIT_LEGACY)
+    benefits = []
+    for b in data.get("benefits") or []:
+        if b.get("mode") not in bmodes:
+            raise Invalid(f"Unknown benefit mode {b.get('mode')!r}.")
+        row = {k: _num(b.get(k)) for k in ("qty_from", "qty_to", "price_from",
+                                            "price_to", "value", "additional")}
+        if row["qty_to"] and row["qty_to"] < row["qty_from"]:
+            raise Invalid("A benefit's qty range ends before it starts.")
+        if row["price_to"] and row["price_to"] < row["price_from"]:
+            raise Invalid("A benefit's price range ends before it starts.")
+        if b["mode"] in ("discount_pct", "discounted_item") and (row["value"] > 100 or row["additional"] > 100):
+            raise Invalid("A discount cannot be more than 100%.")
+        if b["mode"] == "combo" and row["qty_from"] < 1:
+            raise Invalid("Combo Offer: set Qty Between (from) to the pieces that make one combo.")
+        row["flat"] = bool(b.get("flat")) and b["mode"] in ("fixed", "combo")
+        row["item_code"] = (str(b.get("item_code") or "").strip().upper() or None)             if b["mode"] == "discounted_item" else None
+        if b["mode"] == "discounted_item" and not row["item_code"]:
+            raise Invalid("Discounted Item: choose the item that gets the discount.")
+        if b["mode"] == "free_item" and (row["value"] < 1 or row["qty_from"] < 1):
+            raise Invalid("Free item: Qty From is how many to buy and Value how many "
+                          "come free — both at least 1.")
+        if not row["value"]:
+            raise Invalid(f"{bmodes[b['mode']]}: enter its Value.")
+        benefits.append((b["mode"], row))
+    if not benefits:
+        raise Invalid("Add at least one benefit — what the qualifying goods get.")
+
+    def _id(v):
+        return int(v) if str(v or "").isdigit() else None
+    return {"name": name[:128], "applicable": applicable, "mode": mode, "valid_from": vf, "valid_to": vt,
+            "company_id": _id(data.get("company_id")), "location_id": _id(data.get("location_id")),
+            "active": bool(data.get("active", True)), "filters": filters, "benefits": benefits}
+
+
+@promotions_bp.route("/api/schemes")
+@login_required
+@role_required("admin", "manager")
+def api_schemes():
+    """Search: the sales schemes, newest first — and the older offers beside them."""
+    q = (request.args.get("q") or "").strip()
+    query = SalesScheme.query
+    if q:
+        like = f"%{q}%"
+        query = query.filter(db.or_(SalesScheme.name.ilike(like), SalesScheme.code.ilike(like)))
+    rows = query.order_by(SalesScheme.id.desc()).limit(200).all()
+    used = dict(db.session.query(SalesSchemeUse.scheme_id, func.count(SalesSchemeUse.id))
+                .group_by(SalesSchemeUse.scheme_id).all())
+    legacy = PromotionScheme.query.order_by(PromotionScheme.id.desc()).limit(100).all()
+
+    def _d(v):
+        return v.strftime("%d-%m-%Y") if v else "…"
+    return jsonify({
+        "schemes": [{"id": s.id, "code": s.code, "name": s.name,
+                     "applicable": s.applicable_label, "status": s.status(),
+                     "valid": f"{_d(s.valid_from)} – {_d(s.valid_to)}",
+                     "describe": schemes.describe(s), "bills": used.get(s.id, 0)} for s in rows],
+        "legacy": [{"id": p.id, "code": p.code, "name": p.name, "status": p.status(),
+                    "describe": promotions.describe(p),
+                    "url": url_for("promotions.detail", sid=p.id)} for p in legacy
+                   if not q or q.lower() in (p.name + p.code).lower()],
+    })
+
+
+@promotions_bp.route("/api/schemes/<int:sid>")
+@login_required
+@role_required("admin", "manager")
+def api_scheme(sid):
+    return jsonify(_scheme_json(SalesScheme.query.get_or_404(sid)))
+
+
+@promotions_bp.route("/api/schemes", methods=["POST"])
+@login_required
+@role_required("admin", "manager")
+def api_scheme_save():
+    """Save — a new scheme, or the one being edited (`id`)."""
+    data = request.get_json(silent=True) or {}
+    try:
+        parsed = _read_scheme(data)
+    except Invalid as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    sid = data.get("id")
+    s = SalesScheme.query.get(int(sid)) if str(sid or "").isdigit() else None
+    if s is None:
+        s = SalesScheme(code=generate_number("SCH", SalesScheme, "code"),
+                        created_by_id=current_user.id)
+        db.session.add(s)
+    for k in ("name", "applicable", "mode", "valid_from", "valid_to", "company_id", "location_id", "active"):
+        setattr(s, k, parsed[k])
+    # The rows are replaced wholesale — the screen always sends all of them.
+    # A Coupon benefit keeps the campaign its coupons were issued from.
+    keep_campaign = next((b.campaign_id for b in s.benefits if b.mode == "coupon" and b.campaign_id), None)
+    s.filters = [SalesSchemeFilter(mode=m, data=json.dumps(d), sort_order=i)
+                 for i, (m, d) in enumerate(parsed["filters"])]
+    s.benefits = [SalesSchemeBenefit(mode=m, sort_order=i,
+                                     campaign_id=keep_campaign if m == "coupon" else None, **row)
+                  for i, (m, row) in enumerate(parsed["benefits"])]
+    db.session.commit()
+    return jsonify({"ok": True, "scheme": _scheme_json(s)})
+
+
+@promotions_bp.route("/api/schemes/<int:sid>/toggle", methods=["POST"])
+@login_required
+@role_required("admin", "manager")
+def api_scheme_toggle(sid):
+    s = SalesScheme.query.get_or_404(sid)
+    s.active = not s.active
+    db.session.commit()
+    return jsonify({"ok": True, "active": s.active, "status": s.status()})
+
+
+@promotions_bp.route("/api/schemes/<int:sid>/delete", methods=["POST"])
+@login_required
+@role_required("admin", "manager")
+def api_scheme_delete(sid):
+    """Delete a scheme no bill has used; one that has is switched off instead,
+    so the bills that carry it can still say what it was."""
+    s = SalesScheme.query.get_or_404(sid)
+    if SalesSchemeUse.query.filter_by(scheme_id=s.id).first():
+        s.active = False
+        db.session.commit()
+        return jsonify({"ok": True, "deleted": False,
+                        "message": f"{s.code} has been used on bills, so it was switched off instead."})
+    db.session.delete(s)
+    db.session.commit()
+    return jsonify({"ok": True, "deleted": True})
+
+
+@promotions_bp.route("/api/scheme-values")
+@login_required
+@role_required("admin", "manager")
+def api_scheme_values():
+    """The values the filter dropdowns offer: the warehouse's masters (Masters →
+    Product Attributes, its suppliers and purchase invoices), merged with what
+    the shop's own products carry. One spelling per value, whatever its case."""
+    def distinct(col):
+        return [str(v) for (v,) in db.session.query(col).filter(col.isnot(None)).distinct()
+                if str(v).strip()]
+
+    def merge(*lists):
+        seen = {}
+        for lst in lists:
+            for v in lst or []:
+                seen.setdefault(str(v).strip().upper(), str(v).strip())
+        return sorted(seen.values(), key=str.upper)
+
+    try:
+        wh = warehouse_items.fetch_vocabulary()
+    except Exception:                                # noqa: BLE001
+        wh = {}
+    # the scheme's attribute key -> the warehouse master's
+    wh_key = {"brand": "brand", "material": "material", "pattern": "pattern",
+              "colour": "color", "style": "style", "size": "size",
+              "type": "product_type", "sleeve": "sleeve", "fit": "fit"}
+    out = {"category": merge([c.name for c in Category.query.all()])}
+    for key, _label, field in schemes.ATTRIBUTES:
+        if field:
+            out[key] = merge(wh.get(wh_key.get(key, key)), distinct(getattr(Product, field)))
+    out["supplier"] = merge(wh.get("supplier"), distinct(Product.supplier))
+    out["invoice"] = merge(wh.get("invoice"), distinct(Product.purchase_invoice))
+    out["design_code"] = merge(wh.get("design_no"), distinct(Product.design_no))
+    out["marker"] = merge(distinct(Product.marker))
+    return jsonify(out)
+
+
+@promotions_bp.route("/api/simulate", methods=["POST"])
+@login_required
+@role_required("admin", "manager")
+def api_simulate():
+    """Try the scheme on the screen against a sample bill — saved or not, and
+    whatever its Applicable says (On Simulation schemes run nowhere else)."""
+    data = request.get_json(silent=True) or {}
+    try:
+        parsed = _read_scheme(data.get("scheme") or {})
+    except Invalid as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    # An unsaved scheme, built in memory and never added to the session.
+    s = SalesScheme(code=(data.get("scheme") or {}).get("code") or "(unsaved)",
+                    name=parsed["name"], applicable=parsed["applicable"], mode=parsed["mode"])
+    s.filters = [SalesSchemeFilter(mode=m, data=json.dumps(d)) for m, d in parsed["filters"]]
+    s.benefits = [SalesSchemeBenefit(mode=m, **row) for m, row in parsed["benefits"]]
+    agreement = (data.get("agreement_code") or "").strip() or None
+    lines, shown = [], []
+    for n, it in enumerate(data.get("items") or []):
+        p = warehouse_items.resolve_scan(str(it.get("code") or "").strip())
+        if p is None:
+            shown.append({"code": it.get("code"), "error": "no such product"})
+            continue
+        qty = _num(it.get("qty") or 1)
+        lines.append(schemes.Line(n, p, qty, p.selling_price, p.gst_rate, _num(it.get("manual_pct"))))
+        shown.append({"n": n, "code": it.get("code"), "name": p.name, "qty": qty,
+                      "price": round(p.selling_price * (1 + (p.gst_rate or 0) / 100), 2)})
+    bill = sum(l.charged for l in lines)
+    a = schemes.award(s, lines, bill, agreement)
+    elig = {l.idx for l in schemes.eligible(s, lines, bill, agreement)}
+    for row in shown:
+        if "n" in row:
+            pct = a.line_pct.get(row["n"], 0) if a else 0
+            row.update(pct=pct, eligible=row["n"] in elig,
+                       amount=round(row["price"] * row["qty"] * (1 - pct / 100), 2))
+    for obj in list(db.session.new):   # the in-memory scheme must never be saved
+        db.session.expunge(obj)
+    return jsonify({"ok": True, "lines": shown,
+                    "applies": a is not None and (a.amount > 0 or a.coupon_value > 0 or a.points > 0),
+                    "saving": round(a.amount, 2) if a else 0,
+                    "coupon": round(a.coupon_value, 2) if a else 0,
+                    "points": round(a.points, 2) if a else 0,
+                    "bill": round(bill, 2)})

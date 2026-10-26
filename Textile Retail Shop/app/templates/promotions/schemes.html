@@ -1,0 +1,659 @@
+{% extends "base.html" %}
+{% block content %}
+{# Store / Sales Promotions Scheme. Three panels, as the shop's billing software
+   has always had them: the scheme (when, where, at which point of a sale) and
+   the filter being built on the left; the filters the scheme has in the middle;
+   what qualifying goods get on the right. The rules behind every box are in
+   app/schemes.py. #}
+<div class="sch-head d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
+  <h5 class="mb-0"><i class="bi bi-gift"></i> Store / Sales Promotions Scheme
+    <span id="schCode" class="badge text-bg-light border font-monospace ms-1 d-none"></span>
+    <span id="schStatus" class="badge ms-1 d-none"></span></h5>
+  <div class="d-flex gap-1 flex-wrap">
+    <button type="button" id="btnNew" class="btn btn-outline-secondary btn-sm"><i class="bi bi-file-earmark"></i> New</button>
+    <button type="button" id="btnSave" class="btn btn-brand btn-sm"><i class="bi bi-save"></i> Save</button>
+    <button type="button" id="btnSearch" class="btn btn-outline-secondary btn-sm"><i class="bi bi-search"></i> Search</button>
+    <button type="button" id="btnSim" class="btn btn-outline-primary btn-sm" title="Try this scheme on a sample bill"><i class="bi bi-play-circle"></i> Simulate</button>
+    <a href="{{ url_for('coupons.index') }}" class="btn btn-outline-secondary btn-sm"><i class="bi bi-ticket-perforated"></i> Coupons</a>
+  </div>
+</div>
+<div id="schMsg" class="small mb-2"></div>
+
+<div class="sch-grid">
+  {# ---- the scheme, and the filter being built -------------------------- #}
+  <section class="card p-2 sch-left">
+    <label class="form-label small mb-0" for="sName">Scheme Name</label>
+    <input id="sName" class="form-control form-control-sm mb-1" maxlength="128">
+    <div class="row g-1">
+      <div class="col-6"><label class="form-label small mb-0" for="sCompany">Company</label>
+        <select id="sCompany" class="form-select form-select-sm">
+          <option value="">All companies</option>
+          {% for c in companies %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}
+        </select></div>
+      <div class="col-6"><label class="form-label small mb-0" for="sLocation">Location</label>
+        <select id="sLocation" class="form-select form-select-sm">
+          <option value="">All locations</option>
+          {% for l in locations %}<option value="{{ l.id }}" data-company="{{ l.company_id or '' }}">{{ l.name }}</option>{% endfor %}
+        </select></div>
+      <div class="col-12"><label class="form-label small mb-0 mt-1">Validity From/To</label></div>
+      <div class="col-6"><input id="sFrom" aria-label="Valid from" type="date" class="form-control form-control-sm"></div>
+      <div class="col-6"><input id="sTo" aria-label="Valid to" type="date" class="form-control form-control-sm"></div>
+      <div class="col-6"><label class="form-label small mb-0 mt-1" for="sApplicable">Applicable</label>
+        <select id="sApplicable" class="form-select form-select-sm">
+          <option value="">Choose…</option>
+          {% for code, label in applicable %}<option value="{{ code }}">{{ label }}</option>{% endfor %}
+        </select></div>
+      <div class="col-6"><label class="form-label small mb-0 mt-1" for="sMode">Mode</label>
+        <select id="sMode" class="form-select form-select-sm"
+                title="On Bill Value: the Rate condition is the goods' total. On Bill Item: each item's own price.">
+          <option value="">Choose…</option>
+          {% for code, label in scheme_modes %}<option value="{{ code }}">{{ label }}</option>{% endfor %}
+        </select></div>
+    </div>
+    <div class="form-check form-switch small mt-1">
+      <input class="form-check-input" type="checkbox" id="sActive" checked>
+      <label class="form-check-label" for="sActive">Active</label>
+    </div>
+
+    <hr class="my-2">
+    <label class="form-label small mb-0" for="fMode">FILTER MODE</label>
+    <div class="input-group input-group-sm mb-1">
+      <select id="fMode" class="form-select">
+        <option value="">Choose a filter…</option>
+        {% for code, label in filter_modes %}<option value="{{ code }}">{{ label }}</option>{% endfor %}
+      </select>
+      <button type="button" id="fAdd" class="btn btn-primary">ADD</button>
+    </div>
+    <div id="fFields" class="sch-fields"></div>
+  </section>
+
+  {# ---- the filters the scheme has ------------------------------------- #}
+  <section class="card sch-mid">
+    <table class="table table-sm mb-0 sch-table">
+      <thead><tr><th style="width:44px">S.NO</th><th style="width:150px">MODE</th><th>ATTRIBUTES</th><th style="width:60px">ACTION</th></tr></thead>
+      <tbody id="fBody"></tbody>
+    </table>
+    <div id="fEmpty" class="text-muted small text-center py-4">No filters — every item qualifies.<br>
+      Choose a FILTER MODE on the left and press ADD.</div>
+  </section>
+
+  {# ---- the condition, and what qualifying goods get -------------------------
+     Set the Qty / Rate condition, choose a benefit MODE and fill in its own
+     boxes, then ADD: the row goes into the table and the boxes clear for the
+     next one. A row's Edit puts it back up here; ADD then reads UPDATE. #}
+  <section class="card p-2 sch-right">
+    <div id="condBox">
+    <h6 class="mb-1">QTY/RATE CONDITION</h6>
+    <div class="cond-grid">
+      <label for="cQtyFrom">QTY BETWEEN</label>
+      <input id="cQtyFrom" type="number" min="0" step="1" class="form-control form-control-sm" placeholder="From">
+      <span>AND</span>
+      <input id="cQtyTo" type="number" min="0" step="1" class="form-control form-control-sm" placeholder="0">
+      <label for="cRateFrom">RATE BETWEEN</label>
+      <input id="cRateFrom" type="number" min="0" step="any" class="form-control form-control-sm" placeholder="0">
+      <span>AND</span>
+      <input id="cRateTo" type="number" min="0" step="any" class="form-control form-control-sm" placeholder="0">
+    </div>
+    <div class="small text-muted mt-1">0 at the top end means no limit.</div>
+    </div>
+
+    <h6 class="mb-1 mt-3" id="bHead">BENEFITS</h6>
+    <label class="form-label small mb-0" for="bMode">MODE</label>
+    <div class="input-group input-group-sm mb-1">
+      <select id="bMode" class="form-select">
+        <option value="">Choose a benefit…</option>
+        {% for code, label in benefit_modes %}<option value="{{ code }}">{{ label }}</option>{% endfor %}
+      </select>
+      <button type="button" id="bAdd" class="btn btn-primary">ADD</button>
+    </div>
+    <div id="bvBox" class="cond-grid mb-1" hidden>
+      <label for="bvFrom">BILL VALUE BETWEEN</label>
+      <input id="bvFrom" type="number" min="0" step="any" class="form-control form-control-sm" placeholder="0">
+      <span>AND</span>
+      <input id="bvTo" type="number" min="0" step="any" class="form-control form-control-sm" placeholder="0">
+    </div>
+    <div id="bFields" class="b-fields mb-2"></div>
+    <div id="bHint" class="small text-muted mb-2"></div>
+    <div class="sch-bwrap">
+      <table class="table table-sm mb-0 sch-table">
+        <thead><tr><th style="width:40px">S.NO</th><th>MODE</th><th>Qty Range</th><th>Price Range</th>
+          <th>Value</th><th>Additional</th><th style="width:110px">ACTION</th></tr></thead>
+        <tbody id="bBody"></tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+
+<datalist id="dl_items"></datalist>
+
+<!-- Search -->
+<div class="modal fade" id="searchModal" tabindex="-1">
+  <div class="modal-dialog modal-xl modal-dialog-scrollable"><div class="modal-content">
+    <div class="modal-header py-2"><h6 class="modal-title"><i class="bi bi-search"></i> Schemes</h6>
+      <button class="btn-close" data-bs-dismiss="modal"></button></div>
+    <div class="modal-body">
+      <input id="sq" class="form-control form-control-sm mb-2" placeholder="Search name or code">
+      <table class="table table-sm table-hover align-middle mb-3">
+        <thead><tr><th>Code</th><th>Scheme</th><th>Applicable</th><th>Valid</th><th>Benefit</th>
+          <th class="text-end">Bills</th><th>Status</th><th></th></tr></thead>
+        <tbody id="sqBody"></tbody>
+      </table>
+      <div class="small text-muted mb-1">Older buy-X-get-Y offers — still running alongside:</div>
+      <table class="table table-sm align-middle mb-0">
+        <tbody id="sqLegacy"></tbody>
+      </table>
+      <a href="{{ url_for('promotions.legacy_index') }}" class="small">Open the older offers list ›</a>
+    </div>
+  </div></div>
+</div>
+
+<!-- Simulate -->
+<div class="modal fade" id="simModal" tabindex="-1">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable"><div class="modal-content">
+    <div class="modal-header py-2"><h6 class="modal-title"><i class="bi bi-play-circle"></i> Simulate this scheme</h6>
+      <button class="btn-close" data-bs-dismiss="modal"></button></div>
+    <div class="modal-body">
+      <div class="small text-muted mb-2">A sample bill, tried against the scheme as it is on screen — saved or not,
+        whatever its Applicable. Nothing is billed.</div>
+      <table class="table table-sm align-middle mb-1">
+        <thead><tr><th>Barcode / SKU</th><th style="width:90px">Qty</th><th style="width:110px" title="A discount already given by hand">Hand disc %</th>
+          <th>Item</th><th class="text-end">Price</th><th class="text-end">Scheme %</th><th class="text-end">Amount</th><th></th></tr></thead>
+        <tbody id="simBody"></tbody>
+      </table>
+      <div class="d-flex gap-2 align-items-center mb-2">
+        <button type="button" id="simAddRow" class="btn btn-outline-secondary btn-sm"><i class="bi bi-plus"></i> Item</button>
+        <input id="simAgreement" class="form-control form-control-sm" style="max-width:200px" placeholder="Agreement code (optional)">
+        <button type="button" id="simRun" class="btn btn-primary btn-sm ms-auto"><i class="bi bi-play"></i> Run</button>
+      </div>
+      <div id="simOut" class="small"></div>
+    </div>
+  </div></div>
+</div>
+
+<style>
+  .sch-grid { display:grid; grid-template-columns: 340px minmax(0,1fr) minmax(0,1.25fr); gap:10px; align-items:start; }
+  .sch-left, .sch-mid, .sch-right { margin:0; }
+  .sch-mid { min-height: 420px; }
+  .sch-table thead th { font-size:.72rem; letter-spacing:.03em; background:var(--surface, #fff); }
+  .sch-table td { font-size:.85rem; vertical-align: middle; }
+  .sch-fields .form-label { font-size:.72rem; text-transform:uppercase; letter-spacing:.03em; margin:4px 0 0; }
+  .sch-chips { display:flex; flex-wrap:wrap; gap:3px; max-height:120px; overflow:auto; }
+  .sch-chips .badge { font-weight:500; }
+  .sch-bwrap { overflow-x:auto; }
+  .sch-bwrap input { min-width: 54px; padding: 1px 4px; font-size:.8rem; }
+  .rng { display:flex; gap:2px; align-items:center; }
+  .cond-grid { display:grid; grid-template-columns: 140px minmax(0,1fr) 40px minmax(0,1fr); gap:4px 6px; align-items:center; font-size:.78rem; }
+  .cond-grid label { margin:0; font-weight:600; letter-spacing:.02em; }
+  .cond-grid span { text-align:center; font-size:.75rem; }
+  .b-fields { display:flex; flex-wrap:wrap; gap:8px 14px; align-items:flex-end; }
+  .b-fields label { display:block; font-size:.72rem; text-transform:uppercase; letter-spacing:.03em; margin-bottom:2px; }
+  .b-fields input[type=number], .b-fields input[type=text] { width:130px; }
+  .b-fields .b-item { width:240px !important; }
+  @media (max-width: 1199px) { .sch-grid { grid-template-columns: 1fr; } }
+</style>
+{% endblock %}
+{% block scripts %}
+<script>
+const API = {
+  list: {{ url_for('promotions.api_schemes') | tojson }},
+  one: (id) => {{ url_for('promotions.api_scheme', sid=0) | tojson }}.replace(/0$/, id),
+  save: {{ url_for('promotions.api_scheme_save') | tojson }},
+  toggle: (id) => {{ url_for('promotions.api_scheme_toggle', sid=0) | tojson }}.replace('/0/', `/${id}/`),
+  del: (id) => {{ url_for('promotions.api_scheme_delete', sid=0) | tojson }}.replace('/0/', `/${id}/`),
+  values: {{ url_for('promotions.api_scheme_values') | tojson }},
+  simulate: {{ url_for('promotions.api_simulate') | tojson }},
+  products: {{ url_for('promotions.api_products') | tojson }},
+};
+const DEFAULT_MODE = {{ default_mode | tojson }};
+const FILTER_LABEL = Object.fromEntries({{ filter_modes | list | tojson }});
+const BENEFIT_LABEL = Object.fromEntries({{ benefit_modes | list | tojson }});
+const ATTRS = {{ attributes | map('list') | list | tojson }};   // [key, label, field]
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const say = (msg, bad) => { const m = $('schMsg'); m.textContent = msg || ''; m.style.color = bad ? '#BE123C' : 'var(--brand-dark)'; };
+
+// ---- the scheme on screen -------------------------------------------------------
+let scheme = blank();
+let dirty = false;
+function blank(){
+  return {id: null, code: '', name: '', company_id: '', location_id: '', valid_from: '', valid_to: '',
+          applicable: '', mode: '', active: true, filters: [], benefits: []};
+}
+function paintHead(){
+  $('schCode').classList.toggle('d-none', !scheme.code);
+  $('schCode').textContent = scheme.code || '';
+  const st = $('schStatus');
+  st.classList.toggle('d-none', !scheme.status);
+  st.textContent = scheme.status || '';
+  st.className = 'badge ms-1 ' + ({active: 'text-bg-success', scheduled: 'text-bg-warning',
+                                  expired: 'text-bg-secondary', inactive: 'text-bg-secondary'}[scheme.status] || 'd-none');
+}
+function load(s){
+  scheme = Object.assign(blank(), s);
+  $('sName').value = scheme.name || '';
+  $('sCompany').value = scheme.company_id || '';
+  $('sLocation').value = scheme.location_id || '';
+  $('sFrom').value = scheme.valid_from || '';
+  $('sTo').value = scheme.valid_to || '';
+  $('sApplicable').value = scheme.applicable || '';
+  $('sMode').value = scheme.mode || '';
+  $('sActive').checked = scheme.active !== false;
+  modeTouched = !!scheme.id;
+  paintMode(); paintFilters(); clearBenefitForm(); paintBenefits(); paintHead();
+  dirty = false;
+}
+function gather(){
+  return {id: scheme.id, code: scheme.code, name: $('sName').value.trim(),
+          company_id: $('sCompany').value, location_id: $('sLocation').value,
+          valid_from: $('sFrom').value, valid_to: $('sTo').value,
+          applicable: $('sApplicable').value, mode: $('sMode').value, active: $('sActive').checked,
+          filters: scheme.filters.map((f) => ({mode: f.mode, data: f.data})),
+          benefits: scheme.benefits};
+}
+// Mode starts from what suits the timing and can be changed; once changed by
+// hand, a later Applicable change leaves it alone.
+let modeTouched = false;
+// The QTY/RATE CONDITION panel belongs to On Bill Item — a quantity and a price
+// are each item's. On Bill Value the panel goes, and the one condition that
+// mode has, the bill's total, is set beside the benefit (BILL VALUE BETWEEN).
+// The benefits that count pieces (Discount In Qty, Combo, Discounted Item) are
+// item benefits and are offered only On Bill Item. No mode chosen yet: neither.
+const ITEM_ONLY = ['free_item', 'combo', 'discounted_item'];
+function paintMode(){
+  const m = $('sMode').value;
+  $('condBox').hidden = m !== 'bill_item';
+  $('bvBox').hidden = m !== 'bill_value';
+  $('bHead').classList.toggle('mt-3', m === 'bill_item');
+  [...$('bMode').options].forEach((o) => { o.hidden = m === 'bill_value' && ITEM_ONLY.includes(o.value); });
+  if (m === 'bill_value' && ITEM_ONLY.includes($('bMode').value) && editing === null) { $('bMode').value = ''; paintBenefitFields(); }
+}
+$('sApplicable').onchange = () => {
+  if (!modeTouched && DEFAULT_MODE[$('sApplicable').value]) $('sMode').value = DEFAULT_MODE[$('sApplicable').value];
+  paintMode(); dirty = true;
+};
+$('sMode').onchange = () => { modeTouched = true; paintMode(); dirty = true; };
+['sName', 'sCompany', 'sLocation', 'sFrom', 'sTo', 'sActive'].forEach((id) => $(id).addEventListener('change', () => { dirty = true; }));
+// A location belongs to a company: choosing a company narrows the list.
+$('sCompany').addEventListener('change', () => {
+  const c = $('sCompany').value;
+  [...$('sLocation').options].forEach((o) => { o.hidden = !!(c && o.dataset.company && o.dataset.company !== c); });
+  const sel = $('sLocation').selectedOptions[0];
+  if (sel && sel.hidden) $('sLocation').value = '';
+});
+
+// ---- the values the dropdowns offer --------------------------------------------
+// The warehouse's masters (Masters → Product Attributes, its suppliers and
+// purchase invoices) merged with what the shop's products carry — loaded once,
+// and the open filter redrawn when they arrive.
+let VALUES = {};
+fetch(API.values).then((r) => r.json()).then((v) => {
+  VALUES = v || {};
+  if ($('fFields').querySelector('select.vals-loading')) paintFields();
+}).catch(() => {});
+
+// ---- the filter being built (left) --------------------------------------------
+let staged = {codes: []};
+const field = (id, label, extra = '') =>
+  `<label class="form-label" for="${id}">${label}</label><input id="${id}" class="form-control form-control-sm" ${extra}>`;
+// A dropdown of the known values for `key`. Empty first option = not part of
+// this filter. While the lists are still loading it says so, and is redrawn.
+function pick(id, label, key, none = '—'){
+  const loaded = Object.keys(VALUES).length > 0;
+  const list = VALUES[key] || [];
+  const opts = loaded
+    ? (list.length ? list.map((v) => `<option value="${esc(v)}">${esc(v)}</option>`).join('')
+                   : '<option value="" disabled>none recorded yet</option>')
+    : '<option value="" disabled>loading…</option>';
+  return `<label class="form-label" for="${id}">${label}</label>
+    <select id="${id}" class="form-select form-select-sm${loaded ? '' : ' vals-loading'}"><option value="">${none}</option>${opts}</select>`;
+}
+function codesBox(label, hint){
+  return `${field('fCode', label, 'autocomplete="off" placeholder="Type or scan, then Enter"')}
+    <div class="d-flex gap-1 mt-1 align-items-center">
+      <label class="btn btn-outline-secondary btn-sm mb-0" title="Upload a .txt or .csv list — one code per line">
+        <i class="bi bi-upload"></i><input type="file" id="fUpload" accept=".txt,.csv" hidden></label>
+      <span class="small text-success">Added : <b id="fCount">0</b></span>
+      <button type="button" id="fClear" class="btn btn-outline-danger btn-sm py-0 ms-auto" title="Clear the list"><i class="bi bi-trash"></i></button>
+    </div>
+    <div id="fChips" class="sch-chips mt-1"></div>`;
+}
+function paintFields(){
+  const m = $('fMode').value;
+  staged = {codes: []};
+  let h = '';
+  if (m === 'product_attr' || m === 'ex_product_attr'){
+    h = '<div class="row g-1">' + ATTRS.map(([k, label]) =>
+      `<div class="col-6">${pick('fa_' + k, label, k)}</div>`).join('') + '</div>';
+  } else if (m === 'invoice'){
+    h = pick('fi_supplier', 'Supplier', 'supplier') + pick('fi_invoice', 'Invoice', 'invoice')
+      + pick('fi_design_code', 'Design Code', 'design_code')
+      + field('fi_invoice_date', 'Invoice Date', 'type="date"');
+  } else if (m === 'barcode' || m === 'ex_barcode'){
+    h = codesBox('Bar Code');
+  } else if (m === 'agreement_code'){
+    h = codesBox('Agreement Code');
+  } else if (m === 'marker' || m === 'ex_marker'){
+    h = pick('fm_marker', 'Marker', 'marker')
+      + '<div class="small text-muted mt-1">Markers are set on the product (Inventory → edit). Add one row per marker.</div>';
+  } else if (m === 'barcode_prefix'){
+    h = field('fp_prefix', 'Barcode Prefix', 'placeholder="One or more, comma separated"');
+  } else if (m === 'bill_value'){
+    h = '<label class="form-label">Bill Amount Between</label><div class="rng">'
+      + '<input id="fb_min" type="number" min="0" step="1" class="form-control form-control-sm" value="0">'
+      + '<span>–</span><input id="fb_max" type="number" min="0" step="1" class="form-control form-control-sm" value="0" title="0 = no limit"></div>';
+  } else if (m === 'ex_discount'){
+    h = '<div class="small text-muted mt-1">Leaves out items that already carry a discount given by hand at the counter.</div>';
+  }
+  $('fFields').innerHTML = h;
+  if ($('fCode')){
+    const add = (raw) => {
+      raw.split(/[\s,;]+/).map((c) => c.trim().toUpperCase()).filter(Boolean)
+        .forEach((c) => { if (!staged.codes.includes(c)) staged.codes.push(c); });
+      paintChips();
+    };
+    $('fCode').addEventListener('keydown', (e) => { if (e.key === 'Enter'){ e.preventDefault(); add(e.target.value); e.target.value = ''; } });
+    $('fUpload').onchange = async (e) => { const f = e.target.files[0]; if (f) add(await f.text()); e.target.value = ''; };
+    $('fClear').onclick = () => { staged.codes = []; paintChips(); };
+  }
+}
+function paintChips(){
+  $('fCount').textContent = staged.codes.length;
+  $('fChips').innerHTML = staged.codes.slice(0, 200).map((c) => `<span class="badge text-bg-light border">${esc(c)}</span>`).join('')
+    + (staged.codes.length > 200 ? `<span class="small text-muted">+${staged.codes.length - 200} more</span>` : '');
+}
+$('fMode').onchange = paintFields;
+const val = (id) => ($(id) ? $(id).value.trim() : '');
+const list = (s) => s.split(/[,;]+/).map((x) => x.trim()).filter(Boolean);
+$('fAdd').onclick = () => {
+  const m = $('fMode').value;
+  if (!m) return say('Choose a FILTER MODE first.', true);
+  let data = {};
+  if (m === 'product_attr' || m === 'ex_product_attr'){
+    ATTRS.forEach(([k]) => { if (val('fa_' + k)) data[k] = val('fa_' + k); });
+    if (!Object.keys(data).length) return say('Fill in at least one attribute.', true);
+  } else if (m === 'invoice'){
+    ['supplier', 'invoice', 'design_code', 'invoice_date'].forEach((k) => { if (val('fi_' + k)) data[k] = val('fi_' + k); });
+    if (!Object.keys(data).length) return say('Fill in the supplier, invoice, design code or date.', true);
+  } else if (m === 'barcode' || m === 'ex_barcode' || m === 'agreement_code'){
+    if (val('fCode')){ staged.codes.push(...list(val('fCode')).map((c) => c.toUpperCase())); }
+    if (!staged.codes.length) return say('Add at least one code — type it and press Enter, or upload a list.', true);
+    data = {codes: [...new Set(staged.codes)]};
+  } else if (m === 'marker' || m === 'ex_marker'){
+    data = {markers: list(val('fm_marker'))};
+    if (!data.markers.length) return say('Enter a marker.', true);
+  } else if (m === 'barcode_prefix'){
+    data = {prefixes: list(val('fp_prefix')).map((p) => p.toUpperCase())};
+    if (!data.prefixes.length) return say('Enter a barcode prefix.', true);
+  } else if (m === 'bill_value'){
+    data = {min: parseFloat(val('fb_min')) || 0, max: parseFloat(val('fb_max')) || 0};
+    if (data.max && data.max < data.min) return say('The bill amount range ends before it starts.', true);
+  }
+  scheme.filters.push({mode: m, data});
+  dirty = true; say('');
+  paintFilters(); paintFields();
+};
+
+// ---- the filters (middle) ------------------------------------------------------
+function summary(f){
+  const d = f.data || {};
+  if (f.mode === 'product_attr' || f.mode === 'ex_product_attr')
+    return ATTRS.filter(([k]) => d[k]).map(([k, label]) => `${label}: ${d[k]}`).join(', ');
+  if (f.mode === 'invoice')
+    return ['supplier', 'invoice', 'design_code', 'invoice_date'].filter((k) => d[k]).map((k) => `${k.replace('_', ' ')}: ${d[k]}`).join(', ');
+  if (d.codes) return `${d.codes.length} code(s): ${d.codes.slice(0, 6).join(', ')}${d.codes.length > 6 ? '…' : ''}`;
+  if (d.markers) return d.markers.join(', ');
+  if (d.prefixes) return d.prefixes.join(', ');
+  if (f.mode === 'bill_value') return `₹${d.min || 0} – ${d.max ? '₹' + d.max : 'no limit'}`;
+  if (f.mode === 'ex_discount') return 'items already discounted by hand';
+  return '';
+}
+function paintFilters(){
+  $('fBody').innerHTML = scheme.filters.map((f, i) => `<tr>
+    <td>${i + 1}</td>
+    <td><span class="badge ${f.mode.startsWith('ex_') ? 'text-bg-danger' : 'text-bg-light border'}">${esc(FILTER_LABEL[f.mode] || f.mode)}</span></td>
+    <td class="small">${esc(summary(f))}</td>
+    <td><button type="button" class="btn btn-outline-danger btn-sm py-0 f-del" data-i="${i}" title="Remove"><i class="bi bi-x"></i></button></td>
+  </tr>`).join('');
+  $('fEmpty').classList.toggle('d-none', scheme.filters.length > 0);
+  document.querySelectorAll('.f-del').forEach((b) => b.onclick = () => { scheme.filters.splice(+b.dataset.i, 1); dirty = true; paintFilters(); });
+}
+
+// ---- the condition and the benefits (right) ---------------------------------------
+// Each benefit MODE has its own boxes, shown under the MODE picker once chosen.
+// [key, label, kind]: num · check · item (a product picked by barcode / SKU)
+const BFIELDS = {
+  discount_pct: [['value', 'Discount %', 'num'], ['additional', 'Additional %', 'num']],
+  fixed: [['value', 'Discount Amt', 'num'], ['flat', 'Flat Discount', 'check']],
+  points: [['value', 'Points', 'num']],
+  free_item: [['value', 'Free Qty', 'num']],
+  combo: [['value', 'Discount Amt', 'num'], ['flat', 'Flat Discount', 'check']],
+  discounted_item: [['item_code', 'Item', 'item'], ['value', 'Discount %', 'num']],
+  coupon: [['value', 'Coupon Amt', 'num'], ['additional', 'Valid Days', 'num']],
+};
+const BHINT = {
+  discount_pct: 'The % comes off every qualifying item; Additional is a further % on top.',
+  fixed: 'Discount Amt comes off each qualifying piece. Tick Flat Discount to take it off the qualifying goods once.',
+  points: 'The customer on the bill earns these loyalty points when it is paid.',
+  free_item: 'Qty Between (from) is how many to buy; Free Qty how many come free — the cheapest.',
+  combo: 'Qty Between (from) is the pieces in one combo; Discount Amt comes off every complete combo. Tick Flat Discount to take it off once.',
+  discounted_item: 'One of this item gets the Discount % for every complete set of Qty Between (from) qualifying pieces — if it is on the bill.',
+  coupon: 'A coupon of this amount is issued when the bill is paid, for the next visit.',
+};
+let editing = null;          // index of the row being edited, or null
+function cnum(id){ return Math.max(0, parseFloat($(id).value) || 0); }
+function paintBenefitFields(row){
+  const m = $('bMode').value;
+  row = row || {};
+  $('bFields').innerHTML = (BFIELDS[m] || []).map(([k, label, kind]) => {
+    if (kind === 'check')
+      return `<div><label for="bf_${k}">${label}</label>
+        <input type="checkbox" class="form-check-input" id="bf_${k}" ${row[k] ? 'checked' : ''}></div>`;
+    if (kind === 'item')
+      return `<div><label for="bf_${k}">${label}</label>
+        <input type="text" class="form-control form-control-sm b-item" id="bf_${k}" list="dl_items" autocomplete="off"
+               placeholder="Type a name or barcode" value="${esc(row[k] || '')}"></div>`;
+    return `<div><label for="bf_${k}">${label}</label>
+      <input type="number" min="0" step="any" class="form-control form-control-sm" id="bf_${k}" value="${row[k] || ''}" placeholder="0"></div>`;
+  }).join('');
+  $('bHint').textContent = BHINT[m] || '';
+  if ($('bf_item_code')) wireItemSearch($('bf_item_code'));
+}
+// The Discounted Item picker: the products matching what is typed.
+function wireItemSearch(input){
+  let t = null;
+  input.addEventListener('input', () => {
+    clearTimeout(t);
+    const q = input.value.trim();
+    if (q.length < 2) return;
+    t = setTimeout(async () => {
+      try {
+        const rows = await (await fetch(`${API.products}?q=${encodeURIComponent(q)}`)).json();
+        $('dl_items').innerHTML = rows.map((p) =>
+          `<option value="${esc(p.barcode || p.sku)}">${esc(p.name)} — ${esc(p.sku)}</option>`).join('');
+      } catch (e) {}
+    }, 200);
+  });
+}
+function clearBenefitForm(){
+  ['cQtyFrom', 'cQtyTo', 'cRateFrom', 'cRateTo', 'bvFrom', 'bvTo'].forEach((id) => { $(id).value = ''; });
+  $('bMode').value = '';
+  paintBenefitFields();
+  editing = null;
+  $('bAdd').textContent = 'ADD';
+}
+$('bMode').onchange = () => paintBenefitFields();
+const fmtV = (b) => ({discount_pct: `${+b.value}%`, fixed: `₹${+b.value}`, points: `${+b.value} pts`,
+  free_item: `${+b.value} free`, combo: `₹${+b.value}`, discounted_item: `${+b.value}%`,
+  coupon: `₹${+b.value}`, flat: `₹${+b.value}`}[b.mode] ?? b.value);
+const fmtA = (b) => {
+  if (b.mode === 'fixed' || b.mode === 'combo') return b.flat ? 'Flat' : (b.mode === 'combo' ? 'per combo' : 'per piece');
+  if (b.mode === 'discounted_item') return b.item_code || '';
+  if (b.mode === 'coupon') return b.additional ? `${+b.additional} days` : '30 days';
+  return b.additional ? `+${+b.additional}%` : '';
+};
+function paintBenefits(){
+  $('bBody').innerHTML = scheme.benefits.map((b, i) => `<tr class="${editing === i ? 'table-warning' : ''}">
+      <td>${i + 1}</td>
+      <td class="small">${esc(BENEFIT_LABEL[b.mode] || b.mode)}</td>
+      <td class="small">${+(b.qty_from || 0)} - ${+(b.qty_to || 0)}</td>
+      <td class="small">${+(b.price_from || 0)} - ${+(b.price_to || 0)}</td>
+      <td class="small">${esc(fmtV(b))}</td>
+      <td class="small">${esc(fmtA(b))}</td>
+      <td class="text-nowrap">
+        <button type="button" class="btn btn-danger btn-sm py-0 b-edit" data-i="${i}">Edit</button>
+        <button type="button" class="btn btn-danger btn-sm py-0 b-del" data-i="${i}">Delete</button></td>
+    </tr>`).join('') || '<tr><td colspan="7" class="text-center text-muted small py-4">No benefit yet — set the condition, choose a MODE and press ADD.</td></tr>';
+  document.querySelectorAll('.b-edit').forEach((el) => el.onclick = () => {
+    const i = +el.dataset.i, r = scheme.benefits[i];
+    $('cQtyFrom').value = r.qty_from || ''; $('cQtyTo').value = r.qty_to || '';
+    $('cRateFrom').value = r.price_from || ''; $('cRateTo').value = r.price_to || '';
+    $('bvFrom').value = r.price_from || ''; $('bvTo').value = r.price_to || '';
+    $('bMode').value = r.mode;
+    paintBenefitFields(r);
+    editing = i;
+    $('bAdd').textContent = 'UPDATE';
+    paintBenefits();
+    say(`Editing benefit ${i + 1} — change it and press UPDATE.`);
+  });
+  document.querySelectorAll('.b-del').forEach((el) => el.onclick = () => {
+    const i = +el.dataset.i;
+    if (!confirm('Delete this benefit?')) return;
+    scheme.benefits.splice(i, 1);
+    if (editing === i) clearBenefitForm(); else if (editing !== null && editing > i) editing -= 1;
+    dirty = true; paintBenefits();
+  });
+}
+$('bAdd').onclick = () => {
+  const m = $('bMode').value;
+  const sm = $('sMode').value;
+  if (!sm) return say('Choose the scheme Mode first — On Bill Value or On Bill Item.', true);
+  if (!m) return say('Choose a benefit MODE first.', true);
+  // On Bill Value there is no qty condition, and the price range is the bill's total
+  const bv = sm === 'bill_value';
+  const row = {mode: m, qty_from: bv ? 0 : cnum('cQtyFrom'), qty_to: bv ? 0 : cnum('cQtyTo'),
+               price_from: cnum(bv ? 'bvFrom' : 'cRateFrom'), price_to: cnum(bv ? 'bvTo' : 'cRateTo'),
+               value: 0, additional: 0, flat: false, item_code: ''};
+  (BFIELDS[m] || []).forEach(([k, label, kind]) => {
+    const el = $('bf_' + k);
+    if (!el) return;
+    row[k] = kind === 'check' ? el.checked : kind === 'item' ? el.value.trim().toUpperCase() : Math.max(0, parseFloat(el.value) || 0);
+  });
+  if (row.qty_to && row.qty_to < row.qty_from) return say('Qty Between: the second figure is below the first.', true);
+  if (row.price_to && row.price_to < row.price_from) return say(`${bv ? 'Bill Value Between' : 'Rate Between'}: the second figure is below the first.`, true);
+  if (!(row.value > 0)) return say(`${BFIELDS[m][m === 'discounted_item' ? 1 : 0][1]}: enter a figure above 0.`, true);
+  if ((m === 'discount_pct' || m === 'discounted_item') && (row.value > 100 || row.additional > 100))
+    return say('A discount cannot be more than 100%.', true);
+  if ((m === 'free_item' || m === 'combo') && row.qty_from < 1)
+    return say(m === 'combo' ? 'Combo Offer: set Qty Between (from) to the pieces in one combo.'
+                             : 'Discount In Qty: set Qty Between (from) to how many must be bought.', true);
+  if (m === 'discounted_item' && !row.item_code) return say('Discounted Item: choose the item.', true);
+  if (editing !== null) scheme.benefits[editing] = row; else scheme.benefits.push(row);
+  const was = editing;
+  dirty = true; say(was !== null ? `Benefit ${was + 1} updated.` : '');
+  clearBenefitForm();
+  paintBenefits();
+};
+
+// ---- New / Save ------------------------------------------------------------------
+$('btnNew').onclick = () => {
+  if (dirty && !confirm('Discard the changes to this scheme?')) return;
+  load(blank()); say('New scheme.');
+  $('sName').focus();
+};
+$('btnSave').onclick = async () => {
+  const body = gather();
+  try {
+    const r = await fetch(API.save, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    const j = await r.json();
+    if (!j.ok) return say(j.error || 'Could not save.', true);
+    load(j.scheme);
+    say(`Saved — ${j.scheme.code} · ${j.scheme.name}.`);
+  } catch (err){ say('Could not save: ' + err, true); }
+};
+
+// ---- Search --------------------------------------------------------------------------
+const searchModal = new bootstrap.Modal($('searchModal'));
+async function runSearch(){
+  const j = await (await fetch(`${API.list}?q=${encodeURIComponent($('sq').value.trim())}`)).json();
+  const badge = (s) => ({active: 'text-bg-success', scheduled: 'text-bg-warning'}[s] || 'text-bg-secondary');
+  $('sqBody').innerHTML = j.schemes.map((s) => `<tr>
+    <td class="font-monospace small">${esc(s.code)}</td><td>${esc(s.name)}</td>
+    <td class="small">${esc(s.applicable)}</td><td class="small text-nowrap">${esc(s.valid)}</td>
+    <td class="small">${esc(s.describe)}</td><td class="text-end">${s.bills}</td>
+    <td><span class="badge ${badge(s.status)}">${esc(s.status)}</span></td>
+    <td class="text-nowrap">
+      <button class="btn btn-brand btn-sm py-0 sq-open" data-id="${s.id}">Open</button>
+      <button class="btn btn-outline-secondary btn-sm py-0 sq-tog" data-id="${s.id}" title="Switch on / off">${s.status === 'inactive' ? 'On' : 'Off'}</button>
+      <button class="btn btn-outline-danger btn-sm py-0 sq-del" data-id="${s.id}" title="Delete"><i class="bi bi-trash"></i></button>
+    </td></tr>`).join('') || '<tr><td colspan="8" class="text-muted small text-center py-3">No schemes yet.</td></tr>';
+  $('sqLegacy').innerHTML = j.legacy.map((p) => `<tr>
+    <td class="font-monospace small">${esc(p.code)}</td><td>${esc(p.name)}</td><td class="small">${esc(p.describe)}</td>
+    <td><span class="badge ${badge(p.status)}">${esc(p.status)}</span></td>
+    <td><a class="btn btn-outline-secondary btn-sm py-0" href="${p.url}">Open</a></td></tr>`).join('')
+    || '<tr><td class="text-muted small">None.</td></tr>';
+  document.querySelectorAll('.sq-open').forEach((b) => b.onclick = async () => {
+    if (dirty && !confirm('Discard the changes to this scheme?')) return;
+    load(await (await fetch(API.one(b.dataset.id))).json());
+    searchModal.hide(); say(`Opened ${scheme.code}.`);
+  });
+  document.querySelectorAll('.sq-tog').forEach((b) => b.onclick = async () => {
+    await fetch(API.toggle(b.dataset.id), {method: 'POST'}); runSearch();
+  });
+  document.querySelectorAll('.sq-del').forEach((b) => b.onclick = async () => {
+    if (!confirm('Delete this scheme?')) return;
+    const j = await (await fetch(API.del(b.dataset.id), {method: 'POST'})).json();
+    if (j.message) alert(j.message);
+    if (String(scheme.id) === b.dataset.id && j.deleted) load(blank());
+    runSearch();
+  });
+}
+let sqTimer = null;
+$('sq').oninput = () => { clearTimeout(sqTimer); sqTimer = setTimeout(runSearch, 250); };
+$('btnSearch').onclick = () => { searchModal.show(); runSearch(); setTimeout(() => $('sq').focus(), 300); };
+
+// ---- Simulate ------------------------------------------------------------------------
+const simModal = new bootstrap.Modal($('simModal'));
+function simRow(code = '', qty = 1){
+  $('simBody').insertAdjacentHTML('beforeend', `<tr>
+    <td><input class="form-control form-control-sm sim-code" value="${esc(code)}" placeholder="scan or type"></td>
+    <td><input type="number" min="1" step="1" class="form-control form-control-sm sim-qty" value="${qty}"></td>
+    <td><input type="number" min="0" max="100" step="1" class="form-control form-control-sm sim-man" value="0"></td>
+    <td class="small sim-name"></td><td class="text-end small sim-price"></td><td class="text-end small sim-pct"></td>
+    <td class="text-end small sim-amt"></td>
+    <td><button class="btn btn-outline-danger btn-sm py-0 sim-del" title="Remove" aria-label="Remove"><i class="bi bi-x"></i></button></td></tr>`);
+  const tr = $('simBody').lastElementChild;
+  tr.querySelector('.sim-del').onclick = () => tr.remove();
+  tr.querySelector('.sim-code').focus();
+}
+$('simAddRow').onclick = () => simRow();
+$('btnSim').onclick = () => { if (!$('simBody').children.length) simRow(); simModal.show(); };
+$('simRun').onclick = async () => {
+  const rows = [...$('simBody').children];
+  const items = rows.map((tr) => ({code: tr.querySelector('.sim-code').value.trim(),
+                                   qty: tr.querySelector('.sim-qty').value, manual_pct: tr.querySelector('.sim-man').value}))
+    .filter((x) => x.code);
+  const r = await fetch(API.simulate, {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({scheme: gather(), items, agreement_code: $('simAgreement').value})});
+  const j = await r.json();
+  if (!j.ok){ $('simOut').innerHTML = `<span style="color:#BE123C">${esc(j.error)}</span>`; return; }
+  let k = 0;
+  rows.forEach((tr) => {
+    if (!tr.querySelector('.sim-code').value.trim()) return;
+    const l = j.lines[k++] || {};
+    tr.querySelector('.sim-name').innerHTML = l.error ? `<span style="color:#BE123C">${esc(l.error)}</span>`
+      : `${esc(l.name)}${l.eligible ? '' : ' <span class="badge text-bg-light border">not in scheme</span>'}`;
+    tr.querySelector('.sim-price').textContent = l.price != null ? '₹' + l.price.toFixed(2) : '';
+    tr.querySelector('.sim-pct').textContent = l.pct ? (+l.pct.toFixed(2)) + '%' : '';
+    tr.querySelector('.sim-amt').textContent = l.amount != null ? '₹' + l.amount.toFixed(2) : '';
+  });
+  $('simOut').innerHTML = j.applies
+    ? `<b style="color:var(--brand-dark)">The scheme applies.</b> Bill ₹${j.bill.toFixed(2)}`
+      + (j.saving ? ` · saves <b>₹${j.saving.toFixed(2)}</b>` : '') + (j.coupon ? ` · coupon <b>₹${j.coupon.toFixed(2)}</b>` : '') + (j.points ? ` · <b>${j.points}</b> reward points` : '')
+    : `<b style="color:#B45309">The scheme does not apply to this bill.</b> Bill ₹${j.bill.toFixed(2)} — check the filters and the benefit's qty / price ranges.`;
+};
+
+load(blank());
+window.addEventListener('beforeunload', (e) => { if (dirty){ e.preventDefault(); e.returnValue = ''; } });
+</script>
+{% endblock %}
