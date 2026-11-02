@@ -1,12 +1,17 @@
+# The three compiled packages below (pydantic, pillow, rapidfuzz) are pinned to
+# the same versions as the deployment requirements.txt at the project root:
+# these publish ready-built wheels for Python 3.14, which Vercel's builder
+# selects. The older pins had none, so the build tried to compile pydantic-core
+# from Rust and failed ("PyO3's maximum supported version (3.13)").
 fastapi==0.115.5
 uvicorn[standard]==0.32.1
 sqlalchemy==2.0.36
-pydantic==2.10.3
+pydantic==2.13.4
 python-multipart==0.0.19
-pillow==11.0.0
+pillow==12.3.0
 pytesseract==0.3.13
 pdf2image==1.17.0
-rapidfuzz==3.10.1
+rapidfuzz==3.14.5
 anthropic==0.40.0
 python-barcode==0.15.1
 segno==1.6.1
