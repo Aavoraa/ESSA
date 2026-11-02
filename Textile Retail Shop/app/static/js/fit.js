@@ -5,9 +5,8 @@
 
    1. A long table shows as many rows as there is room for, with a slim pager
       under it (Previous · Page 2 of 5 · Next).
-   2. If the page is still taller than the window, its sections are flowed into
-      pages that each fit, and a bar at the foot turns between them. The page
-      header stays on every page.
+   2. Sections are NOT split into pages any more (that was asked to stop): a
+      form or screen shows everything at once. flowSections() is kept but unused.
 
    Nothing is removed and nothing reloads: rows and sections are only hidden on
    screen (class fit-hide), so a form still submits every field, a search still
@@ -221,8 +220,8 @@
       pagers.forEach(function (p) { p.size = p.rows.length; p.page = 0; render(p); });
       fitBoxedTables();
       if (over() > 0) fitTables();
-      if (over() > 0) flowSections();
-      if (over() > 0) fitTables();       // a table alone on its page, still too tall
+      // Sections are no longer split into pages: every screen shows all of its
+      // fields at once and scrolls if it must. Only long tables are paged.
     } finally { busy = false; }
   }
 

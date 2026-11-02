@@ -9,8 +9,11 @@ phone app at /m and the shop mounted at /pos are all assembled in
 backend/app/main.py exactly as they are when the same server runs on the
 warehouse PC. One code path, two ways of being started.
 
-Everything under /api, /m and /pos is routed here by the rewrites in
-vercel.json; the desktop bundle is served by Vercel itself as static files.
+This module is the `app` service in vercel.json. Everything under /api, /m and
+/pos is routed to it by the top-level rewrites there; every other path goes to
+the `frontend` service, the desktop bundle built from frontend/ and served as
+static files. The two never call each other server-side — the browser talks to
+both on the one domain — so no service bindings are needed.
 """
 import os
 import sys

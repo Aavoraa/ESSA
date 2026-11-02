@@ -351,6 +351,7 @@ export const api = {
   exportUrl: (id, format) => `/api/documents/${id}/export?format=${format}`,
   listSuppliers: () => fetch('/api/suppliers').then(J),
   getSupplier: (id) => fetch(`/api/suppliers/${id}`).then(J),
+  supplierAutofill: (name) => fetch('/api/suppliers/autofill' + qs({ name })).then(J),
 
   // purchases / GRN
   listPurchases: () => fetch('/api/purchases').then(J),
@@ -794,6 +795,8 @@ export const api = {
   poOpen: (supplier_name) => fetch('/api/purchase-orders/open'
     + qs(supplier_name ? { supplier_name } : {})).then(J),
   poGet: (id) => fetch(`/api/purchase-orders/${id}`).then(J),
+  poSupplierDefaults: (name) => fetch('/api/purchase-orders/supplier-defaults'
+    + qs({ name })).then(J),
   poStatuses: () => fetch('/api/purchase-orders/statuses').then(J),
   poCreate: (body) => fetch('/api/purchase-orders', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },

@@ -2,7 +2,7 @@
    Essa — design tokens
    --------------------------------------------------------------------------
    The Enterprise ERP design: a dark forest-green chrome (#0B3D2E) over a light,
-   faintly green-grey page (#F7F9F7), white cards edged in #DCE5DF, and one
+   faintly green-grey page (#F8FAFC), white cards edged in #E2E8F0, and one
    accent green (#2F8F68) that marks where you are — the open module, the focus
    ring, the icon chips. The primary action is the chrome green itself with a
    white label (11.9:1), so "the thing to press" and "the frame you are in" are
@@ -29,17 +29,17 @@
   --accent-700: #257353;
 
   /* --- neutrals --- */
-  --bg: #F7F9F7;
+  --bg: #F8FAFC;
   --panel: #FFFFFF;
-  --panel-2: #F7F9F7;     /* card header bands, table heads */
-  --panel-3: #EEF3F0;
-  --line: #DCE5DF;        /* dividers and card edges */
+  --panel-2: #F8FAFC;     /* card header bands, table heads */
+  --panel-3: #F1F5F9;
+  --line: #E2E8F0;        /* dividers and card edges */
   /* Controls get a half-step firmer edge than the dividers, so a text box on a
      dense form is still findable at a glance; focus then goes green. */
-  --line-strong: #C4D1C9;
-  --text: #17221D;
-  --text-2: #3E4A44;
-  --muted: #647069;       /* 4.7:1 on the page, 5.0:1 on white */
+  --line-strong: #CBD5E1;
+  --text: #0F172A;
+  --text-2: #334155;
+  --muted: #64748B;       /* 4.7:1 on the page, 5.0:1 on white */
 
   /* --- dark chrome ---
      The header is flat forest green. White on it is 11.9:1, #E7F4EC 10.6:1. */
@@ -77,8 +77,8 @@
   --viz-4: #4A3AA7;   /* violet */
   --viz-5: #E34948;   /* red    */
   --viz-other: #8A958F;   /* the folded tail — neutral, never a categorical hue */
-  --viz-grid: #E6ECE8;    /* hairline, one step off the surface */
-  --viz-axis: #DCE5DF;
+  --viz-grid: #EEF2F6;    /* hairline, one step off the surface */
+  --viz-axis: #E2E8F0;
   /* Ordinal ramp for ordered bands (payables ageing). One hue getting darker —
      the design's greens, validated: monotone lightness, every gap ≥0.06, light
      end 2.46:1 on white, hue spread 6°. */
@@ -156,10 +156,10 @@
   --gutter: 24px;
 
   --radius: 10px; --radius-sm: 8px; --radius-lg: 12px;
-  --shadow-1: 0 1px 2px rgba(0,0,0,.03);
-  --shadow-2: 0 4px 12px rgba(0,0,0,.08);
-  --shadow-3: 0 10px 25px -5px rgba(0,0,0,.10), 0 8px 10px -6px rgba(0,0,0,.05);
-  --focus: 0 0 0 1px var(--accent);
+  --shadow-1: 0 1px 2px rgba(15,23,42,.05);
+  --shadow-2: 0 6px 16px -4px rgba(15,23,42,.10);
+  --shadow-3: 0 20px 40px -12px rgba(15,23,42,.22), 0 8px 16px -8px rgba(15,23,42,.08);
+  --focus: 0 0 0 3px rgba(47,143,104,.18);
 
   font-family: var(--font);
   color-scheme: light;
@@ -2706,3 +2706,281 @@ button.navrail-flyhead:hover .arr, button.navrail-flyhead:focus-visible .arr { o
   border-radius: 999px; background: var(--accent); color: #fff; vertical-align: middle; }
 .catcard .blurb { color: var(--muted); font-size: var(--fs-sm); line-height: 1.4; }
 .catcard .go { color: var(--accent); font-size: 18px; }
+
+/* ==========================================================================
+   ESSA design system — SaaS layer
+   --------------------------------------------------------------------------
+   Neutral slate surfaces, one green accent. The dark green is kept for the side
+   rail and the primary action only; everything else is white or slate, so the
+   eye goes to the work and to the one thing to press. Every rule below is a
+   shared component (top bar, page head, button, field, table, card, badge,
+   modal, toast, empty state) — screens inherit it, none restyle it locally.
+
+   Scale:   radius 6 / 8 / 12 · control height 34 · spacing 4-8-12-16-24
+   Type:    page title 20/700 · section 13/600 · body 13 · meta 12 · label 12/600
+   ========================================================================== */
+
+/* ---- top bar: white, quiet, the rail carries the colour ---- */
+.topbar { background: var(--panel); color: var(--text); border-bottom: 1px solid var(--line);
+  box-shadow: none; height: 56px;
+  --on-chrome: var(--text); --on-chrome-2: var(--text-2); --on-chrome-line: var(--line);
+  --chrome: var(--panel); --chrome-deep: var(--panel-2); --chrome-active: var(--panel-3); }
+.topbar :focus-visible { outline-color: var(--accent); }
+.th-logo { background: var(--brand); color: #fff; border-radius: 8px; box-shadow: none; }
+.brand { color: var(--text); }
+.brand span { color: var(--muted); font-weight: 500; }
+.brand small { color: var(--muted); }
+.th-ctl { background: var(--panel); color: var(--text-2); border: 1px solid var(--line); }
+.th-ctl:hover { background: var(--panel-2); border-color: var(--line-strong); }
+.th-search { background: var(--panel-2); }
+.th-search .ph { color: var(--muted); }
+.th-search kbd { background: var(--panel); color: var(--muted); border: 1px solid var(--line); }
+.topbar .pill { background: var(--panel); border-color: var(--line); color: var(--text-2); }
+.topbar .pill.on { background: var(--brand-50); border-color: var(--brand-200); color: var(--brand); }
+.topbar button.pill:hover { background: var(--panel-2); }
+.th-div { background: var(--line); }
+.th-user:hover { background: var(--panel-2); }
+.th-name { color: var(--muted); }
+.th-icon { color: var(--muted); }
+.th-icon:hover { color: var(--text); background: var(--panel-2); }
+.th-menu { color: var(--text-2); }
+
+/* ---- context bar and open tabs: one light band ---- */
+.ctxbar { background: var(--panel); border-bottom: 1px solid var(--line); box-shadow: none; }
+.wsseg { background: var(--panel-3); border: none; }
+.wsseg button { border-radius: 6px; color: var(--text-2); }
+.wsseg button.on { background: var(--panel); color: var(--brand); box-shadow: 0 1px 2px rgba(15,23,42,.12); }
+.ctx-pick { background: var(--panel-2); border-color: var(--line); }
+.ctx-pick select { color: var(--text); }
+.tabstrip { background: var(--bg); }
+.opentab:hover { background: var(--panel-3); }
+.opentab.on { background: var(--panel); border-color: var(--line); color: var(--text); box-shadow: none; }
+
+/* ---- page head: white band, clear title, actions on the right ---- */
+.pagehead { background: var(--panel); border-bottom: 1px solid var(--line); }
+.pagehead h2 { font-size: 20px; font-weight: 700; letter-spacing: -.02em; color: var(--text); }
+.pagehead .pagesub { color: var(--muted); }
+
+/* ---- buttons: primary (green), secondary (white), danger (rose) ---- */
+.btn { min-height: 34px; padding: 7px 14px; border-radius: 8px; font-weight: 500;
+  background: var(--panel); border: 1px solid var(--line-strong); color: var(--text);
+  box-shadow: 0 1px 1px rgba(15,23,42,.04);
+  transition: background .12s, border-color .12s, color .12s, box-shadow .12s; }
+.btn:hover { background: var(--panel-2); border-color: #94A3B8; }
+.btn:focus-visible { box-shadow: var(--focus); outline: none; }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.btn.primary { background: var(--brand); border-color: var(--brand); color: #fff;
+  box-shadow: 0 1px 2px rgba(11,61,46,.25); }
+.btn.primary:hover { background: var(--brand-800); border-color: var(--brand-800); transform: none; }
+.btn.danger { color: #BE123C; border-color: #FECDD3; }
+.btn.danger:hover { background: #FFF1F2; color: #9F1239; border-color: #FDA4AF; }
+
+/* ---- fields: 34px controls, slate edge, green focus ring ---- */
+:where(input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=file]):not([type=color]):not([type=button]):not([type=submit]), select, textarea) {
+  border-color: var(--line-strong); border-radius: 8px; }
+:where(input, select, textarea):hover:not(:focus):not(:disabled) { border-color: #94A3B8; }
+.field label { font-size: 12px; font-weight: 600; color: var(--text-2); }
+.field input, .field select, .field textarea { min-height: 34px; border-color: var(--line-strong); border-radius: 8px; }
+.field input:focus, .field select:focus, .field textarea:focus { border-color: var(--accent); box-shadow: var(--focus); }
+
+/* ---- cards and sections ---- */
+.section, .card, .vizcard, .dtile, .stat, .modcard { border-color: var(--line); border-radius: 12px;
+  box-shadow: var(--shadow-1); }
+.section > .panelhead:first-child, .section > h4:first-child { background: var(--panel);
+  border-bottom-color: var(--line); }
+.section h4 { color: var(--text); font-weight: 600; letter-spacing: .02em; }
+.dtile:hover, .modcard:hover { box-shadow: var(--shadow-2); }
+.dtile .lbl, .stat .lbl { color: var(--muted); letter-spacing: .04em; }
+.dtile .val, .stat .val { color: var(--text); }
+
+/* ---- tables: slate head, hairline rows, quiet hover ---- */
+table.items th { background: var(--panel-2); color: var(--muted); font-weight: 600; font-size: 11px;
+  letter-spacing: .05em; border-bottom: 1px solid var(--line); }
+table.items td { border-bottom-color: #EEF2F6; }
+table.items tbody tr:hover { background: #F8FAFC; }
+table.items tbody tr.sel, table.items tbody tr.on { background: var(--brand-50); }
+.tablewrap { border-radius: 10px; }
+.pager { color: var(--muted); }
+
+/* ---- status badges: pill, tinted, never shouting ---- */
+.badge { border-radius: 999px; padding: 2px 8px; font-weight: 600; letter-spacing: .02em; }
+
+/* ---- modals, toasts, empty states ---- */
+.modal-back { background: rgba(15,23,42,.45); backdrop-filter: blur(2px); }
+.modal { border-radius: 14px; box-shadow: var(--shadow-3); border-color: var(--line); }
+.modal-head { border-bottom: 1px solid var(--line); }
+.modal-foot { border-top: 1px solid var(--line); background: var(--panel-2); border-radius: 0 0 14px 14px; }
+.toast { border-radius: 10px; box-shadow: var(--shadow-3); }
+.empty { color: var(--muted); }
+
+/* ---- side rail: the one dark band ---- */
+.navrail { background: var(--brand); }
+.navrail-btn { border-bottom-color: rgba(255,255,255,.08); }
+.navrail-btn.cur { background: rgba(255,255,255,.14); box-shadow: inset 3px 0 0 #6EE7B7; }
+.navrail-fly { background: #0A3328; }
+.navrail-flyhead { background: var(--accent); }
+
+/* ---------- Invoice line items: one header row, quiet cells, pinned edges ----------
+   The fill-down row is gone from under the headings; each fillable column has a
+   small ⇣ on its heading that opens one box (.fillpop). Cells read as plain text
+   until hovered or focused. # and Description stay put on the left and Amount on
+   the right while the columns between them scroll. */
+table.items.lineitems { table-layout: fixed; width: 100%; min-width: 1560px; }
+table.items.lineitems th { white-space: normal; padding: 6px 3px; vertical-align: middle;
+  font-size: 10px; letter-spacing: 0; line-height: 1.25; overflow-wrap: normal; word-break: normal; }
+/* One tidy header row: the label takes the cell (up to two lines, centred
+   vertically, never broken mid-word) and the ⇣ sits beside it on the right,
+   always on the same line — never dropped underneath. */
+table.items.lineitems thead th { height: 34px; white-space: nowrap; }
+table.items.lineitems .thlab { flex-wrap: nowrap; align-items: center; gap: 2px; width: 100%; }
+table.items.lineitems .thtxt { flex: 0 1 auto; min-width: 0; line-height: 1.2;
+  text-transform: none; font-size: 11px; letter-spacing: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Every heading reads from the left, so a two-line label is a neat block
+   rather than a ragged right edge; the ⇣ is pushed to the far right of the
+   cell. The ƒ is a small superscript glued to the last word — it can never
+   wrap onto a line of its own. */
+table.items.lineitems th.num .thlab { justify-content: flex-start; }
+table.items.lineitems th.num .thtxt { text-align: left; }
+table.items.lineitems .thcalc { font-size: 9px; font-weight: 600; margin-left: 1px;
+  vertical-align: super; line-height: 0; white-space: nowrap; }
+table.items.lineitems .fillhd { flex: none; align-self: center; margin-left: 0;
+  width: 13px; height: 15px; font-size: 10px; }
+table.items.lineitems td { padding: 3px 3px; height: 36px; overflow: hidden; }
+table.items.lineitems th.num { text-align: right; }
+table.items.lineitems th.num .thlab { justify-content: flex-end; }
+table.items.lineitems .thlab { display: inline-flex; align-items: center; gap: 4px; width: 100%; }
+table.items.lineitems .fillhd { flex: none; width: 18px; height: 18px; padding: 0; border: 1px solid transparent;
+  border-radius: 5px; background: transparent; color: var(--muted); font-size: 12px; line-height: 1;
+  cursor: pointer; opacity: 1; transition: opacity .12s, background .12s, color .12s; }
+table.items.lineitems th:hover .fillhd, table.items.lineitems .fillhd:focus-visible { opacity: 1; }
+table.items.lineitems .fillhd:hover, table.items.lineitems .fillhd.on {
+  opacity: 1; background: var(--brand-50); color: var(--brand); border-color: var(--brand-200); }
+table.items.lineitems th.calc { color: var(--brand); }
+
+/* cells: every box shown as a box, always — the same look hover used to give */
+table.items.lineitems td input { height: 28px; padding: 3px 5px; min-width: 0; max-width: none !important; border: 1px solid var(--line);
+  border-radius: 6px; background: var(--panel); color: var(--text); font-size: var(--fs-sm); }
+table.items.lineitems td.num input { text-align: right; font-variant-numeric: tabular-nums; }
+table.items.lineitems td.calc input { background: var(--panel); border-color: var(--line); color: var(--text-2); }
+table.items.lineitems tbody tr:hover td input { border-color: var(--line); background: var(--panel); }
+table.items.lineitems td input:hover { border-color: var(--line-strong) !important; }
+table.items.lineitems td input:focus { outline: none; border-color: var(--brand) !important;
+  background: var(--panel); box-shadow: var(--focus, 0 0 0 3px rgba(47,143,104,.18)); }
+table.items.lineitems td.stick-desc input { font-weight: 500; color: var(--text); }
+table.items.lineitems td.stick-amt input { font-weight: 600; color: var(--text); }
+table.items.lineitems .rowdel { width: 26px; height: 26px; border-radius: 6px; font-size: 16px;
+  line-height: 1; opacity: 1; }
+table.items.lineitems tbody tr:hover .rowdel, table.items.lineitems .rowdel:focus-visible { opacity: 1; }
+table.items.lineitems .runbtn { opacity: 1; }
+table.items.lineitems tbody tr:hover .runbtn, table.items.lineitems .runbtn.on,
+table.items.lineitems .runbtn.fold { opacity: 1; }
+
+/* pinned columns */
+table.items.lineitems .stick-no, table.items.lineitems .stick-desc,
+table.items.lineitems .stick-amt, table.items.lineitems .stick-del {
+  position: sticky; z-index: 1; background: var(--panel); }
+table.items.lineitems th.stick-no, table.items.lineitems th.stick-desc,
+table.items.lineitems th.stick-amt, table.items.lineitems th.stick-del { z-index: 2; background: var(--panel-2); }
+table.items.lineitems .stick-no { left: 0; }
+table.items.lineitems td.stick-no { background: var(--panel-2); }
+table.items.lineitems .stick-desc { left: 34px;
+  box-shadow: inset -1px 0 0 var(--line), 6px 0 8px -6px rgba(15,23,42,.12); }
+table.items.lineitems .stick-del { right: 0; text-align: center; padding-left: 0; padding-right: 0; }
+table.items.lineitems .stick-amt { right: 28px;
+  box-shadow: inset 1px 0 0 var(--line), -6px 0 8px -6px rgba(15,23,42,.12); }
+table.items.lineitems tbody tr:hover td { background: #F8FAFC; }
+table.items.lineitems tbody tr:hover td.stick-no { background: #F1F5F9; }
+table.items.lineitems tr.foldrow td { background: var(--panel-2); }
+.section > .tablewrap > table.items.lineitems th.stick-no,
+.section > .tablewrap > table.items.lineitems td.stick-no { padding-left: 4px; padding-right: 6px; }
+.section > .tablewrap > table.items.lineitems th:last-child,
+.section > .tablewrap > table.items.lineitems td:last-child { padding-right: 0; }
+table.items.lineitems td.rowno { padding-right: 6px; }
+table.items.lineitems .rowdel { width: 22px; height: 22px; font-size: 14px; }
+table.items.lineitems .sizecell input { min-width: 0; }
+table.items.lineitems .fillhd { width: 15px; height: 15px; font-size: 10px; }
+
+/* the one fill-down box, opened from a heading */
+.fillpop { position: fixed; z-index: 60; width: 240px; padding: 10px 12px 12px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(15,23,42,.14), 0 2px 6px rgba(15,23,42,.06); }
+.fillpop-h { font-size: var(--fs-xs); color: var(--muted); margin-bottom: 8px; }
+.fillpop-h b { color: var(--text); font-weight: 600; }
+.fillpop .fillbox { gap: 6px; }
+.fillpop .fillbox input { flex: 1 1 auto; width: auto; height: 32px; padding: 4px 8px; font-size: var(--fs-sm);
+  border-radius: 7px; border: 1px solid var(--line-strong); }
+.fillpop .fillbox input:focus { outline: none; border-color: var(--brand);
+  box-shadow: 0 0 0 3px rgba(47,143,104,.18); }
+.fillpop .fillbox .btn.fill-go { width: auto; height: 32px; padding: 0 12px; font-size: var(--fs-sm);
+  background: var(--brand); border-color: var(--brand); color: #fff; }
+.fillpop .fillbox .btn.fill-go:disabled { background: var(--panel-3); border-color: var(--line); color: var(--muted); }
+
+/* ==========================================================================
+   ESSA table format — the invoice Line Items look, on every table
+   --------------------------------------------------------------------------
+   One header row of short, title-case labels in 11px on a light slate band;
+   rows ~36px; editable cells always drawn as white boxes with a hairline edge
+   (green ring while typing); figures right-aligned; the row's × always shown.
+   Registers (.reg) keep wrapping headings, since their columns are fixed.
+   ========================================================================== */
+table.items thead th, table.grid thead th, .lrcands-tbl th {
+  background: var(--panel-2); color: var(--text-2); font-size: 11px; font-weight: 600;
+  text-transform: none; letter-spacing: 0; line-height: 1.2; padding: 8px 8px;
+  height: 34px; vertical-align: middle; border-bottom: 1px solid var(--line); }
+table.items:not(.reg) thead th, table.grid thead th { white-space: nowrap; }
+table.items th.calc { color: var(--brand); }
+table.items th.num, table.grid th.num { text-align: right; }
+table.items td, table.grid td, .lrcands-tbl td { padding: 4px 8px; height: 36px; vertical-align: middle;
+  border-bottom: 1px solid #EEF2F6; font-size: var(--fs-sm); }
+table.items.reg td { vertical-align: top; padding-top: 8px; padding-bottom: 8px; }
+table.grid { width: 100%; border-collapse: collapse; }
+table.items td input:not([type=checkbox]):not([type=radio]):not([type=file]),
+table.items td select, table.grid td input:not([type=checkbox]):not([type=radio]), table.grid td select {
+  height: 28px; padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--panel); color: var(--text); font-size: var(--fs-sm); box-sizing: border-box; }
+table.items td input:not([type=checkbox]):not([type=radio]):hover, table.items td select:hover,
+table.grid td input:hover, table.grid td select:hover { border-color: var(--line-strong); }
+table.items td input:not([type=checkbox]):not([type=radio]):focus, table.items td select:focus,
+table.grid td input:focus, table.grid td select:focus {
+  outline: none; border-color: var(--brand); background: var(--panel);
+  box-shadow: 0 0 0 3px rgba(47,143,104,.18); }
+table.items td.calc input { background: var(--panel); border-color: var(--line); }
+table.items td.num input, table.grid td.num input { text-align: right; font-variant-numeric: tabular-nums; }
+table.items .num, table.grid .num { font-variant-numeric: tabular-nums; }
+table.items .rowdel, table.grid .rowdel { opacity: 1; }
+table.items tbody tr:hover > td { background: #F8FAFC; }
+
+/* ==========================================================================
+   ESSA form fields — the same look as the table format above
+   --------------------------------------------------------------------------
+   11px title-case labels in slate; boxes 30px high with a hairline edge, a
+   6px corner and the green ring while typing; every box in a grid the same
+   width (a date no longer shrinks to a stub beside full-width text boxes);
+   tighter rows; a section's sub-heading gets room above it.
+   ========================================================================== */
+.grid { gap: 10px 14px; }
+.field label, .editor .field label { font-size: 11px; font-weight: 600; color: var(--text-2);
+  text-transform: none; letter-spacing: 0; margin-bottom: 4px; line-height: 1.2;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.field input:not([type=checkbox]):not([type=radio]):not([type=file]), .field select,
+.editor .field input:not([type=checkbox]):not([type=radio]):not([type=file]), .editor .field select {
+  height: 30px; min-height: 30px; padding: 4px 8px; border: 1px solid var(--line);
+  border-radius: 6px; background: var(--panel); color: var(--text); font-size: var(--fs-sm);
+  box-shadow: none; }
+.field textarea { min-height: 30px; padding: 5px 8px; border: 1px solid var(--line);
+  border-radius: 6px; font-size: var(--fs-sm); box-shadow: none; }
+.field input:hover, .field select:hover, .field textarea:hover { border-color: var(--line-strong); }
+.field input:focus, .field select:focus, .field textarea:focus {
+  outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px rgba(47,143,104,.18); }
+.field input[type=number], .field input[type=tel], .field .datebox { max-width: none; }
+.field .datebox { width: 100%; }
+.field .datebox .datetext { height: 30px; min-height: 30px; }
+.field.calc input, .field.calc input:focus { background: var(--panel); border-style: solid; }
+.field.flag input, .field.flag select { border-color: var(--warn); background: var(--warn-bg); }
+.field.fromlr input { border-color: var(--info); background: var(--info-bg); }
+.section h5, .editor .section h5 { margin: 14px 0 8px; }
+.section h5:first-of-type, .editor .section h5:first-of-type { margin-top: 0; }
+/* a sub-heading that starts a later block of the same panel still needs the
+   gap above it — the :first-of-type reset only belongs to the panel's first */
+.section .fitblock ~ .fitblock h5:first-of-type { margin-top: 14px; }

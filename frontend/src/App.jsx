@@ -72,8 +72,9 @@ function useReshow(active, reload) {
 // how many dashboards (per warehouse) stay open at once
 const STASH_MAX = 8
 
-// "Fit": as many rows as the window has room for, so a list pages instead of
-// scrolling. It is the default page size; the fixed sizes are still offered.
+// "Fit": as many rows as the window has room for. Offered, but no longer the
+// default — screens now show all their panels and scroll, so a list opens at its
+// own page size (the `initial` each screen passes) instead.
 const PAGE_FIT = -1
 
 // How many rows fit, read off the screen as it is drawn. `anchor` is a marker
@@ -109,7 +110,7 @@ function fitRows(anchor, cur, total) {
 
 function usePaged(rows, initial = 50) {
   const [page, setPage] = useState(1)
-  const [size, setSize] = useState(PAGE_FIT)
+  const [size, setSize] = useState(initial)
   const [fitN, setFitN] = useState(Math.min(initial, 12))
   const [tick, setTick] = useState(0)
   const anchor = useRef(null)
@@ -211,7 +212,24 @@ function scrollBox(el) {
   }
   return document.documentElement
 }
+// Every screen now shows all of its panels at once — splitting a form into
+// "1 · 2 Taxes" pages was asked to stop, everywhere. Same markup as before
+// (.fitpages / .fitblock), so layouts styled on it are unchanged; nothing is
+// hidden and no page bar is drawn. The paging version is kept below as
+// FitPagesSplit, unused, should a screen ever want it back.
 function FitPages({ children, keep = 0 }) {
+  const blocks = React.Children.toArray(children).filter(Boolean)
+  return (
+    <>
+      {blocks.slice(0, keep)}
+      <div className="fitpages">
+        {blocks.slice(keep).map((b, i) => <div key={i} className="fitblock">{b}</div>)}
+      </div>
+    </>
+  )
+}
+// eslint-disable-next-line no-unused-vars
+function FitPagesSplit({ children, keep = 0 }) {
   const blocks = React.Children.toArray(children).filter(Boolean)
   const head = blocks.slice(0, keep)
   const rest = blocks.slice(keep)
@@ -769,7 +787,7 @@ function DateField({ label, value, onChange, style, width, required, title, inli
 // `calc` marks a field the arithmetic keeps in step — tinted, with an ƒ and a
 // tooltip saying what it comes from. It stays editable: typing into it makes it
 // the input and its counterpart moves instead.
-function Field({ label, value, onChange, flagged, note, wide, source, date, calc }) {
+function Field({ label, value, onChange, flagged, note, wide, source, date, calc, list }) {
   return (
     <div className={'field' + (flagged ? ' flag' : '') + (source && !flagged ? ' fromlr' : '')
       + (calc ? ' calc' : '')}
@@ -778,7 +796,10 @@ function Field({ label, value, onChange, flagged, note, wide, source, date, calc
       {date
         ? <DateField inline value={value} onChange={onChange} />
         : <input value={value ?? ''} title={calc || undefined}
+            list={list ? 'fld-list-' + label.replace(/\W+/g, '-').toLowerCase() : undefined}
             onChange={(e) => onChange(e.target.value)} />}
+      {list && <datalist id={'fld-list-' + label.replace(/\W+/g, '-').toLowerCase()}>
+        {list.map((c) => <option key={c} value={c} />)}</datalist>}
       {flagged && <div className="flagnote">⚠ needs review{note ? ' · ' + note : ''}</div>}
       {!flagged && note && <div className="srcnote">{note}</div>}
       {source && !flagged && <div className="srcnote">🔗 from {source}</div>}
@@ -1344,6 +1365,21 @@ const groupItems = (items) => {
   }
   return out
 }
+//: The width each line-item column is drawn at, in px. They add up to about
+//: 1,550 — one screen on a full-HD monitor — and stretch in proportion on wider.
+const ITEM_COLW = {
+  description: 143, category: 71, brand: 63, design: 64, size: 78,
+  style: 58, material: 64, pattern: 61, sleeve: 57, product_type: 56,
+  hsn: 62, qty: 46, uom: 52, mrp: 62, discount_pct: 66, rate: 62,
+  buffer_pct: 72, mrp_buffer_pct: 82, sale_discount_pct: 90, sale_price: 77,
+  taxable_value: 72, amount: 80,
+}
+//: Shorter headings for the narrow price columns, so each fits its column on at
+//: most two lines; the full name stays in the heading's tooltip.
+const ITEM_HEAD = { discount_pct: 'Disc %', mrp_buffer_pct: 'MRP Buf %', sale_discount_pct: 'Sale Disc %' }
+//: The columns pinned while the rest scroll sideways: which line it is and what
+//: it is on the left, what it comes to on the right.
+const stickCls = (k) => (k === 'description' ? 'stick-desc' : k === 'amount' ? 'stick-amt' : '')
 const ITEM_CALC = new Set(['rate', 'discount_pct', 'buffer_pct',
   'mrp', 'amount', 'taxable_value', 'sale_discount_pct', 'sale_price'])
 
@@ -1600,14 +1636,15 @@ function LineItems({ items, setItems }) {
           placeholder={kind === 'pct' ? '%' : 'all'}
           title={`Set ${label} on every line of this invoice`}
           onChange={(e) => setFill({ ...fill, [key]: e.target.value })}
-          onKeyDown={(e) => { if (e.key === 'Enter') applyFill(key) }} />
+          autoFocus
+          onKeyDown={(e) => { if (e.key === 'Enter') { applyFill(key); setFillAt(null) } }} />
         {/* ↓ rather than "Apply all", and the reason is the column width above:
             the words were 60px of button in a header cell that governs an 80px
             column, so every fillable column was widened to hold a label. The
             arrow is the spreadsheet's own fill-down, it sits beside a box whose
             placeholder already reads "all", and the title says it in full. */}
         <button className="btn fill-go" disabled={!fillReady(key)}
-          onClick={() => applyFill(key)}
+          onClick={() => { applyFill(key); setFillAt(null) }}
           aria-label={`Apply ${label} to every line of this invoice`}
           title={`Apply ${fill[key] || '…'}${kind === 'pct' ? '%' : ''} to all ${items.length} line(s)`}>
           ↓</button>
@@ -1615,6 +1652,54 @@ function LineItems({ items, setItems }) {
     )
   }
 
+
+  // Which column's fill-down box is open, and where on screen to draw it. One at
+  // a time, from a small icon on the heading: a whole row of "all" boxes under
+  // the headings read as filters and doubled the header for a rarely used tool.
+  // Fixed-positioned because the table scrolls sideways and its wrapper clips.
+  const [fillAt, setFillAt] = useState(null)
+  useEffect(() => {
+    if (!fillAt) return
+    const close = (e) => {
+      if (e.type === 'keydown' ? e.key === 'Escape'
+        : !(e.target.closest && e.target.closest('.fillpop, .fillhd'))) setFillAt(null)
+    }
+    const drop = () => setFillAt(null)
+    document.addEventListener('mousedown', close)
+    document.addEventListener('keydown', close)
+    window.addEventListener('resize', drop)
+    return () => {
+      document.removeEventListener('mousedown', close)
+      document.removeEventListener('keydown', close)
+      window.removeEventListener('resize', drop)
+    }
+  }, [fillAt])
+  // ⇣ copies line 1's value down to every other line — the spreadsheet's own
+  // fill-down. Prices go through recalcLine exactly as the typed fill does.
+  // Only when line 1 has nothing in that column does it open the box instead,
+  // so there is still a way to set a value nobody has typed yet.
+  const fillDownFirst = (k) => {
+    const raw = items[0]?.[k]
+    const text = ITEM_FILL[k] === 'text'
+    const v = text ? String(raw ?? '').trim() : nf(raw)
+    if (v == null || v === '' || items.length < 2) return false
+    setItems(items.map((it, j) => (j === 0 ? it : text
+      ? { ...it, [k]: v }
+      : recalcLine({ ...it, [k]: v }, k, it))))
+    return true
+  }
+  const [filledCol, setFilledCol] = useState(null)   // a brief ✓ on the heading
+  const openFill = (k, e) => {
+    if (fillAt?.k === k) { setFillAt(null); return }
+    if (fillDownFirst(k)) {
+      setFillAt(null)
+      setFilledCol(k)
+      setTimeout(() => setFilledCol((c) => (c === k ? null : c)), 1200)
+      return
+    }
+    const r = e.currentTarget.getBoundingClientRect()
+    setFillAt({ k, x: Math.max(8, Math.min(r.right - 230, window.innerWidth - 248)), y: r.bottom + 6 })
+  }
 
   //: the groups there are to fold, and whether they already are
   const runGroups = view.filter((g) => g.to - g.from > 1)
@@ -1631,22 +1716,44 @@ function LineItems({ items, setItems }) {
   }, 0)
   return (
     <div>
+      {fillAt && (() => {
+        const label = ITEM_COLS.find((c) => c[0] === fillAt.k)?.[1]
+        return (
+          <div className="fillpop" style={{ left: fillAt.x, top: fillAt.y }} role="dialog"
+            aria-label={`Set ${label} on every line`}>
+            <div className="fillpop-h">Set <b>{label}</b> on all {items.length} line(s)</div>
+            {fillCell(fillAt.k, label)}
+          </div>
+        )
+      })()}
       <div className="tablewrap">
-      <table className="items" style={{ minWidth: 1310 }}>
+      <table className="items lineitems">
+        {/* Every column a set width, in proportion: the table is laid out fixed
+            and stretched to the panel, so all twenty-odd columns sit in one
+            screen width. Below their total (a narrow window, the invoice image
+            open beside it) it scrolls sideways as before. */}
+        <colgroup>
+          <col style={{ width: 34 }} />
+          {ITEM_COLS.map(([k]) => <col key={k} style={{ width: ITEM_COLW[k] || 64 }} />)}
+          <col style={{ width: 28 }} />
+        </colgroup>
         {/* The line number is the column that makes a paged table usable: it is
             how a row on screen is matched to the numbered row on the paper,
             which is the whole job when checking a 59-line bill against it. */}
-        <thead><tr><th style={{ minWidth: 34 }} title="Line number on the invoice">#</th>
-          {ITEM_COLS.map(([k, l, , w, tip]) =>
-          <th key={k} style={{ minWidth: w }} title={tip}
-            className={ITEM_CALC.has(k) ? 'calc' : undefined}>{l}{ITEM_CALC.has(k) ? ' ƒ' : ''}</th>)}<th></th></tr>
-          {/* Under the headings, not in a toolbar above the table: the control
-              belongs to the column it fills, and aligned under it there is
-              nothing to explain about which is which. */}
-          <tr className="fillrow"><th></th>
-            {ITEM_COLS.map(([k, l]) => (
-              <th key={k}>{ITEM_FILL[k] ? fillCell(k, l) : null}</th>
-            ))}<th></th></tr>
+        <thead><tr><th className="stick-no" title="Line number on the invoice">#</th>
+          {ITEM_COLS.map(([k, l, isNum, , tip]) =>
+          <th key={k} title={ITEM_HEAD[k] ? `${l}. ${tip || ''}` : tip}
+            className={[ITEM_CALC.has(k) && 'calc', isNum && 'num', stickCls(k)].filter(Boolean).join(' ') || undefined}>
+            {/* The fill-down lives on the heading of the column it fills, so
+                there is nothing to explain about which box sets which column. */}
+            <span className="thlab"><span className="thtxt">{(ITEM_HEAD[k] || l).replace(/ %/g, ' %')}{ITEM_CALC.has(k)
+                ? <sup className="thcalc" aria-label="calculated">ƒ</sup> : null}</span>
+              {ITEM_FILL[k] && (
+                <button type="button" className={'fillhd' + (fillAt?.k === k ? ' on' : '')}
+                  aria-label={`Copy line 1's ${l} to every line`}
+                  title={`Copy line 1's ${l} to every line of this invoice (if line 1 is empty, type a value instead)`}
+                  onClick={(e) => openFill(k, e)}>{filledCol === k ? '✓' : '⇣'}</button>
+              )}</span></th>)}<th className="stick-del"></th></tr>
         </thead>
         <tbody>
           {page.slice.map((g) => {
@@ -1658,10 +1765,10 @@ function LineItems({ items, setItems }) {
               const kids = items.slice(g.from, g.to)
               return (
                 <tr key={g.sig + g.from} className="foldrow">
-                  <td className="rowno" title={`Lines ${g.from + 1} to ${g.to} of the invoice`}>
+                  <td className="rowno stick-no" title={`Lines ${g.from + 1} to ${g.to} of the invoice`}>
                     {g.from + 1}–{g.to}</td>
                   {ITEM_COLS.map(([k, , isNum, , tip]) => (
-                    <td key={k} className={(isNum ? 'num' : '') + (ITEM_CALC.has(k) ? ' calc' : '')}
+                    <td key={k} className={(isNum ? 'num' : '') + (ITEM_CALC.has(k) ? ' calc' : '') + ' ' + stickCls(k)}
                       title={tip}>
                       {k === 'size' ? (
                         <div className="sizecell">
@@ -1676,7 +1783,8 @@ function LineItems({ items, setItems }) {
                       ) : groupCell(g, k)}
                     </td>
                   ))}
-                  <td><button className="btn" style={{ padding: '2px 7px' }}
+                  <td className="stick-del"><button className="rowdel"
+                    aria-label={`Delete all ${kids.length} lines`}
                     title={`Delete all ${kids.length} lines`}
                     onClick={() => delGroup(g)}>×</button></td>
                 </tr>
@@ -1706,9 +1814,9 @@ function LineItems({ items, setItems }) {
             return (
               <React.Fragment key={i}>
               <tr>
-                <td className="rowno" title="Line number on the invoice">{i + 1}</td>
+                <td className="rowno stick-no" title="Line number on the invoice">{i + 1}</td>
                 {ITEM_COLS.map(([k, , isNum, , tip]) => (
-                  <td key={k} className={(isNum ? 'num' : '') + (ITEM_CALC.has(k) ? ' calc' : '')}
+                  <td key={k} className={(isNum ? 'num' : '') + (ITEM_CALC.has(k) ? ' calc' : '') + ' ' + stickCls(k)}
                     title={tip}>
                     {/* A bundle billed as one line is several stock items, and the
                         control that says so belongs IN the size column — beside the
@@ -1744,7 +1852,8 @@ function LineItems({ items, setItems }) {
                     )}
                   </td>
                 ))}
-                <td><button className="btn" style={{ padding: '2px 7px' }} onClick={() => delRow(i)}>×</button></td>
+                <td className="stick-del"><button className="rowdel" aria-label={`Delete line ${i + 1}`}
+                  title={`Delete line ${i + 1}`} onClick={() => delRow(i)}>×</button></td>
               </tr>
               {run && (
                 <tr>
@@ -2441,6 +2550,29 @@ function Review({ docId, onSaved, onCreateGrn, toast, onBack, purchaseId, posted
   const [doc, setDoc] = useState(null)
   const [data, setData] = useState(null)
   const [flags, setFlags] = useState({})
+  // Before any early return below: hooks run in the same order every render.
+  // Picking the supplier's name fills the rest of the party block — and the
+  // agent / transporter habits on the Invoice tab — from the supplier master and
+  // their earlier invoices (/api/suppliers/autofill). See usePickFill.
+  const supplierNames = useSupplierNames()
+  const [pickSupplier, pickNote] = usePickFill({
+    names: supplierNames,
+    load: (name) => api.supplierAutofill(name).then((r) => {
+      const flat = {}
+      const walk = (o, at) => Object.entries(o || {}).forEach(([k, v]) => (
+        v && typeof v === 'object' && !Array.isArray(v) ? walk(v, at + k + '.') : (flat[at + k] = v)))
+      if (r.found) { walk(r.supplier, 'supplier.'); walk(r.buyer, 'buyer.'); walk(r.invoice, 'invoice.') }
+      return flat
+    }),
+    fields: ['supplier.legal_name', 'supplier.gstin', 'supplier.pan', 'supplier.state', 'supplier.state_code', 'supplier.cin', 'supplier.phone', 'supplier.email', 'supplier.manufacturer', 'supplier.address', 'supplier.bank.name', 'supplier.bank.account_no', 'supplier.bank.ifsc', 'supplier.bank.branch', 'buyer.name', 'buyer.gstin', 'buyer.state', 'buyer.address', 'invoice.terms', 'invoice.agent', 'invoice.broker', 'invoice.transporter', 'invoice.destination', 'invoice.book_city'],
+    setForm: setData,
+    read: (d, path) => path.split('.').reduce((o, k) => (o == null ? o : o[k]), d),
+    write: (d, path, v) => {
+      const c = structuredClone(d || {}); const ks = path.split('.'); let o = c
+      for (let i = 0; i < ks.length - 1; i++) o = o[ks[i]] = o[ks[i]] || {}
+      o[ks[ks.length - 1]] = v; return c
+    },
+  })
   const [warnings, setWarnings] = useState([])
   const [train, setTrain] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -2874,7 +3006,9 @@ function Review({ docId, onSaved, onCreateGrn, toast, onBack, purchaseId, posted
             <div>
             <h5>Supplier</h5>
             <div className="grid">
-              {f('supplier.name', 'Name', { raw: true })}
+              <Field label="Name" value={get('supplier.name')} flagged={!!flags['supplier.name']}
+                list={supplierNames}
+                onChange={(v) => { setData(setPath(data, 'supplier.name', v)); pickSupplier(v) }} />
               {f('supplier.legal_name', 'Legal / Trading Name', { raw: true })}
               {f('supplier.gstin', 'GSTIN', { raw: true })}
               {f('supplier.pan', 'PAN', { raw: true })}
@@ -2913,6 +3047,7 @@ function Review({ docId, onSaved, onCreateGrn, toast, onBack, purchaseId, posted
                 </div>
               </div>
             </div>
+            <PickNote note={pickNote} />
             </FitPages>
           </div>
           )}
@@ -6918,6 +7053,80 @@ const DEFAULT_HOLDING_DAYS = 90
 // into it must already be declared above — a `const` further down the file is in
 // its temporal dead zone here, and the ReferenceError takes the whole bundle
 // with it. A blank page, not a broken form.
+// ==========================================================================
+//  Pick a supplier, and the form fills itself from the database
+//  ------------------------------------------------------------------------
+//  One mechanism for every form that names a supplier — the invoice's Supplier
+//  & Buyer block, the LR Entry form and the purchase order. The form calls
+//  `picked(name)` from its supplier box; when the name is one the database
+//  knows, `load` fetches what is on record and each eligible box is filled.
+//
+//  Only boxes that are empty (or still hold a starting default, see `soft`), or
+//  still hold what an earlier pick put there, are written. Something a person
+//  typed is theirs; and picking a different supplier replaces the old
+//  supplier's fills instead of mixing two suppliers into one form.
+//
+//  Driven from the box's onChange rather than from an effect on the value, so
+//  opening a saved record never rewrites it — only a pick does.
+// ==========================================================================
+let supplierNamesPromise = null
+function useSupplierNames() {
+  const [names, setNames] = useState([])
+  useEffect(() => {
+    supplierNamesPromise = supplierNamesPromise || api.listSuppliers()
+      .then((x) => x.map((y) => y.name).filter(Boolean))
+      .catch(() => { supplierNamesPromise = null; return [] })
+    let live = true
+    supplierNamesPromise.then((n) => { if (live) setNames(n) })
+    return () => { live = false }
+  }, [])
+  return names
+}
+
+const pickEmpty = (v) => v == null || String(v).trim() === ''
+function usePickFill({ names, load, fields, setForm, read = (f, k) => f?.[k],
+  write = (f, k, v) => ({ ...f, [k]: v }), soft = () => false }) {
+  const prev = useRef({})
+  const seq = useRef(0)
+  const timer = useRef(null)
+  const [note, setNote] = useState('')
+  useEffect(() => () => clearTimeout(timer.current), [])
+  const picked = (value) => {
+    clearTimeout(timer.current)
+    const name = String(value ?? '').trim().toLowerCase()
+    const known = name && (names || []).find((x) => x.toLowerCase() === name)
+    if (!known) { seq.current++; setNote(''); return }
+    const mine = ++seq.current
+    timer.current = setTimeout(() => {
+      load(known).then((fills) => {
+        if (mine !== seq.current) return
+        fills = fills || {}
+        const was = prev.current
+        const done = {}
+        setForm((f) => {
+          let next = f
+          fields.forEach((k) => {
+            const cur = read(next, k)
+            const ours = k in was && String(cur ?? '') === String(was[k] ?? '')
+            if (!(pickEmpty(cur) || ours || soft(k, cur))) return
+            if (!pickEmpty(fills[k])) { next = write(next, k, fills[k]); done[k] = fills[k] }
+            else if (ours) next = write(next, k, '')
+          })
+          prev.current = done
+          return next
+        })
+        const n = fields.filter((k) => !pickEmpty(fills[k])).length
+        setNote(n ? `Filled from what is on record for ${known} — check before saving`
+          : `Nothing more on record for ${known} yet`)
+      }).catch(() => {})
+    }, 200)
+  }
+  return [picked, note]
+}
+//: the note a form shows under its fields after a pick
+const PickNote = ({ note }) => (note
+  ? <p className="small picknote" style={{ margin: '8px 0 0' }}>↺ {note}</p> : null)
+
 const LR_FORM_LEFT = [
   // First, because it is first in the business chain: goods arrive against an
   // order. Only confirmed orders are offered — see the `po` branch in LRField.
@@ -7076,7 +7285,20 @@ function LREntryForm({ editing, opts, lists, onDone, onCancel, toast, reloadOpts
   const [attType, setAttType] = useState('')
   const [atts, setAtts] = useState(editing?.attachments || [])
   const fileRef = useRef(null)
-  const set = (k, v) => setForm((f) => ({ ...f, [k]: v }))
+  const supplierNames = useSupplierNames()
+  // A starting default (NONE, 90 days) is not a choice anybody made, so a pick
+  // may replace it.
+  const [pickSupplier, pickNote] = usePickFill({
+    names: lists.suppliers?.length ? lists.suppliers : supplierNames,
+    load: (name) => api.supplierAutofill(name).then((r) => r.lr || {}),
+    fields: ['lr_mode', 'agent', 'agent_commission', 'transport', 'auto_transfer_location', 'purchase_manager', 'stock_holding_days', 'additional_margin', 'paid_topay', 'item'],
+    setForm,
+    soft: (k, cur) => !editing && String(cur ?? '') === String(blankLR()[k] ?? ''),
+  })
+  const set = (k, v) => {
+    setForm((f) => ({ ...f, [k]: v }))
+    if (k === 'supplier_name') pickSupplier(v)
+  }
   useEffect(() => {
     setForm(editing ? { ...editing } : blankLR())
     setAtts(editing?.attachments || [])
@@ -7144,6 +7366,7 @@ function LREntryForm({ editing, opts, lists, onDone, onCancel, toast, reloadOpts
           </div>
         ))}
       </div>
+      <PickNote note={pickNote} />
 
       <h4 style={{ marginTop: 22 }}>File attachments</h4>
       <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
@@ -7486,7 +7709,10 @@ function POForm({ editing, extracted, lists, opts, onDone, onCancel, toast }) {
   const [form, setForm] = useState(() => poInitial(editing, extracted))
   const [lines, setLines] = useState(() => poInitialLines(editing, extracted))
   const [busy, setBusy] = useState(false)
-  const set = (k, v) => setForm((f) => ({ ...f, [k]: v }))
+  const set = (k, v) => {
+    setForm((f) => ({ ...f, [k]: v }))
+    if (k === 'supplier_name') pickSupplier(v)
+  }
   useEffect(() => {
     setForm(poInitial(editing, extracted))
     setLines(poInitialLines(editing, extracted))
@@ -7502,6 +7728,16 @@ function POForm({ editing, extracted, lists, opts, onDone, onCancel, toast }) {
   const dictateDef = useMemo(() => poDictateDef(opts, lists), [opts, lists])
 
   const readOnly = !!editing && editing.editable === false
+
+  // Picking a supplier fills the rest of the header from what their own
+  // paperwork already says (see /supplier-defaults) — the shared usePickFill.
+  const [pickSupplier, fillNote] = usePickFill({
+    names: lists.suppliers,
+    load: (name) => api.poSupplierDefaults(name).then((r) => r.fills || {}),
+    fields: PO_FORM_KEYS.filter((k) => k !== 'supplier_name' && k !== 'po_date'),
+    setForm,
+  })
+
   // §11: closing this tab with an order half typed asks first. Registered from
   // the FORM rather than the module, because the module is only holding work
   // while a form is open on it — a list of orders has nothing to lose.
@@ -7596,6 +7832,7 @@ function POForm({ editing, extracted, lists, opts, onDone, onCancel, toast }) {
           </div>
         ))}
       </div>
+      {!readOnly && <PickNote note={fillNote} />}
       <h4 style={{ marginTop: 22 }}>Lines</h4>
       <POLineGrid lines={lines} setLines={setLines} readOnly={readOnly} flags={flags} />
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 28, marginTop: 14,

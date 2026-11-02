@@ -1,27 +1,41 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "buildCommand": "cd frontend && npm ci && npm run build",
-  "outputDirectory": "frontend/dist",
-  "framework": null,
   "build": {
     "env": {
       "UV_LINK_MODE": "copy"
     }
   },
-  "functions": {
-    "api/index.py": {
-      "maxDuration": 300,
-      "includeFiles": "{backend/**,Textile Retail Shop/**}"
+  "services": {
+    "frontend": {
+      "root": "frontend",
+      "framework": "vite",
+      "installCommand": "npm ci",
+      "buildCommand": "npm run build",
+      "outputDirectory": "dist",
+      "rewrites": [
+        { "source": "/(.*)", "destination": "/index.html" }
+      ]
+    },
+    "app": {
+      "root": ".",
+      "framework": "fastapi",
+      "entrypoint": "api.index:app",
+      "functions": {
+        "api/index.py": {
+          "maxDuration": 300,
+          "includeFiles": "{backend/**,Textile Retail Shop/**}"
+        }
+      }
     }
   },
   "rewrites": [
-    { "source": "/api", "destination": "/api/index" },
-    { "source": "/api/(.*)", "destination": "/api/index" },
-    { "source": "/m", "destination": "/api/index" },
-    { "source": "/m/(.*)", "destination": "/api/index" },
-    { "source": "/pos", "destination": "/api/index" },
-    { "source": "/pos/(.*)", "destination": "/api/index" },
-    { "source": "/(.*)", "destination": "/index.html" }
+    { "source": "/api", "destination": { "service": "app" } },
+    { "source": "/api/(.*)", "destination": { "service": "app" } },
+    { "source": "/m", "destination": { "service": "app" } },
+    { "source": "/m/(.*)", "destination": { "service": "app" } },
+    { "source": "/pos", "destination": { "service": "app" } },
+    { "source": "/pos/(.*)", "destination": { "service": "app" } },
+    { "source": "/(.*)", "destination": { "service": "frontend" } }
   ],
   "headers": [
     {

@@ -28,15 +28,15 @@
   --brand-50:  #F5FBF7;   /* tint at 40% — hovered/selected rows */
 
   /* --- neutrals --- */
-  --bg: #F7F9F7;          /* page, table header, card header band */
+  --bg: #F8FAFC;          /* page, table header, card header band */
   --panel: #FFFFFF;
-  --panel-2: #F7F9F7;
-  --panel-3: #EEF3EF;
-  --line: #DCE5DF;        /* borders and dividers */
-  --line-strong: #C5D2CA; /* hovered borders */
-  --text: #17221D;
-  --text-2: #3F4B45;
-  --muted: #68756E;       /* 4.8:1 on white, 4.5:1 on --bg */
+  --panel-2: #F8FAFC;
+  --panel-3: #F1F5F9;
+  --line: #E2E8F0;        /* borders and dividers */
+  --line-strong: #CBD5E1; /* hovered borders */
+  --text: #0F172A;
+  --text-2: #334155;
+  --muted: #64748B;       /* 4.8:1 on white, 4.5:1 on --bg */
 
   /* --- the top header ---
      White is 12.2:1 on it and the tint is 10.8:1. */
@@ -55,7 +55,7 @@
 
   /* --- chart palette (spec §1) --- */
   --viz-1: #2F8F68;  --viz-2: #0B3D2E;  --viz-3: #6FBF98;
-  --viz-4: #D97706;  --viz-5: #64748B;  --viz-other: #DCE5DF;
+  --viz-4: #D97706;  --viz-5: #64748B;  --viz-other: #E2E8F0;
 
   /* --- semantic --- */
   --ok: #257353;        --ok-bg: #E7F4EC;      --ok-line: #C1DDD2;    --ok-text: #0B3D2E;
@@ -63,7 +63,7 @@
   --warn-icon: #D97706; --warn-dot: #FBBF24;
   --danger: #E11D48;    --danger-bg: #FFF1F2;  --danger-line: #FECDD3; --danger-text: #9F1239;
   --danger-hover: #BE123C;
-  --info: #0B3D2E;      --info-bg: #E7F4EC;    --info-line: #DCE5DF;
+  --info: #0B3D2E;      --info-bg: #E7F4EC;    --info-line: #E2E8F0;
 
   /* --- tile accents: what a figure is ABOUT ---
      Essa's, copied verbatim from frontend/src/styles.css, so a stat card means
@@ -113,35 +113,35 @@
      retints every one of those in the templates at once. The *text* colours are
      the AA-safe steps (accent-hover, amber-700), not the lighter icon colours. */
   --bs-primary: #0B3D2E;          --bs-primary-rgb: 11,61,46;
-  --bs-secondary: #68756E;        --bs-secondary-rgb: 104,117,110;
+  --bs-secondary: #64748B;        --bs-secondary-rgb: 100,116,139;
   --bs-success: #257353;          --bs-success-rgb: 37,115,83;
   --bs-danger: #E11D48;           --bs-danger-rgb: 225,29,72;
   --bs-warning: #B45309;          --bs-warning-rgb: 180,83,9;
   --bs-info: #0B3D2E;             --bs-info-rgb: 11,61,46;
-  --bs-light: #F7F9F7;            --bs-light-rgb: 247,249,247;
-  --bs-dark: #17221D;             --bs-dark-rgb: 23,34,29;
+  --bs-light: #F8FAFC;            --bs-light-rgb: 248,250,252;
+  --bs-dark: #0F172A;             --bs-dark-rgb: 15,23,42;
   --bs-primary-text-emphasis: #0B3D2E;  --bs-primary-bg-subtle: #E7F4EC;  --bs-primary-border-subtle: #C1DDD2;
   --bs-success-text-emphasis: #0B3D2E;  --bs-success-bg-subtle: #E7F4EC;  --bs-success-border-subtle: #C1DDD2;
   --bs-warning-text-emphasis: #78350F;  --bs-warning-bg-subtle: #FFFBEB;  --bs-warning-border-subtle: #FDE68A;
   --bs-danger-text-emphasis: #9F1239;   --bs-danger-bg-subtle: #FFF1F2;   --bs-danger-border-subtle: #FECDD3;
-  --bs-info-text-emphasis: #0B3D2E;     --bs-info-bg-subtle: #E7F4EC;     --bs-info-border-subtle: #DCE5DF;
-  --bs-secondary-text-emphasis: #3F4B45; --bs-secondary-bg-subtle: #F7F9F7; --bs-secondary-border-subtle: #DCE5DF;
-  --bs-light-text-emphasis: #3F4B45;    --bs-light-bg-subtle: #F7F9F7;    --bs-light-border-subtle: #DCE5DF;
-  --bs-body-bg: #F7F9F7;          --bs-body-bg-rgb: 247,249,247;
-  --bs-body-color: #17221D;       --bs-body-color-rgb: 23,34,29;
+  --bs-info-text-emphasis: #0B3D2E;     --bs-info-bg-subtle: #E7F4EC;     --bs-info-border-subtle: #E2E8F0;
+  --bs-secondary-text-emphasis: #334155; --bs-secondary-bg-subtle: #F8FAFC; --bs-secondary-border-subtle: #E2E8F0;
+  --bs-light-text-emphasis: #334155;    --bs-light-bg-subtle: #F8FAFC;    --bs-light-border-subtle: #E2E8F0;
+  --bs-body-bg: #F8FAFC;          --bs-body-bg-rgb: 248,250,252;
+  --bs-body-color: #0F172A;       --bs-body-color-rgb: 15,23,42;
   --bs-body-font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --bs-font-sans-serif: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --bs-font-monospace: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  --bs-secondary-color: #68756E;  --bs-secondary-color-rgb: 104,117,110;
-  --bs-secondary-bg: #F7F9F7;     --bs-secondary-bg-rgb: 247,249,247;
-  --bs-tertiary-color: rgba(23,34,29,.5);
-  --bs-tertiary-bg: #F7F9F7;      --bs-tertiary-bg-rgb: 247,249,247;
-  --bs-border-color: #DCE5DF;
+  --bs-secondary-color: #64748B;  --bs-secondary-color-rgb: 100,116,139;
+  --bs-secondary-bg: #F8FAFC;     --bs-secondary-bg-rgb: 248,250,252;
+  --bs-tertiary-color: rgba(15,23,42,.5);
+  --bs-tertiary-bg: #F8FAFC;      --bs-tertiary-bg-rgb: 248,250,252;
+  --bs-border-color: #E2E8F0;
   --bs-border-color-translucent: rgba(11,61,46,.12);
   --bs-link-color: #257353;       --bs-link-color-rgb: 37,115,83;
   --bs-link-hover-color: #0B3D2E; --bs-link-hover-color-rgb: 11,61,46;
-  --bs-emphasis-color: #17221D;   --bs-emphasis-color-rgb: 23,34,29;
-  --bs-heading-color: #17221D;
+  --bs-emphasis-color: #0F172A;   --bs-emphasis-color-rgb: 15,23,42;
+  --bs-heading-color: #0F172A;
   --bs-focus-ring-color: rgba(47,143,104,.35);
   --bs-code-color: #0B3D2E;
   --bs-highlight-bg: #FFFBEB;
@@ -178,8 +178,8 @@ hr { border-color: var(--line); opacity: 1; }
 
 /* scrollbars (spec §3) */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: #F7F9F7; }
-::-webkit-scrollbar-thumb { background: #DCE5DF; border-radius: 3px; }
+::-webkit-scrollbar-track { background: #F8FAFC; }
+::-webkit-scrollbar-thumb { background: #E2E8F0; border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: #2F8F68; }
 
 /* One focus treatment, and it is always visible: the green ring. On the dark
@@ -641,11 +641,11 @@ a.kpi-card:hover { border-color: var(--accent); box-shadow: 0 1px 3px rgba(0,0,0
   background-color: #FFFBEB !important; color: #78350F !important; border-color: #FDE68A !important; }
 .badge.text-bg-secondary, .badge.bg-secondary,
 .badge.text-bg-light, .badge.bg-light, .status-badge.neutral {
-  background-color: #F7F9F7 !important; color: #68756E !important; border-color: #DCE5DF !important; }
+  background-color: #F8FAFC !important; color: #64748B !important; border-color: #E2E8F0 !important; }
 .badge.text-bg-danger, .badge.bg-danger, .status-badge.danger {
   background-color: #FFF1F2 !important; color: #9F1239 !important; border-color: #FECDD3 !important; }
 .badge.text-bg-info, .badge.bg-info, .status-badge.info {
-  background-color: #E7F4EC !important; color: #0B3D2E !important; border-color: #DCE5DF !important; }
+  background-color: #E7F4EC !important; color: #0B3D2E !important; border-color: #E2E8F0 !important; }
 /* a badge with no colour class (e.g. the floor session code) is a code chip */
 .badge:not([class*="bg-"]):not(.status-badge) { background: var(--tint); color: var(--brand); border-color: rgba(47,143,104,.2); }
 .status-badge {
@@ -701,7 +701,7 @@ td > .badge.text-bg-info::before {
   --bs-btn-border-radius: 8px;
 }
 .btn-link { box-shadow: none; --bs-btn-color: #257353; --bs-btn-hover-color: #0B3D2E;
-  --bs-btn-active-color: #0B3D2E; --bs-btn-disabled-color: #68756E; }
+  --bs-btn-active-color: #0B3D2E; --bs-btn-disabled-color: #64748B; }
 .btn-close { box-shadow: none; }
 
 /* primary: dark green. .btn-brand is the name the templates use. */
@@ -718,27 +718,27 @@ td > .badge.text-bg-info::before {
 }
 /* secondary: white with a border */
 .btn-secondary, .btn-light, .btn-outline-secondary, .btn-outline-dark, .btn-outline-light {
-  --bs-btn-color: #17221D;            --bs-btn-bg: #FFFFFF;
-  --bs-btn-border-color: #DCE5DF;
-  --bs-btn-hover-color: #17221D;      --bs-btn-hover-bg: #F7F9F7;
-  --bs-btn-hover-border-color: #C5D2CA;
+  --bs-btn-color: #0F172A;            --bs-btn-bg: #FFFFFF;
+  --bs-btn-border-color: #E2E8F0;
+  --bs-btn-hover-color: #0F172A;      --bs-btn-hover-bg: #F8FAFC;
+  --bs-btn-hover-border-color: #CBD5E1;
   --bs-btn-active-color: #0B3D2E;     --bs-btn-active-bg: #E7F4EC;
   --bs-btn-active-border-color: #2F8F68;
-  --bs-btn-disabled-color: #68756E;   --bs-btn-disabled-bg: #FFFFFF;
-  --bs-btn-disabled-border-color: #DCE5DF;
+  --bs-btn-disabled-color: #64748B;   --bs-btn-disabled-bg: #FFFFFF;
+  --bs-btn-disabled-border-color: #E2E8F0;
   --bs-btn-focus-shadow-rgb: 47,143,104;
 }
 /* outline: transparent, green text; checked (a picked tender, a picked tab)
    fills dark like the design's segmented control */
 .btn-outline-primary {
   --bs-btn-color: #0B3D2E;            --bs-btn-bg: transparent;
-  --bs-btn-border-color: #DCE5DF;
+  --bs-btn-border-color: #E2E8F0;
   --bs-btn-hover-color: #0B3D2E;      --bs-btn-hover-bg: #E7F4EC;
   --bs-btn-hover-border-color: #2F8F68;
   --bs-btn-active-color: #fff;        --bs-btn-active-bg: #0B3D2E;
   --bs-btn-active-border-color: #0B3D2E;
-  --bs-btn-disabled-color: #68756E;   --bs-btn-disabled-bg: transparent;
-  --bs-btn-disabled-border-color: #DCE5DF;
+  --bs-btn-disabled-color: #64748B;   --bs-btn-disabled-bg: transparent;
+  --bs-btn-disabled-border-color: #E2E8F0;
   --bs-btn-focus-shadow-rgb: 47,143,104;
   background-color: var(--bs-btn-bg);
 }
@@ -821,7 +821,7 @@ td > .badge.text-bg-info::before {
 }
 .btn-outline-info {
   --bs-btn-color: #0B3D2E;            --bs-btn-bg: transparent;
-  --bs-btn-border-color: #DCE5DF;
+  --bs-btn-border-color: #E2E8F0;
   --bs-btn-hover-color: #0B3D2E;      --bs-btn-hover-bg: #E7F4EC;
   --bs-btn-hover-border-color: #2F8F68;
   --bs-btn-active-color: #0B3D2E;     --bs-btn-active-bg: #D5EFE0;
@@ -829,7 +829,7 @@ td > .badge.text-bg-info::before {
   --bs-btn-focus-shadow-rgb: 47,143,104;
 }
 .btn-dark {
-  --bs-btn-color: #fff; --bs-btn-bg: #17221D; --bs-btn-border-color: #17221D;
+  --bs-btn-color: #fff; --bs-btn-bg: #0F172A; --bs-btn-border-color: #0F172A;
   --bs-btn-hover-color: #fff; --bs-btn-hover-bg: #0B3D2E; --bs-btn-hover-border-color: #0B3D2E;
   --bs-btn-active-bg: #082C21; --bs-btn-active-border-color: #082C21;
 }
@@ -849,7 +849,7 @@ td > .badge.text-bg-info::before {
   transition: border-color .15s, box-shadow .15s;
 }
 .form-select { padding-right: 2.25rem; background-position: right .75rem center; }
-.form-control::placeholder { color: rgba(104,117,110,.75); opacity: 1; }
+.form-control::placeholder { color: rgba(100,116,139,.75); opacity: 1; }
 .form-control:hover, .form-select:hover { border-color: var(--line-strong); }
 .form-control:focus, .form-select:focus {
   border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); outline: none; }
@@ -868,7 +868,7 @@ textarea.form-control { min-height: 2.375rem; }
   font-size: 1rem; line-height: 1.375rem; padding: .6875rem .875rem;   /* 46px */
   border-radius: 8px; }
 .form-select-lg { padding-right: 2.5rem; }
-.form-check-input { border-color: #C5D2CA; }
+.form-check-input { border-color: #CBD5E1; }
 .form-check-input:checked { background-color: var(--accent); border-color: var(--accent); }
 .form-check-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(47,143,104,.25); }
 .form-switch .form-check-input:focus {
@@ -967,7 +967,7 @@ td .form-control, td .form-select { max-width: none; }
     border-radius: 16px 16px 0 0; border-bottom: 0; }
   .modal-dialog:not(.modal-fullscreen-sm-down) .modal-content::before {
     content: ''; display: block; width: 40px; height: 4px; border-radius: 2px;
-    background: #DCE5DF; margin: .5rem auto 0; flex: 0 0 auto; }
+    background: #E2E8F0; margin: .5rem auto 0; flex: 0 0 auto; }
   .modal-dialog:not(.modal-fullscreen-sm-down) .modal-header { background: var(--panel); }
   .modal.fade .modal-dialog:not(.modal-fullscreen-sm-down) { transform: translateY(40px); }
   .modal.show .modal-dialog:not(.modal-fullscreen-sm-down) { transform: none; }
@@ -992,8 +992,8 @@ td .form-control, td .form-select { max-width: none; }
 .alert-info { --bs-alert-color: #0B3D2E; --bs-alert-bg: #E7F4EC;
   --bs-alert-border-color: rgba(47,143,104,.2); --bs-alert-link-color: #0B3D2E; }
 .alert-info .bi { color: #2F8F68; }
-.alert-secondary, .alert-light { --bs-alert-color: #3F4B45; --bs-alert-bg: #F7F9F7;
-  --bs-alert-border-color: #DCE5DF; --bs-alert-link-color: #0B3D2E; }
+.alert-secondary, .alert-light { --bs-alert-color: #334155; --bs-alert-bg: #F8FAFC;
+  --bs-alert-border-color: #E2E8F0; --bs-alert-link-color: #0B3D2E; }
 .alert-secondary .bi { color: #2F8F68; }
 .alert a { font-weight: 600; }
 .alert-dismissible .btn-close { padding: .8rem .875rem; }
@@ -1064,7 +1064,7 @@ main > .alert-dismissible { display: flex; align-items: center; }
   body { background: #fff; }
   .container-fluid, main.container-fluid, html.in-frame main.container-fluid { padding: 0; max-width: none; margin: 0; }
   .card { box-shadow: none; }
-  .table > thead > tr > th { background-color: transparent !important; color: #17221D; }
+  .table > thead > tr > th { background-color: transparent !important; color: #0F172A; }
 }
 
 .invoice-print { max-width: 800px; margin: 0 auto; padding: 20px; background: #fff; }
@@ -1219,3 +1219,104 @@ svg.segno { max-width: 100%; height: auto; display: block; }
 html.in-frame main.container-fluid { padding-top: .6rem; padding-bottom: .6rem; }
 html.in-frame .page-head { margin-bottom: .75rem; padding-bottom: .5rem; }
 .fit-bar .fit-pg { max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ==========================================================================
+   ESSA design system — SaaS layer (shared with frontend/src/styles.css)
+   Neutral slate surfaces, one green accent, the same radius, control height,
+   table, badge and dialog rules as the warehouse app — so a store screen
+   inside the warehouse frame reads as the same product.
+   ========================================================================== */
+:root {
+  --bs-border-radius: 8px; --bs-border-radius-sm: 6px; --bs-border-radius-lg: 12px;
+  --bs-box-shadow-sm: 0 1px 2px rgba(15,23,42,.05);
+  --bs-box-shadow: 0 6px 16px -4px rgba(15,23,42,.10);
+  --bs-focus-ring-color: rgba(47,143,104,.18);
+}
+body { background: var(--bg); color: var(--text); }
+
+/* page head */
+.page-head { border-bottom-color: var(--line); }
+.page-head h4, .page-head .page-title { font-size: 1.25rem; letter-spacing: -.02em; }
+
+/* cards */
+.card { border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 1px 2px rgba(15,23,42,.05); }
+.card-header { background: var(--panel); border-bottom: 1px solid var(--line); font-weight: 600; }
+.card-footer { background: var(--panel-2); border-top: 1px solid var(--line); }
+
+/* tables */
+.table { --bs-table-border-color: #EEF2F6; --bs-table-hover-bg: #F8FAFC; }
+.table > thead th, .table > thead td { background: var(--panel-2); color: var(--muted); font-size: .6875rem;
+  font-weight: 600; text-transform: uppercase; letter-spacing: .05em; border-bottom: 1px solid var(--line);
+  white-space: nowrap; }
+.table > tbody > tr > * { border-bottom-color: #EEF2F6; }
+
+/* buttons: primary green, secondary white, danger rose */
+.btn { border-radius: 8px; font-weight: 500;
+  transition: background-color .12s, border-color .12s, color .12s, box-shadow .12s; }
+.btn:focus-visible { box-shadow: 0 0 0 3px rgba(47,143,104,.22); }
+.btn-outline-secondary { --bs-btn-color: var(--text); --bs-btn-border-color: var(--line-strong);
+  --bs-btn-hover-bg: var(--panel-2); --bs-btn-hover-color: var(--text); --bs-btn-hover-border-color: #94A3B8;
+  --bs-btn-active-bg: var(--panel-3); --bs-btn-active-color: var(--text); --bs-btn-active-border-color: #94A3B8;
+  background: var(--panel); }
+
+/* fields */
+.form-control, .form-select { border-color: var(--line-strong); border-radius: 8px; }
+.form-control:hover:not(:focus):not(:disabled), .form-select:hover:not(:focus):not(:disabled) { border-color: #94A3B8; }
+.form-control:focus, .form-select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(47,143,104,.18); }
+.form-label { font-weight: 600; color: var(--text-2); }
+.form-check-input:checked { background-color: var(--accent); border-color: var(--accent); }
+
+/* badges, dialogs, toasts, dropdowns */
+.badge { border-radius: 999px; font-weight: 600; letter-spacing: .02em; }
+.modal-content { border: 1px solid var(--line); border-radius: 14px;
+  box-shadow: 0 20px 40px -12px rgba(15,23,42,.22), 0 8px 16px -8px rgba(15,23,42,.08); }
+.modal-header { border-bottom-color: var(--line); }
+.modal-footer { border-top-color: var(--line); background: var(--panel-2); border-radius: 0 0 14px 14px; }
+.modal-backdrop.show { opacity: .45; }
+.dropdown-menu { border-color: var(--line); border-radius: 10px; box-shadow: 0 12px 28px -8px rgba(15,23,42,.18); }
+.toast { border-radius: 10px; }
+
+/* ==========================================================================
+   ESSA table format — the same look as the warehouse's invoice Line Items
+   --------------------------------------------------------------------------
+   Title-case 11px headings on a light slate band, one line each; ~36px rows;
+   inputs in a table always drawn as small white boxes; figures right-aligned.
+   ========================================================================== */
+.table > thead > tr > th, .table > thead > tr > td {
+  background: var(--panel-2, #F8FAFC) !important; color: var(--text-2, #334155);
+  font-size: 11px; font-weight: 600; text-transform: none; letter-spacing: 0; line-height: 1.2;
+  padding: .5rem .5rem; height: 34px; vertical-align: middle; white-space: nowrap;
+  border-bottom: 1px solid var(--line, #E2E8F0); }
+.table > tbody > tr > td, .table > tbody > tr > th {
+  padding: .25rem .5rem; height: 36px; vertical-align: middle; font-size: .8125rem; }
+.table > tbody > tr > td { border-bottom-color: #EEF2F6; }
+.table td .form-control, .table td .form-select {
+  height: 28px; min-height: 28px; padding: 3px 6px; font-size: .8125rem;
+  border: 1px solid var(--line, #E2E8F0); border-radius: 6px; background-color: #fff; }
+.table td .form-select { padding-right: 1.6rem; background-position: right .4rem center; }
+.table td .form-control:hover, .table td .form-select:hover { border-color: var(--line-strong, #CBD5E1); }
+.table td .form-control:focus, .table td .form-select:focus {
+  border-color: var(--brand, #0B3D2E); box-shadow: 0 0 0 3px rgba(47,143,104,.18); }
+.table td.text-end .form-control, .table td .form-control.text-end { text-align: right; }
+.table-hover > tbody > tr:hover > * { --bs-table-bg-state: #F8FAFC; }
+@media print {
+  .table > thead > tr > th { background: transparent !important; }
+}
+
+/* ==========================================================================
+   ESSA form fields — the same look as the table format above
+   11px slate labels; 30px boxes with a hairline edge, 6px corners and the green
+   ring while typing. The billing counter's big scan boxes are left as they are.
+   ========================================================================== */
+.form-label, .col-form-label { font-size: 11px; font-weight: 600; color: var(--text-2, #334155);
+  letter-spacing: 0; margin-bottom: 4px; line-height: 1.2; }
+body:not(:has(.pos-screen)) .form-control:not(.form-control-lg):not(textarea):not([type=file]),
+body:not(:has(.pos-screen)) .form-select:not(.form-select-lg) {
+  height: 30px; min-height: 30px; padding-top: 4px; padding-bottom: 4px; font-size: .8125rem;
+  border: 1px solid var(--line, #E2E8F0); border-radius: 6px; box-shadow: none; }
+body:not(:has(.pos-screen)) textarea.form-control { font-size: .8125rem; border: 1px solid var(--line, #E2E8F0);
+  border-radius: 6px; padding: 5px 8px; }
+.form-control:hover, .form-select:hover { border-color: var(--line-strong, #CBD5E1); }
+.form-control:focus, .form-select:focus { border-color: var(--brand, #0B3D2E);
+  box-shadow: 0 0 0 3px rgba(47,143,104,.18); }
+body:not(:has(.pos-screen)) .input-group > .btn { padding-top: 3px; padding-bottom: 3px; }

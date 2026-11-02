@@ -20,6 +20,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from .. import models
+from ..config import COMPANY_NAME
 from ..database import get_db
 from ..services import (dates, po_extract, purchase_orders as po_svc, scope,
                         storage)
@@ -206,6 +207,92 @@ async def extract_order(file: UploadFile = File(...), db: Session = Depends(get_
 
     res = po_extract.extract_po(storage.materialise(stored) or stored)
     return {"document_id": doc.id, "entry_source": "import", **res}
+
+
+#: The header boxes a supplier pick can fill, in the order they are looked for.
+_SUPPLIER_FILLS = ("company", "brand", "item", "place", "transport", "agent",
+                   "purchaser", "discount_pct")
+
+
+def _first(values):
+    """The first value that says something — None, '' and whitespace do not."""
+    for v in values:
+        if v is not None and str(v).strip():
+            return v
+    return None
+
+
+def _place_from(address: Optional[str], state: Optional[str]) -> Optional[str]:
+    """The town off a supplier's address: its last part that is a word rather
+    than a pincode or the state. 'No 4, Market St, Tirupur - 641604, Tamil Nadu'
+    reads as Tirupur."""
+    if not address:
+        return None
+    st = (state or "").strip().lower()
+    for part in reversed(address.replace("\n", ",").split(",")):
+        word = "".join(c for c in part if not c.isdigit()).strip(" -.")
+        if word and word.lower() != st and not word.lower().startswith(("pin", "india")):
+            return word
+    return None
+
+
+@router.get("/supplier-defaults")
+def supplier_defaults(name: str = "", db: Session = Depends(get_db),
+                      wid: Optional[int] = Depends(scope.current)):
+    """What the order form can fill in the moment a supplier is picked.
+
+    Read from what this supplier's own paperwork already says, newest first:
+    their last purchase orders, then the consignments booked in from them (LR
+    entries carry the transporter, agent and purchase manager), then the
+    supplier master (the town off its address) and the products they supply
+    (the brand). Nothing is invented — a box nothing on record speaks for is
+    left out, and the form leaves it as it is.
+    """
+    name = (name or "").strip()
+    if not name:
+        return {"fills": {}, "source": {}}
+    PO, LR = models.PurchaseOrder, models.LREntry
+    sup = (db.query(models.Supplier).filter(func.lower(models.Supplier.name) == name.lower())
+           .first())
+    po_q = db.query(PO).filter(func.lower(PO.supplier_name) == name.lower())
+    if sup:
+        po_q = db.query(PO).filter((PO.supplier_id == sup.id)
+                                   | (func.lower(PO.supplier_name) == name.lower()))
+    pos = (scope.purchase_orders(po_q, wid)
+           .filter(PO.status != "cancelled").order_by(PO.id.desc()).limit(20).all())
+    lrs = (db.query(LR).filter(func.lower(LR.supplier_name) == name.lower())
+           .order_by(LR.id.desc()).limit(20).all())
+
+    fills, source = {}, {}
+
+    def take(key, value, where):
+        if key not in fills and value is not None and str(value).strip():
+            fills[key] = value
+            source[key] = where
+
+    for k in _SUPPLIER_FILLS:
+        take(k, _first(getattr(p, k) for p in pos), "last order")
+    take("transport", _first(l.transport for l in lrs), "last consignment")
+    take("agent", _first(l.agent for l in lrs), "last consignment")
+    take("purchaser", _first(l.purchase_manager for l in lrs), "last consignment")
+    take("item", _first(l.item for l in lrs), "last consignment")
+    if sup:
+        take("place", _place_from(sup.address, sup.state), "supplier master")
+        brand = (db.query(models.Product.brand)
+                 .filter(models.Product.primary_supplier_id == sup.id,
+                         models.Product.brand.isnot(None), models.Product.brand != "")
+                 .group_by(models.Product.brand)
+                 .order_by(func.count(models.Product.id).desc()).first())
+        if brand:
+            take("brand", brand[0], "supplier's products")
+        PL, P = models.PurchaseLine, models.Purchase
+        billed = (db.query(PL.brand).join(P, P.id == PL.purchase_id)
+                  .filter(P.supplier_id == sup.id, PL.brand.isnot(None), PL.brand != "")
+                  .group_by(PL.brand).order_by(func.max(P.id).desc()).first())
+        if billed:
+            take("brand", billed[0], "supplier's invoices")
+    take("company", COMPANY_NAME, "company default")
+    return {"supplier_id": sup.id if sup else None, "fills": fills, "source": source}
 
 
 @router.get("/{po_id}")
