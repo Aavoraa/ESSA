@@ -3005,3 +3005,15 @@ table.items tbody tr:hover > td { background: #F8FAFC; }
   .topbar .th-menu { display: none !important; }
   .topbar .th-brand .th-logo { display: none; }
 }
+
+/* ---------- Extraction engines, under Setup ----------
+   Vision and OCR moved out of the header into the Setup menu. */
+.engines { margin-top: 6px; padding-top: 6px; border-top: 1px solid rgba(127,127,127,.22); }
+.engines-head { font-size: 11px; font-weight: 600; letter-spacing: .02em; opacity: .65;
+  padding: 6px 14px 4px; }
+.engine:disabled { cursor: default; opacity: 1; }
+.navrail-item.engine:disabled:hover { background: none; color: inherit; }
+.engine-st { font-size: 10px; font-weight: 600; padding: 1px 7px; border-radius: 999px;
+  background: rgba(127,127,127,.18); opacity: .85; flex: 0 0 auto; }
+.engine-st.on { background: var(--accent); color: #fff; opacity: 1; }
+.navrail-fly .engines-head { color: #8FBFA6; opacity: 1; }

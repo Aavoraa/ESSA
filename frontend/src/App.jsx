@@ -17102,7 +17102,27 @@ const tidyRules = (items) => items.filter((m, i, a) =>
 // name that is no longer on screen. Remembered across reloads through the
 // same store the other panels use (useMinimized), so someone who works with it
 // folded finds it folded every morning.
-function NavSidebar({ kind, context, items, tab, go, online, foot, drawer, onClose }) {
+// Vision and OCR — which engine reads an uploaded invoice. Filed under Setup
+// rather than in the header: it is a setting someone looks up, not something
+// worked from. A row with `open` (vision, for a super admin) opens its settings.
+function EngineList({ engines, cls, after }) {
+  return (
+    <div className="engines" role="group" aria-label="Extraction engines">
+      <div className="engines-head">Extraction engines</div>
+      {engines.map((e) => (
+        <button key={e.key} type="button" className={cls + ' engine' + (e.on ? ' is-on' : '')}
+          title={e.title} disabled={!e.open}
+          onClick={() => { e.open(); after?.() }}>
+          <Icon name={e.icon} size={15} />
+          <span className="nm">{e.label}</span>
+          <span className={'engine-st' + (e.on ? ' on' : '')}>{e.on ? 'On' : 'Off'}</span>
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function NavSidebar({ kind, context, items, tab, go, online, foot, drawer, onClose, engines }) {
   const [wide, toggleWide] = useMinimized('nav.sidebar', true)
   const mini = !drawer && !wide
   useEffect(() => {
@@ -17153,6 +17173,7 @@ function NavSidebar({ kind, context, items, tab, go, online, foot, drawer, onClo
             {m.badge && <span className="nb">{m.badge}</span>}
           </button>
         ) : <div key={'sep' + i} className="navsep" role="separator" />))}
+        {engines?.length > 0 && !mini && <EngineList engines={engines} cls="navitem" after={drawer ? onClose : null} />}
       </nav>
       <div className="navside-foot">
         <span className={'live' + (online ? '' : ' off')}
@@ -17257,7 +17278,7 @@ function CategoryPage({ group, context, tab, go, onClose }) {
   )
 }
 
-function NavRail({ ws, items, tab, go, online, foot, context, onOpenGroup, page }) {
+function NavRail({ ws, items, tab, go, online, foot, context, onOpenGroup, page, engines }) {
   const [open, setOpen] = useState(null)          // the category whose fly-out is showing
   const [pinned, setPinned] = useState(false)     // opened by a click: stays until used
   const [top, setTop] = useState(0)
@@ -17265,6 +17286,11 @@ function NavRail({ ws, items, tab, go, online, foot, context, onOpenGroup, page 
   const fly = useRef(null)
   const timer = useRef(null)
   const groups = railGroups(ws, items)
+  // the extraction engines live under Setup, so Setup is on the rail even for
+  // someone who has none of its screens
+  if (engines?.length && !groups.some((x) => x.key === 'setup')) {
+    groups.push({ ...NAV_RAIL.warehouse.find((x) => x.key === 'setup'), items: [] })
+  }
   // a category's page on show is where you are; otherwise the open screen's
   const current = page || groups.find((g) => g.items.some((m) => m.key === tab))?.key
   const show = (k, pin) => {
@@ -17336,6 +17362,9 @@ function NavRail({ ws, items, tab, go, online, foot, context, onOpenGroup, page 
               {m.badge && <span className="nb">{m.badge}</span>}
             </button>
           ))}
+          {g.key === 'setup' && engines?.length > 0 && (
+            <EngineList engines={engines} cls="navrail-item" after={close} />
+          )}
         </div>
       )}
     </aside>
@@ -19009,6 +19038,16 @@ export default function App() {
   if (!authChecked) return <div className="login-wrap"><div className="login-bg" /></div>
   if (!authed) return <LoginScreen onLogin={handleLogin} />
 
+  // The vision key and model are server-wide settings, so opening them is a
+  // super admin's; everyone else still sees whether vision is on, since that
+  // changes how an upload behaves.
+  const engines = [
+    { key: 'vision', label: 'Vision', icon: 'eye', on: !!providers.claude_vision,
+      title: isSuper ? 'Configure vision extraction' : 'Vision extraction — a super admin configures this',
+      open: isSuper ? () => setShowSettings(true) : null },
+    { key: 'ocr', label: 'OCR', icon: 'cpu', on: !!providers.tesseract,
+      title: 'Offline OCR extraction engine', open: null },
+  ]
   return (
     <div className="app">
       {/* 1. The header: what system this is, the switches that change how it
@@ -19026,24 +19065,6 @@ export default function App() {
           title="Jump to any screen (Ctrl + K)" aria-label="Jump to a screen">
           <Icon name="search" size={14} /><span className="ph">Search screens…</span><kbd>Ctrl K</kbd>
         </button>
-        {/* The vision key and model are server-wide settings, so the gear is a
-            super admin's. For everyone else the pill still reports whether
-            vision is on — that changes how an upload behaves and is worth
-            knowing — but it does not open a screen the server would refuse. */}
-        {isSuper ? (
-          <button className={'pill ' + (providers.claude_vision ? 'on' : 'off')}
-            title="Configure vision extraction" onClick={() => setShowSettings(true)}>
-            <Icon name="eye" size={14} /> Vision {providers.claude_vision ? 'on' : 'off'}
-            <span className="dot" aria-hidden="true" /></button>
-        ) : (
-          <span className={'pill ' + (providers.claude_vision ? 'on' : 'off')}
-            title="Vision extraction — a super admin configures this">
-            <Icon name="eye" size={14} /> Vision {providers.claude_vision ? 'on' : 'off'}
-            <span className="dot" aria-hidden="true" /></span>
-        )}
-        <span className={'pill ocr ' + (providers.tesseract ? 'on' : 'off')}
-          title="Offline OCR extraction engine">
-          <Icon name="cpu" size={14} /> OCR {providers.tesseract ? 'on' : 'off'}</span>
         <NotificationBell onOpen={() => setNotifsOpen(true)} tick={notifTick} />
         <span className="th-div" aria-hidden="true" />
         {/* Who you are signed in as, and at what level. On a shared warehouse
@@ -19153,7 +19174,7 @@ export default function App() {
       <div className="shell">
       {/* the category rail; on a narrow window the same screens open from the
           menu button as a drawer (below) */}
-      <NavRail ws={ws} items={navItems} tab={tab} go={setTab} online={!!status} foot={navFoot}
+      <NavRail ws={ws} items={navItems} tab={tab} go={setTab} online={!!status} foot={navFoot} engines={engines}
         context={navContext} onOpenGroup={(g) => setCatPage(g.key)} page={catGroup ? catPage : null} />
       <main className="shellmain">
       {catGroup && <CategoryPage group={catGroup} context={navContext} tab={tab}
@@ -19202,7 +19223,7 @@ export default function App() {
       </div>
 
       {navOpen && <NavSidebar drawer kind={navKind} context={navContext} items={navItems}
-        tab={tab} go={setTab} online={!!status} foot={navFoot}
+        tab={tab} go={setTab} online={!!status} foot={navFoot} engines={engines}
         onClose={() => setNavOpen(false)} />}
       {jumpOpen && <JumpPalette groups={jumpGroups} onGo={jumpTo}
         onClose={() => setJumpOpen(false)} />}
