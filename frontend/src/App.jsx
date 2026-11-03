@@ -17299,6 +17299,9 @@ function NavRail({ ws, items, tab, go, online, foot, context, onOpenGroup, page 
   const g = groups.find((x) => x.key === open)
   return (
     <aside className="navrail" aria-label="Main menu" onMouseLeave={hideSoon}>
+      {/* The rail runs the full height of the window, so its top carries the
+          mark the header used to — level with the header beside it. */}
+      <div className="navrail-head"><span className="th-logo" aria-hidden="true">E</span></div>
       <nav className="navrail-list">
         {groups.map((x) => (
           <button key={x.key} ref={(el) => { btns.current[x.key] = el }} type="button"

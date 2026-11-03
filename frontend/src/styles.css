@@ -2984,3 +2984,24 @@ table.items tbody tr:hover > td { background: #F8FAFC; }
 /* a sub-heading that starts a later block of the same panel still needs the
    gap above it — the :first-of-type reset only belongs to the panel's first */
 .section .fitblock ~ .fitblock h5:first-of-type { margin-top: 14px; }
+
+/* ==========================================================================
+   The green rail runs the full height of the window
+   --------------------------------------------------------------------------
+   On a wide window the rail is pinned to the left edge from top to bottom, and
+   the header, context bar, tabs and screens sit beside it. Its top carries the
+   E mark, level with the header. The menu (hamburger) button is not needed
+   there — the rail is the menu — so it is hidden, as is the header's own copy
+   of the mark. Below 1024px the rail is not drawn, and both come back.
+   ========================================================================== */
+.navrail-head { height: 56px; flex: 0 0 56px; display: flex; align-items: center;
+  justify-content: center; border-bottom: 1px solid rgba(255,255,255,.08); }
+.navrail-head .th-logo { width: 36px; height: 36px; border-radius: 9px; display: inline-flex;
+  align-items: center; justify-content: center; background: var(--accent); color: #fff;
+  font-weight: 700; font-size: 17px; box-shadow: none; }
+@media (min-width: 1024px) {
+  .app { padding-left: 78px; }
+  .navrail { position: fixed; left: 0; top: 0; bottom: 0; height: 100vh; z-index: 40; }
+  .topbar .th-menu { display: none !important; }
+  .topbar .th-brand .th-logo { display: none; }
+}
