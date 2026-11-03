@@ -3017,3 +3017,11 @@ table.items tbody tr:hover > td { background: #F8FAFC; }
   background: rgba(127,127,127,.18); opacity: .85; flex: 0 0 auto; }
 .engine-st.on { background: var(--accent); color: #fff; opacity: 1; }
 .navrail-fly .engines-head { color: #8FBFA6; opacity: 1; }
+
+/* ---------- Header tint ----------
+   A light green wash on the top bar, so it reads as part of the green rail
+   beside it rather than as a white strip. */
+.topbar { background: linear-gradient(90deg, var(--brand-100), var(--brand-50));
+  border-bottom-color: var(--brand-200); }
+/* the role above the user name was left white from the old dark header */
+.topbar .th-role { color: var(--brand); }
