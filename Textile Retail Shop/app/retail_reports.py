@@ -47,16 +47,25 @@ METHODS = ("cash", "card", "upi")
 class Ctx:
     """The period, the place, and any report-specific knob, in one object.
 
-    `b2b` narrows every bill query to customers registered for GST — the B2B
-    vertical is the same reports asked of those bills only, not a second set.
+    `supply` narrows every bill query to one kind of sale — "b2b" (the buyer
+    gave a GSTIN) or "b2c" (they did not). The B2B and B2C verticals are the same
+    reports asked of those bills only, not a second set.
     """
 
     def __init__(self, start, end, company=None, location=None, counter=None,
-                 params=None, b2b=False):
+                 params=None, b2b=False, supply=None):
         self.start, self.end = start, end
         self.company, self.location, self.counter = company, location, counter
         self.params = params or {}
-        self.b2b = b2b
+        self.supply = supply or ("b2b" if b2b else None)
+        self.b2b = self.supply == "b2b"
+
+    def _supply(self, q):
+        if self.supply == "b2b":
+            return q.filter(_b2b_bill())
+        if self.supply == "b2c":
+            return q.filter(_b2c_bill())
+        return q
 
     def param(self, key, default, cast=int):
         try:
@@ -78,8 +87,7 @@ class Ctx:
                                  day_from(Invoice.invoice_date, self.start),
                                  day_to(Invoice.invoice_date, self.end))
         q = self._place(q, Invoice)
-        if self.b2b:
-            q = q.filter(Invoice.customer_id.in_(_registered_ids()))
+        q = self._supply(q)
         if options:
             q = q.options(*options)
         return q.order_by(Invoice.invoice_date, Invoice.id)
@@ -92,8 +100,7 @@ class Ctx:
                      day_from(Invoice.invoice_date, self.start),
                      day_to(Invoice.invoice_date, self.end)))
         q = self._place(q, Invoice)
-        if self.b2b:
-            q = q.filter(Invoice.customer_id.in_(_registered_ids()))
+        q = self._supply(q)
         return q.order_by(Invoice.invoice_date, Invoice.id, InvoiceItem.id)
 
     def credit_notes(self):
@@ -102,14 +109,33 @@ class Ctx:
              .filter(day_from(CreditNote.created_at, self.start),
                      day_to(CreditNote.created_at, self.end)))
         q = self._place(q, Invoice)
-        if self.b2b:
-            q = q.filter(Invoice.customer_id.in_(_registered_ids()))
+        q = self._supply(q)
         return q.order_by(CreditNote.created_at, CreditNote.id)
 
 
 def _registered_ids():
     return db.session.query(Customer.id).filter(Customer.gstin.isnot(None),
                                                 func.trim(Customer.gstin) != "")
+
+
+def _b2b_bill():
+    """A B2B bill: the buyer's GSTIN was on it when it was raised
+    (Invoice.customer_gstin). Bills from before that was recorded (NULL) fall back
+    to the customer's record, which is all there is to go on for them."""
+    return db.or_(
+        db.and_(Invoice.customer_gstin.isnot(None), func.trim(Invoice.customer_gstin) != ""),
+        db.and_(Invoice.customer_gstin.is_(None), Invoice.customer_id.in_(_registered_ids())))
+
+
+def _b2c_bill():
+    """Every bill that is not B2B — spelled out rather than NOT(_b2b_bill()),
+    because a walk-in bill from before the snapshot has a NULL customer and SQL's
+    NOT(NULL IN …) is NULL, which would quietly drop it from B2C."""
+    return db.or_(
+        db.and_(Invoice.customer_gstin.isnot(None), func.trim(Invoice.customer_gstin) == ""),
+        db.and_(Invoice.customer_gstin.is_(None),
+                db.or_(Invoice.customer_id.is_(None),
+                       Invoice.customer_id.notin_(_registered_ids()))))
 
 
 # ---------------------------------------------------------------------------
@@ -373,15 +399,51 @@ def sales_invoice_wise(ctx):
     for inv in ctx.bills(selectinload(Invoice.items)).all():
         c = inv.customer
         rows.append([inv.invoice_number, _d(inv.invoice_date), c.name if c else "Walk-in",
-                     (c.gstin if c else "") or "—", len(inv.items), _q(inv.total_qty),
+                     inv.supply_type, inv.billed_gstin or "—", len(inv.items), _q(inv.total_qty),
                      _m(inv.subtotal), _m(inv.discount), _m(inv.cgst), _m(inv.sgst),
                      _m(inv.igst), _m(inv.total)])
-    return _result(["Bill", "Date", "Customer", "GSTIN", "Lines", "Qty", "Taxable",
+    return _result(["Bill", "Date", "Customer", "Type", "GSTIN", "Lines", "Qty", "Taxable",
                     "Discount", "CGST", "SGST", "IGST", "Total"], rows,
-                   {"Bills": len(rows), "Taxable": _sum(rows, 6), "Discount": _sum(rows, 7),
-                    "CGST": _sum(rows, 8), "SGST": _sum(rows, 9), "IGST": _sum(rows, 10),
-                    "Total": _sum(rows, 11)},
-                   "One row per bill with its tax split. " + TAX_NOTE)
+                   {"Bills": len(rows), "Taxable": _sum(rows, 7), "Discount": _sum(rows, 8),
+                    "CGST": _sum(rows, 9), "SGST": _sum(rows, 10), "IGST": _sum(rows, 11),
+                    "Total": _sum(rows, 12)},
+                   "One row per bill with its tax split. Type is B2B when the buyer's GSTIN "
+                   "was on the bill, B2C otherwise. " + TAX_NOTE)
+
+
+def supply_summary(ctx):
+    """B2B and B2C side by side — and B2C split intra / inter-state, the way the
+    GST return asks for it. One row per kind of sale, from the same bills every
+    other sales figure is built on."""
+    kinds = OrderedDict((k, {"bills": 0, "qty": 0.0, "taxable": 0.0, "disc": 0.0,
+                             "cgst": 0.0, "sgst": 0.0, "igst": 0.0, "total": 0.0})
+                        for k in ("B2B", "B2C — intra-state", "B2C — inter-state"))
+    for inv in ctx.bills().all():
+        k = "B2B" if inv.is_b2b else ("B2C — inter-state" if inv.is_interstate
+                                      else "B2C — intra-state")
+        r = kinds[k]
+        r["bills"] += 1
+        r["qty"] += float(inv.total_qty or 0)
+        r["taxable"] += float(inv.subtotal or 0)
+        r["disc"] += float(inv.discount or 0)
+        r["cgst"] += float(inv.cgst or 0)
+        r["sgst"] += float(inv.sgst or 0)
+        r["igst"] += float(inv.igst or 0)
+        r["total"] += float(inv.total or 0)
+    grand = sum(r["total"] for r in kinds.values())
+    rows = [[k, r["bills"], _q(r["qty"]), _m(r["taxable"]), _m(r["disc"]), _m(r["cgst"]),
+             _m(r["sgst"]), _m(r["igst"]), _m(r["cgst"] + r["sgst"] + r["igst"]),
+             _m(r["total"]), _pct(r["total"], grand)] for k, r in kinds.items()]
+    b2c = [r for r in rows if r[0].startswith("B2C")]
+    return _result(["Supply", "Bills", "Qty", "Taxable", "Discount", "CGST", "SGST", "IGST",
+                    "Tax", "Total", "Share %"], rows,
+                   {"Bills": sum(r[1] for r in rows), "Taxable": _sum(rows, 3),
+                    "Tax": _sum(rows, 8), "Total": _sum(rows, 9),
+                    "B2B total": rows[0][9], "B2C total": _m(sum(r[9] for r in b2c))},
+                   "B2B: the buyer's GSTIN was on the bill (it is recorded on the bill when it "
+                   "is raised, so a GSTIN added to a customer later does not move old bills). "
+                   "B2C: everything else, split by whether the buyer is in another state "
+                   "(IGST). Cancelled bills are left out. " + TAX_NOTE)
 
 
 def sales_barcode(ctx):
@@ -1118,7 +1180,7 @@ def tax_column(ctx):
         taxable = sum(v[0] for v in b["rates"].values())
         tax = sum(v[1] for v in b["rates"].values())
         rows.append([inv.invoice_number, _d(inv.invoice_date), c.name if c else "Walk-in",
-                     (c.gstin if c else "") or "—", *cells, _m(taxable), _m(tax), _m(inv.total)])
+                     inv.billed_gstin or "—", *cells, _m(taxable), _m(tax), _m(inv.total)])
     cols = ["Bill", "Date", "Customer", "GSTIN"]
     for rate in rates:
         cols += [f"Taxable {_q(rate)}%", f"Tax {_q(rate)}%"]
@@ -1136,7 +1198,7 @@ def tax_row(ctx):
         for rate, (tx, tax) in sorted(b["rates"].items()):
             cg, sg, ig = _split_tax(inv, tax)
             rows.append([inv.invoice_number, _d(inv.invoice_date), c.name if c else "Walk-in",
-                         (c.gstin if c else "") or "—", f"{_q(rate)}%", _m(tx), cg, sg, ig,
+                         inv.billed_gstin or "—", f"{_q(rate)}%", _m(tx), cg, sg, ig,
                          _m(tx + tax)])
     return _result(["Bill", "Date", "Customer", "GSTIN", "Rate", "Taxable", "CGST", "SGST",
                     "IGST", "Value"], rows,
@@ -1201,14 +1263,11 @@ def gstr_report(ctx):
         r[3] += sign * cg
         r[4] += sign * sg
     for item, inv in ctx.lines().all():
-        c = inv.customer
-        registered = bool(c and (c.gstin or "").strip())
-        section = ("B2B — registered customers" if registered
+        section = ("B2B — registered customers" if inv.is_b2b
                    else "B2C — inter-state" if inv.is_interstate else "B2C — intra-state")
         add(section, float(item.gst_rate or 0), item.line_total or 0, item.tax_amount or 0, inv)
     for note in ctx.credit_notes().options(selectinload(CreditNote.items)).all():
-        c = note.invoice.customer
-        section = ("Credit notes — registered (CDNR)" if c and (c.gstin or "").strip()
+        section = ("Credit notes — registered (CDNR)" if note.invoice.is_b2b
                    else "Credit notes — unregistered (CDNUR)")
         for ci in note.items:
             add(section, float(ci.gst_rate or 0), ci.line_total or 0, ci.tax_amount or 0,
@@ -1796,6 +1855,7 @@ GROUPS = [
         ("hsn", "Sales HSN Report", hsn_report, {}),
         ("tax_collection", "Sales Tax Splitup with Collection Report", tax_collection, {}),
         ("gstr", "GSTR Report", gstr_report, {}),
+        ("supply_summary", "B2B / B2C Summary", supply_summary, {}),
     ]),
     ("hr", "HR Reports", [
         ("incentive_section", "Incentive Report - Section", incentive_section, {}),
@@ -1806,9 +1866,18 @@ GROUPS = [
     ]),
     ("b2b", "Reports - B2B Vertical", [
         ("b2b_sales", "Sales Report", sales_invoice_wise, {"b2b": True}),
+        ("b2b_tax_summary", "Sales Tax Report (Summary)", tax_summary, {"b2b": True}),
         ("b2b_tax_column", "Sales Tax Report (Column wise)", tax_column, {"b2b": True}),
         ("b2b_tax_row", "Sales Tax Report (Row wise)", tax_row, {"b2b": True}),
         ("b2b_hsn", "Sales HSN Report", hsn_report, {"b2b": True}),
+    ]),
+    # The same reports asked of the other bills: sales to buyers with no GSTIN.
+    ("b2c", "Reports - B2C Vertical", [
+        ("b2c_sales", "Sales Report", sales_invoice_wise, {"supply": "b2c"}),
+        ("b2c_tax_summary", "Sales Tax Report (Summary)", tax_summary, {"supply": "b2c"}),
+        ("b2c_tax_column", "Sales Tax Report (Column wise)", tax_column, {"supply": "b2c"}),
+        ("b2c_tax_row", "Sales Tax Report (Row wise)", tax_row, {"supply": "b2c"}),
+        ("b2c_hsn", "Sales HSN Report", hsn_report, {"supply": "b2c"}),
     ]),
     ("customer", "Customer Reports", [
         ("credit_outstanding", "Credit Customer Outstanding Report", credit_outstanding, {}),
@@ -1841,7 +1910,9 @@ for _gkey, _glabel, _items in GROUPS:
     for _key, _label, _run, _flags in _items:
         spec = {"key": _key, "label": _label, "group": _gkey, "group_label": _glabel,
                 "dated": _flags.get("dated", True), "places": _flags.get("places", True),
-                "b2b": _flags.get("b2b", False), "params": PARAMS.get(_key, [])}
+                "b2b": _flags.get("b2b", False),
+                "supply": _flags.get("supply") or ("b2b" if _flags.get("b2b") else None),
+                "params": PARAMS.get(_key, [])}
         if isinstance(_run, dict):
             spec.update(_run)
             spec["run"] = None
@@ -1867,7 +1938,7 @@ def run(key, start, end, company=None, location=None, counter=None, params=None)
               company=company if places is True else None,
               location=location if places in (True, "location") else None,
               counter=counter if places is True else None,
-              params=params, b2b=spec["b2b"])
+              params=params, supply=spec["supply"])
     out = spec["run"](ctx)
     out.setdefault("totals", {})
     out.setdefault("note", "")

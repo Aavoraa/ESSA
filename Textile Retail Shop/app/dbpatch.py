@@ -130,6 +130,8 @@ COLUMNS = [
     ("invoices", "coupon_discount", "FLOAT"),
     # Who approved a bill's discounts — the discount card's E.Code.
     ("invoices", "discount_by_id", "INTEGER"),
+    # The buyer's GSTIN as billed — B2B when set, B2C when "" (app/gstin.py).
+    ("invoices", "customer_gstin", "VARCHAR(16)"),
     # Which till raised a credit note, so a cash refund comes out of its drawer.
     ("credit_notes", "counter_id", "INTEGER"),
 ]

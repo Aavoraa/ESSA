@@ -94,6 +94,11 @@ MODULES = [
 # client that sends one itself has only taken access away from itself.
 STORE_HEADER = "X-Essa-Store-Access"
 
+#: The shop role ("admin" or "cashier") the signed-in Essa account maps to, set by
+#: the /pos mount so the warehouse's sign-in carries into the shop. See
+#: _sign_in_from_essa in app/__init__.
+SSO_HEADER = "X-Essa-Shop-Role"
+
 #: The modules a Store user sees: the floor's day — billing, handing over,
 #: looking up stock, the customer, taking goods back, alterations. Nothing that
 #: reports on the store or configures it.

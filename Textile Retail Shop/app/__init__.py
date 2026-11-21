@@ -3,7 +3,7 @@ import os
 import datetime as dt
 from flask import Flask, g, jsonify, redirect, render_template, request, url_for
 from flask_sqlalchemy import SQLAlchemy
-from flask_login import LoginManager
+from flask_login import LoginManager, current_user, login_user
 from sqlalchemy import MetaData
 from config import Config
 
@@ -244,6 +244,28 @@ def create_app(config_class=Config):
             return
         raw = (request.args.get("wh") or "").strip()
         session[places_mod.SCOPE_KEY] = int(raw) if raw.isdigit() else None
+
+    @app.before_request
+    def _sign_in_from_essa():
+        """Inside the Essa warehouse, the warehouse's sign-in IS the shop's.
+
+        The /pos mount reads the visitor's Essa session and passes the shop role
+        it maps to in modules.SSO_HEADER, after stripping any copy the client
+        sent. Unlike the store-access header this one GRANTS access, so it is
+        honoured only when the mount says it is in front of us (ESSA_SSO, set in
+        backend/app/pos_mount.py). Run on its own, the shop ignores the header
+        and keeps its login form.
+        """
+        if not app.config.get("ESSA_SSO") or current_user.is_authenticated:
+            return None
+        role = (request.headers.get(modules.SSO_HEADER) or "").strip().lower()
+        if role not in ("admin", "cashier"):
+            return None
+        user = (User.query.filter_by(role=role, active=True)
+                .order_by(User.id).first())
+        if user is not None:
+            login_user(user)
+        return None
 
     @app.before_request
     def _store_access_gate():

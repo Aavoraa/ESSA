@@ -186,6 +186,10 @@ def load_pos_app():
         # properly at the till, by the shop's own places.py.
         if store_name:
             flask_app.config["SHOP_NAME"] = store_name
+        # Mounted here, the warehouse's sign-in carries into the shop: the mount
+        # strips any client copy of the role header and sets it from the Essa
+        # session (main._with_store_access), so the shop may trust it.
+        flask_app.config["ESSA_SSO"] = True
         with flask_app.app_context():
             pkg.db.create_all()                     # first run: build the schema
             # The shop's categories are the warehouse master's, and its catalogue

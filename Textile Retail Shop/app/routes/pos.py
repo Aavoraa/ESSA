@@ -3,6 +3,7 @@ from flask import (Blueprint, render_template, request, redirect, url_for, flash
 from flask_login import login_required, current_user
 from datetime import datetime
 from itsdangerous import URLSafeSerializer
+from sqlalchemy import func
 from app import db
 from app.datefilter import day_from, day_to
 from app import (billing_numbers, cancellation, drawer, places, promotions, schemes,
@@ -98,6 +99,33 @@ POST_KEYS = ("company_id", "location_id", "floor_id", "counter_id")
 def _chosen():
     """(company, location, floor, counter) — each None until picked or mapped."""
     return places.resolve(*(session.get(k) for k in POST_KEYS))
+
+
+# ---- what this till does: bill, take payment, or both ---------------------------------
+# A shop with a cash desk splits the two: the billing counters raise the bill and
+# print the delivery copy, the customer carries it to the cash desk, and the cash
+# desk takes the money. Set per till in Change till, and kept like the rest of the
+# till's settings (company, location, floor, counter) — with this terminal.
+TILL_ROLES = {
+    "both": "Billing & payment",
+    "billing": "Billing only",
+    "payment": "Cash desk (payment only)",
+}
+
+
+def _till_role():
+    role = session.get("till_role")
+    return role if role in TILL_ROLES else "both"
+
+
+def _pending_bills():
+    """Bills waiting for payment — at this till's location when it has one, so a
+    cash desk sees its own shop's queue and not every branch's."""
+    _company, location, _storey, _till = _chosen()
+    q = Invoice.query.filter(Invoice.payment_status == "pending")
+    if location is not None:
+        q = q.filter(Invoice.location_id == location.id)
+    return q.order_by(Invoice.id.desc()).limit(60).all()
 
 
 def _place():
@@ -225,9 +253,14 @@ def counter():
     # No customer list: counter.html never reads one (a customer is found by
     # phone at the counter), and loading all 150K of them on every open of the
     # till was most of its load time.
+    # A cash desk does not bill: it opens on its queue. ?bill=1 still reaches the
+    # counter, for the one-off case and for changing the till's role back.
+    if _till_role() == "payment" and not request.args.get("bill"):
+        return redirect(url_for("pos.settle"))
     staff = User.query.filter(User.active.is_(True)).order_by(User.full_name).all()
     company, location, storey, till = _chosen()
     return render_template("pos/counter.html",
+                           till_role=_till_role(), till_roles=TILL_ROLES,
                            staff=staff,
                            places=places.picker_options(),
                            chosen_company=company, chosen_location=location,
@@ -241,6 +274,7 @@ def counter():
 def _customer_json(c):
     """A customer in the shape the counter's customer card paints."""
     return {"id": c.id, "name": c.name, "phone": c.phone or "",
+            "gstin": c.gstin or "", "state_code": c.state_code or "",
             "loyalty_points": round(c.loyalty_points or 0, 2),
             "total_spent": round(c.total_spent or 0, 2),
             "invoice_count": len(c.invoices)}
@@ -275,8 +309,16 @@ def settle():
     `?id=` naming the bill it has just raised (and `?credit_note=` when it is an
     exchange). Opened from the menu, it picks the newest bill waiting.
     """
-    pending = (Invoice.query.filter(Invoice.payment_status == "pending")
-               .order_by(Invoice.id.desc()).limit(60).all())
+    # ?bill=<number> — the cash desk scans the bill's QR off the delivery copy
+    # the customer hands over (or types the number) and lands on that bill.
+    wanted = (request.args.get("bill") or "").strip()
+    if wanted:
+        found = Invoice.query.filter(func.upper(Invoice.invoice_number) == wanted.upper()).first()
+        if found is None:
+            flash(f"No bill {wanted}.", "warning")
+            return redirect(url_for("pos.settle"))
+        return redirect(url_for("pos.settle", id=found.id))
+    pending = _pending_bills()
     iid = request.args.get("id", type=int)
     inv = Invoice.query.get(iid) if iid else (pending[0] if pending else None)
     settled_already = inv is not None and (inv.payment_status or "") != "pending"
@@ -292,10 +334,34 @@ def settle():
             scheme_awards, scheme_off = [], 0.0
     return render_template(
         "pos/settle.html", pending=pending, inv=inv, settled_already=settled_already,
+        till_role=_till_role(), till_roles=TILL_ROLES,
+        # the same customer's other bills still waiting — billed at another
+        # counter or floor — which can be paid for together with this one
+        others=([{"id": b.id, "number": b.invoice_number, "due": _due_now(b),
+                  "time": b.invoice_date.strftime("%d %b %H:%M") if b.invoice_date else "",
+                  "floor": b.floor.name if b.floor else ""}
+                 for b in Invoice.query.filter(Invoice.customer_id == inv.customer_id,
+                                               Invoice.id != inv.id,
+                                               Invoice.payment_status == "pending")
+                 .order_by(Invoice.id).limit(20).all()]
+                if inv is not None and inv.customer_id and not settled_already
+                and not inv.is_cancelled else []),
         rcpt=_receipt(inv) if inv is not None else None,
         scheme_awards=scheme_awards, scheme_off=scheme_off,
         due=round((inv.total or 0) - scheme_off, 2) if inv is not None else 0,
         exchange=_exchange_from(request.args.get("credit_note")))
+
+
+@pos_bp.route("/api/pending-bills")
+@login_required
+def api_pending_bills():
+    """The settlement queue, for the cash desk to refresh without reloading — a
+    bill raised at a billing counter appears here within a few seconds."""
+    return jsonify({"bills": [{
+        "id": b.id, "number": b.invoice_number, "total": round(b.total or 0, 2),
+        "time": b.invoice_date.strftime("%H:%M") if b.invoice_date else "",
+        "customer": b.customer.name if b.customer else "Walk-in",
+        "url": url_for("pos.settle", id=b.id)} for b in _pending_bills()]})
 
 
 @pos_bp.route("/api/offers")
@@ -360,6 +426,7 @@ def _place_json(company, location, storey, till):
         "counter": {"id": till.id, "name": till.name} if till else None,
         "next_bill": billing_numbers.peek(storey),
         "options": places.picker_options(),
+        "till_role": _till_role(),
     }
 
 
@@ -377,8 +444,12 @@ def place():
     if request.method == "POST":
         data = request.get_json(silent=True) or request.form
         for key in POST_KEYS:
+            if key not in data:          # not sent: kept (the cash desk sends only its role)
+                continue
             raw = data.get(key)
             session[key] = int(raw) if str(raw or "").strip().isdigit() else None
+        if data.get("till_role") in TILL_ROLES:
+            session["till_role"] = data.get("till_role")
         company, location, storey, till = places.resolve(
             *(session.get(k) for k in POST_KEYS))
         # store back what survived, so the session never holds a pairing the
@@ -609,6 +680,9 @@ def checkout():
             payment_method=payment_method,
             discount=discount,
             is_interstate=is_interstate,
+            # B2B when the buyer gave a GSTIN, B2C ("") otherwise — fixed on the
+            # bill as issued; see Invoice.customer_gstin
+            customer_gstin=((customer.gstin or "").strip() if customer else ""),
             company_id=company.id if company else None,
             location_id=location.id if location else None,
             floor_id=storey.id if storey else None,
@@ -933,6 +1007,9 @@ def _sale_json(inv, issued):
 @login_required
 def settle_bill(iid):
     """Take the money for a bill the counter has already raised."""
+    if _till_role() == "billing":
+        return jsonify({"error": "This till is set to Billing only — payment is taken "
+                                 "at the cash desk. Change till to take it here."}), 400
     inv = Invoice.query.get_or_404(iid)
     if inv.is_cancelled:
         return jsonify({"error": f"{inv.invoice_number} was cancelled."}), 400
@@ -955,6 +1032,117 @@ def settle_bill(iid):
         db.session.rollback()
         return jsonify({"error": str(e)}), 500
     return jsonify(_sale_json(inv, issued))
+
+
+def _due_now(inv):
+    """What `inv` will ask for at settlement — its total less the On Settlement
+    schemes that pay out then. The same sum _take_payment works to."""
+    try:
+        off = schemes.settlement_discount(schemes.settlement_awards(inv), inv.total)
+    except Exception:                                # noqa: BLE001
+        off = 0.0
+    return round((inv.total or 0) - off, 2)
+
+
+def _split_tenders(payments, dues):
+    """Share one payment out over several bills, bill by bill in order.
+
+    Card, UPI, credit note and advance are used first and cash last, so any
+    change lands on the cash portion of the last bill that takes cash — which is
+    where it was actually handed back. Each portion keeps its reference (the card
+    approval, the credit note number), so every bill names what paid it.
+    Returns one tender list per bill.
+    """
+    queue = sorted((dict(p) for p in payments), key=lambda p: p["method"] == "cash")
+    out = []
+    for due in dues:
+        need, mine = round(due, 2), []
+        while need > SETTLE_TOLERANCE and queue:
+            p = queue[0]
+            take = round(min(need, p["amount"]), 2)
+            mine.append({"method": p["method"], "amount": take, "tendered": take,
+                         "reference": p.get("reference")})
+            p["amount"] = round(p["amount"] - take, 2)
+            p["tendered"] = round(p["tendered"] - take, 2)
+            need = round(need - take, 2)
+            if p["amount"] <= SETTLE_TOLERANCE:
+                # the change rides on the portion that finished this tender
+                if p["method"] == "cash" and p["tendered"] > 0:
+                    mine[-1]["tendered"] = round(mine[-1]["tendered"] + p["tendered"], 2)
+                queue.pop(0)
+        out.append(mine)
+    return out
+
+
+@pos_bp.route("/settle-many", methods=["POST"])
+@login_required
+def settle_many():
+    """One payment for several of a customer's bills — billed at different
+    counters or floors, paid for once at the cash desk.
+
+    All or nothing: every bill is settled in one transaction, with its own share
+    of the tenders, through the same _take_payment a single bill uses (so its
+    schemes, loyalty and coupons all work exactly as if paid alone). If any one
+    of them cannot be, none is.
+    """
+    if _till_role() == "billing":
+        return jsonify({"error": "This till is set to Billing only — payment is taken "
+                                 "at the cash desk. Change till to take it here."}), 400
+    data = request.get_json(silent=True) or {}
+    try:
+        ids = list(dict.fromkeys(int(i) for i in (data.get("bill_ids") or [])))
+    except (TypeError, ValueError):
+        return jsonify({"error": "bill_ids must be bill numbers"}), 400
+    if len(ids) < 2:
+        return jsonify({"error": "Choose at least two bills to settle together."}), 400
+    bills = [Invoice.query.get(i) for i in ids]
+    if any(b is None for b in bills):
+        return jsonify({"error": "One of those bills does not exist."}), 400
+    for b in bills:
+        if b.is_cancelled:
+            return jsonify({"error": f"{b.invoice_number} was cancelled."}), 400
+        if (b.payment_status or "") != "pending":
+            return jsonify({"error": f"{b.invoice_number} is already settled."}), 400
+    # One customer's bills only: a payment is one person's money, and store
+    # credit or an advance can only pay that person's bills.
+    cust = {b.customer_id for b in bills}
+    if len(cust) != 1 or None in cust:
+        return jsonify({"error": "Bills can be settled together only when they belong "
+                                 "to the same customer."}), 400
+    if "payments" not in data:
+        return jsonify({"error": "no payment was entered"}), 400
+    try:
+        payments, _method = parse_payments(data)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    dues = [_due_now(b) for b in bills]
+    total_due = round(sum(dues), 2)
+    paid = round(sum(p["amount"] for p in payments), 2)
+    if abs(paid - total_due) > SETTLE_TOLERANCE:
+        short = round(total_due - paid, 2)
+        return jsonify({"error": (f"Payment does not settle the bills — ₹{abs(short):.2f} "
+                                  f"{'short' if short > 0 else 'over'}. Bills ₹{total_due:.2f}, "
+                                  f"entered ₹{paid:.2f}.")}), 400
+    issued = []
+    try:
+        for b, share in zip(bills, _split_tenders(payments, dues)):
+            refused, got = _take_payment(b, share, None)
+            if refused is not None:
+                db.session.rollback()
+                return refused
+            issued += got
+        db.session.commit()
+    except Exception as e:                           # noqa: BLE001
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+    return jsonify({"success": True, "invoice_ids": [b.id for b in bills],
+                    "invoice_numbers": [b.invoice_number for b in bills],
+                    "total": total_due,
+                    "change": round(sum(b.change_given for b in bills), 2),
+                    "coupons_issued": [{"code": c.code, "worth": c.campaign.describe,
+                                        "valid_to": c.valid_to.strftime("%d-%m-%Y")}
+                                       for c in issued]})
 
 
 @pos_bp.route("/api/coupon")
@@ -1108,6 +1296,16 @@ def _receipt(inv):
             "taxes": taxes}
 
 
+def _next_in_chain():
+    """The next customer copy to print after a multi-bill settlement, carrying
+    the rest of the chain (and where to go once it is done) along with it."""
+    ids = [i for i in (request.args.get("chain") or "").split(",") if i.strip().isdigit()]
+    if not ids:
+        return url_for("pos.settle") if request.args.get("then") == "queue" else None
+    return url_for("pos.print_invoice", iid=int(ids[0]), copy="customer", fresh=1,
+                   chain=",".join(ids[1:]) or None, then=request.args.get("then") or None)
+
+
 def _invoice_page(inv, print_view):
     return render_template(
         "pos/invoice.html", inv=inv, print_view=print_view, rcpt=_receipt(inv),
@@ -1120,10 +1318,20 @@ def _invoice_page(inv, print_view):
         # Neither: a reprint, both copies.
         only_copy=(request.args.get("copy") if request.args.get("copy") in
                    ("delivery", "customer") else None),
-        # ?then=settle — once the delivery copy has printed, on to Settlement
-        then_url=(url_for("pos.settle", id=inv.id,
-                          credit_note=request.args.get("credit_note") or None)
-                  if request.args.get("then") == "settle" else None),
+        # ?then=settle — once the delivery copy has printed, on to Settlement; on
+        # a Billing-only till, back to a fresh bill (the cash desk takes payment)
+        then_url=((url_for("pos.counter") if _till_role() == "billing" else
+                   url_for("pos.settle", id=inv.id,
+                           credit_note=request.args.get("credit_note") or None))
+                  if request.args.get("then") == "settle"
+                  # ?chain=12,13 — several bills settled together: once this
+                  # customer copy has printed, the next one's, then the rest
+                  else _next_in_chain() if request.args.get("chain")
+                  # ?then=queue — the cash desk, once the customer copy has
+                  # printed, back to the bills still waiting
+                  else url_for("pos.settle") if request.args.get("then") == "queue"
+                  else None),
+        till_role=_till_role(),
         back_url=_invoice_back_url(inv, print_view),
         cancel_blocked=cancellation.why_not(inv, current_user),
         coupons_issued=Coupon.query.filter_by(issued_invoice_id=inv.id).all(),
