@@ -495,6 +495,12 @@ class Invoice(db.Model):
     floor = db.relationship("Floor")
     payment_status = db.Column(db.String(16), default="paid")  # paid/pending/cancelled
     is_interstate = db.Column(db.Boolean, default=False)
+    #: The customer's GSTIN as it was when the bill was raised — "" for a sale to
+    #: an unregistered buyer (B2C), the GSTIN for a registered one (B2B). Kept on
+    #: the bill because the return reports the bill as it was issued: a GSTIN
+    #: added to the customer next month must not turn this bill into B2B. NULL
+    #: only on bills from before this was recorded; see `billed_gstin`.
+    customer_gstin = db.Column(db.String(16))
     notes = db.Column(db.String(256))
 
     #: Cancellation. The row stays — its number is part of a statutory series and
@@ -528,6 +534,22 @@ class Invoice(db.Model):
     @property
     def is_cancelled(self):
         return (self.payment_status or "") == "cancelled"
+
+    @property
+    def billed_gstin(self):
+        """The buyer's GSTIN on this bill, or "" for an unregistered buyer. A bill
+        from before the snapshot existed falls back to the customer's record."""
+        if self.customer_gstin is not None:
+            return self.customer_gstin.strip()
+        return ((self.customer.gstin if self.customer else "") or "").strip()
+
+    @property
+    def is_b2b(self):
+        return bool(self.billed_gstin)
+
+    @property
+    def supply_type(self):
+        return "B2B" if self.is_b2b else "B2C"
 
     @classmethod
     def live(cls):

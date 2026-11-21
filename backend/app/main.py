@@ -755,7 +755,12 @@ def _with_store_access(scope):
     from starlette.requests import Request as _Request
 
     name = perms_svc.STORE_HEADER.encode()
-    headers = [(k, v) for k, v in scope.get("headers", []) if k.lower() != name]
+    # The shop signs in whoever this header names (its _sign_in_from_essa), so a
+    # client must never be able to supply it: stripped here, always, and only
+    # ever set below from a valid Essa session.
+    sso = b"x-essa-shop-role"
+    headers = [(k, v) for k, v in scope.get("headers", [])
+               if k.lower() not in (name, sso)]
     if "/static/" in scope.get("path", ""):
         return dict(scope, headers=headers)            # css, icons: nothing to gate
     # A throwaway copy for reading the cookie: Starlette's Request replaces the
@@ -763,6 +768,7 @@ def _with_store_access(scope):
     # would not be the one the shop receives.
     token = token_from(_Request(dict(scope, headers=list(headers))))
     narrow = False
+    shop_role = None
     if token:
         try:
             from .database import SessionLocal
@@ -771,11 +777,16 @@ def _with_store_access(scope):
                 user = resolve_token(db, token)
                 narrow = user is not None and perms_svc.store_access(
                     perms_svc.normalise(user.permissions), user.role) == "user"
+                if user is not None:
+                    shop_role = b"cashier" if narrow else b"admin"
             finally:
                 db.close()
         except Exception:                              # noqa: BLE001
             narrow = True
-    return dict(scope, headers=headers + ([(name, b"user")] if narrow else []))
+    extra = [(name, b"user")] if narrow else []
+    if shop_role:
+        extra.append((sso, shop_role))
+    return dict(scope, headers=headers + extra)
 
 
 class _PosMount:

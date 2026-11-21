@@ -9,8 +9,23 @@
     <div class="card pend">
       <div class="px-3 py-2 border-bottom d-flex justify-content-between align-items-center">
         <span class="fw-bold"><i class="bi bi-hourglass-split"></i> Waiting for payment</span>
-        <span class="badge text-bg-warning">{{ pending|length }}</span>
+        <span class="badge text-bg-warning" id="pendCount">{{ pending|length }}</span>
       </div>
+      {# The customer hands over the delivery copy: scan its QR, or type the number. #}
+      <form class="px-2 pt-2" method="get" action="{{ url_for('pos.settle') }}" autocomplete="off">
+        <div class="input-group input-group-sm">
+          <span class="input-group-text"><i class="bi bi-qr-code-scan"></i></span>
+          <input id="billFind" name="bill" class="form-control font-monospace"
+                 placeholder="Scan the bill's QR or type its number (F9)">
+          <button id="billCam" class="btn btn-outline-primary" type="button" title="Scan the bill with the camera">
+            <i class="bi bi-camera"></i></button>
+        </div>
+        <div id="billCamBox" class="mt-1" style="display:none">
+          <div id="billCamReader" style="width:100%"></div>
+          <button id="billCamStop" class="btn btn-outline-secondary btn-sm mt-1 w-100" type="button">Stop camera</button>
+        </div>
+        <div id="scanSaid" class="small mt-1 text-muted" aria-live="polite"></div>
+      </form>
       <div class="pend-list list-group list-group-flush">
         {% for b in pending %}
         <a href="{{ url_for('pos.settle', id=b.id) }}"
@@ -68,24 +83,70 @@
   </aside>
 
   <section class="card pos-pay">
-    <div class="px-3 py-2 border-bottom"><span class="fw-bold"><i class="bi bi-cash-coin"></i> SETTLEMENT</span>
-      {% if inv %}<span class="font-monospace ms-2">{{ inv.invoice_number }}</span>{% endif %}</div>
+    <div class="px-3 py-2 border-bottom d-flex align-items-center gap-2"><span class="fw-bold"><i class="bi bi-cash-coin"></i> SETTLEMENT</span>
+      {% if inv %}<span class="font-monospace">{{ inv.invoice_number }}</span>{% endif %}
+      {# what this till does — a cash desk never sees the counter, so it is changed here too #}
+      <select id="tillRole" class="form-select form-select-sm ms-auto w-auto" title="What this till does">
+        {% for k, label in till_roles.items() %}
+        <option value="{{ k }}" {{ 'selected' if k == till_role }}>{{ label }}</option>
+        {% endfor %}
+      </select></div>
 
-    {% if not inv %}
+    {% if till_role == 'billing' %}
+    <div class="m-auto text-center p-4">
+      <div class="mb-2"><span class="badge text-bg-warning">Billing only</span></div>
+      <div class="mb-2 text-muted">This till raises bills; payment is taken at the cash desk.<br>
+        To take payment here, set it to “Billing &amp; payment” or “Cash desk” above.</div>
+      <a href="{{ url_for('pos.counter') }}" class="btn btn-brand">Back to billing</a>
+    </div>
+    {% elif not inv %}
     <div class="m-auto text-center p-4">
       <div class="mb-2 text-muted">No bills are waiting for payment.</div>
+      {% if till_role == 'payment' %}
+      <div class="small text-muted">New bills from the billing counters appear on the left by themselves.</div>
+      {% else %}
       <a href="{{ url_for('pos.counter') }}" class="btn btn-brand">Go to billing</a>
+      {% endif %}
     </div>
     {% elif inv.is_cancelled or settled_already %}
     <div class="m-auto text-center p-4">
       <div class="mb-2">{{ inv.invoice_number }} is {{ 'cancelled' if inv.is_cancelled else 'already settled' }}.</div>
       <a href="{{ url_for('pos.view_invoice', iid=inv.id) }}" class="btn btn-outline-primary">Open the bill</a>
-      <a href="{{ url_for('pos.counter') }}" class="btn btn-brand">New bill</a>
+      {% if till_role != 'payment' %}<a href="{{ url_for('pos.counter') }}" class="btn btn-brand">New bill</a>{% endif %}
     </div>
     {% else %}
     <div class="pay-body px-3 py-2">
+      {# The same customer's other unpaid bills — billed on another floor or
+         counter. Ticked ones are paid for together with this one, in one go. #}
+      {% if others %}
+      <div class="others mb-2">
+        <div class="d-flex align-items-center gap-2 mb-1">
+          <span class="fw-semibold small"><i class="bi bi-collection"></i>
+            {{ inv.customer.name }} has {{ others|length }} more bill{{ 's' if others|length > 1 }} waiting</span>
+          <button type="button" class="btn btn-outline-primary btn-xs ms-auto" id="othersAll">
+            Pay all together <kbd class="fkey">Alt+A</kbd></button>
+        </div>
+        <div class="others-list">
+          <label class="other-row on-this">
+            <input type="checkbox" checked disabled>
+            <span class="font-monospace fw-semibold">{{ inv.invoice_number }}</span>
+            <span class="text-muted small">this bill</span>
+            <span class="ms-auto fw-semibold">{{ due|inr }}</span>
+          </label>
+          {% for o in others %}
+          <label class="other-row">
+            <input type="checkbox" class="other-pick" value="{{ o.id }}" data-due="{{ o.due }}"
+                   data-number="{{ o.number }}">
+            <span class="font-monospace fw-semibold">{{ o.number }}</span>
+            <span class="text-muted small">{{ o.time }}{% if o.floor %} · {{ o.floor }}{% endif %}</span>
+            <span class="ms-auto fw-semibold">{{ o.due|inr }}</span>
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
       <div class="readouts">
-        <div class="ro"><div class="ro-k">Amount due</div><div class="ro-v" id="rDue">{{ due|inr }}</div></div>
+        <div class="ro"><div class="ro-k" id="rDueLabel">Amount due</div><div class="ro-v" id="rDue">{{ due|inr }}</div></div>
         <div class="ro"><div class="ro-k">Amount received</div><div class="ro-v" id="rReceived">₹0.00</div></div>
         <div class="ro"><div class="ro-k" id="rBalLabel">Balance to pay</div><div class="ro-v" id="rBalance">₹0.00</div></div>
         <div class="ro ro-change"><div class="ro-k">Change to give back</div><div class="ro-v" id="rChange">₹0.00</div></div>
@@ -142,11 +203,18 @@
   .sum-totals > div { display:flex; justify-content:space-between; }
   .pos-pay { display:flex; flex-direction:column; min-height:0; }
   .pay-body { flex:1 1 auto; min-height:0; overflow:auto; }
-  .readouts { display:grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap:8px; }
+  /* four across on a wide till, two across when the tiles would be too narrow for ₹12,345.00 */
+  .readouts { display:grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap:8px; }
   .ro { border:1px solid var(--border, #DCE5DF); border-radius:8px; padding:8px 10px; }
   .ro-k { font-size:.75rem; color:var(--text-muted, #68756E); text-transform:uppercase; letter-spacing:.04em; }
-  .ro-v { font-size:1.6rem; font-weight:700; font-variant-numeric: tabular-nums; }
+  /* shrinks with the window, so ₹12,345.00 still fits its tile on a narrow till */
+  .ro-v { font-size:clamp(1.05rem, 2.1vw, 1.6rem); font-weight:700; font-variant-numeric: tabular-nums;
+          white-space:nowrap; }
   .ro-change { background:#F5FBF7; border-color:#C1DDD2; }
+  .others { border:1px solid #C1DDD2; background:#F5FBF7; border-radius:8px; padding:6px 10px; }
+  .others-list { display:grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap:2px 16px; }
+  .other-row { display:flex; align-items:center; gap:8px; margin:0; padding:2px 0; cursor:pointer; }
+  .other-row.on-this { cursor:default; }
   .ro-change .ro-v { color:var(--brand-dark); }
   .tenders { display:grid; grid-template-columns: 1fr 1fr; gap:8px; }
   .tender { border:1px solid var(--border, #DCE5DF); border-radius:8px; padding:6px 8px;
@@ -161,6 +229,7 @@
 </style>
 {% endblock %}
 {% block scripts %}
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
 function fmt(n){ return '₹' + Number(n || 0).toFixed(2); }
@@ -176,9 +245,149 @@ function fitScreen(){
 window.addEventListener('resize', fitScreen);
 fitScreen();
 
-{% if inv and not inv.is_cancelled and not settled_already %}
+// ---- the till's role, and the queue keeping itself current ------------------------
+//: "both", "billing" (payment is taken at the cash desk) or "payment" (the cash desk).
+const TILL_ROLE = {{ till_role | tojson }};
+$('tillRole').addEventListener('change', async (e) => {
+  // only the role is sent; the till's company, location, floor and counter stay
+  await fetch(`${SHOP_ROOT}/pos/place`, {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                         body: JSON.stringify({till_role: e.target.value})});
+  window.location = e.target.value === 'billing' ? `${SHOP_ROOT}/pos/` : `${SHOP_ROOT}/pos/settle`;
+});
+
+// A bill raised at a billing counter shows up here within a few seconds, without
+// anyone reloading. Only the list is redrawn — the bill being paid is never
+// swapped out from under the cashier.
+const CURRENT_ID = {{ inv.id if inv else 'null' }};
+const escHtml = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+let queueSig = null;
+async function refreshQueue(){
+  let j;
+  try { j = await (await fetch(`${SHOP_ROOT}/pos/api/pending-bills`)).json(); } catch (e){ return; }
+  const bills = j.bills || [];
+  const sig = bills.map((b) => b.id).join(',');
+  if (sig === queueSig) return;
+  const first = queueSig === null;
+  queueSig = sig;
+  if (first) return;                               // the page already drew this list
+  $('pendCount').textContent = bills.length;
+  const list = document.querySelector('.pend-list');
+  list.innerHTML = bills.length ? bills.map((b) => `
+    <a href="${escHtml(b.url)}" class="list-group-item list-group-item-action py-1 px-3 ${b.id === CURRENT_ID ? 'active' : ''}">
+      <div class="d-flex justify-content-between">
+        <span class="font-monospace fw-semibold">${escHtml(b.number)}</span>
+        <span class="fw-semibold">${fmt(b.total)}</span></div>
+      <div class="small ${b.id === CURRENT_ID ? '' : 'text-muted'}">${escHtml(b.time)} · ${escHtml(b.customer)}</div>
+    </a>`).join('')
+    : '<div class="list-group-item text-muted small py-3 text-center">No bills are waiting.</div>';
+  // an idle cash desk opens the bill that has just arrived
+  if (CURRENT_ID === null && bills.length && TILL_ROLE !== 'billing'
+      && !($('billFind').value || '').trim()) window.location = bills[0].url;
+}
+if (TILL_ROLE !== 'billing'){ refreshQueue(); setInterval(refreshQueue, 4000); }
+
+// nothing to pay yet: the bill box is where the cashier starts
+if (CURRENT_ID === null || !$('cashIn')) $('billFind').focus();
+
+// ---- scanning a bill: from anywhere on this page ------------------------------------
+// The customer hands over the delivery copy; its QR (or barcode) is the bill number.
+// A scanner types that number in a few milliseconds wherever the cursor happens to
+// be — usually in Cash received. So the page listens to every key, and a burst
+// that is scanner-fast AND shaped like a bill number (letters and digits, e.g.
+// INV-000101, TG26-001) is taken as a scan: whatever it typed into the box under
+// the cursor is put back, and the page opens that bill. With or without the
+// scanner's Enter. A person typing — always far slower — is never caught by this,
+// and cash amounts (digits only) can never look like a bill number.
+const BILL_SHAPE = /^(?=.*[A-Z])(?=.*\d)[A-Z0-9][A-Z0-9\/-]{3,31}$/i;
+const SCAN_MS_PER_CHAR = 30;
+let burst = null;                       // {text, start, last, el, before}
+let burstTimer = null;
+function openBill(code){
+  code = (code || '').trim();
+  if (!code) return;
+  if ($('scanSaid')) $('scanSaid').textContent = `Opening ${code}…`;
+  window.location = `${SHOP_ROOT}/pos/settle?bill=${encodeURIComponent(code)}`;
+}
+function burstIsScan(b){
+  return b && b.text.length >= 4 && BILL_SHAPE.test(b.text)
+    && (b.last - b.start) / Math.max(1, b.text.length - 1) <= SCAN_MS_PER_CHAR;
+}
+function takeBurst(){
+  const b = burst; burst = null; clearTimeout(burstTimer);
+  if (!burstIsScan(b)) return false;
+  // undo what the scan typed into the box it landed in
+  if (b.el && 'value' in b.el && b.el.value !== b.before){
+    b.el.value = b.before;
+    b.el.dispatchEvent(new Event('input', {bubbles: true}));
+  }
+  openBill(b.text);
+  return true;
+}
+window.addEventListener('keydown', (e) => {
+  if (e.ctrlKey || e.altKey || e.metaKey || e.isComposing) return;
+  const now = performance.now();
+  if (e.key === 'Enter' && burst){
+    // the scanner's own Enter: claim it before the box's Enter handler moves on
+    if (takeBurst()){ e.preventDefault(); e.stopImmediatePropagation(); }
+    return;
+  }
+  if (e.key.length !== 1) return;
+  if (!burst || now - burst.last > 80){
+    const el = document.activeElement;
+    burst = {text: '', start: now, last: now, el, before: el && 'value' in el ? el.value : null};
+  }
+  burst.text += e.key; burst.last = now;
+  clearTimeout(burstTimer);
+  burstTimer = setTimeout(takeBurst, 90);           // a scanner that sends no Enter
+}, true);                                           // capture: before any box sees it
+
+// The camera, for a till without a scanner (or a phone at the desk).
+let cam = null;
+$('billCam').onclick = async () => {
+  $('billCamBox').style.display = 'block';
+  if (cam) return;
+  if (typeof Html5Qrcode === 'undefined'){ $('scanSaid').textContent = 'The camera scanner did not load — check the internet connection.'; return; }
+  cam = new Html5Qrcode('billCamReader');
+  try {
+    await cam.start({facingMode: 'environment'}, {fps: 12, qrbox: {width: 200, height: 200}},
+      async (decoded) => {
+        try { await cam.stop(); cam.clear(); } catch (e){}
+        cam = null;
+        openBill(decoded);
+      }, () => {});
+    $('scanSaid').textContent = 'Point the camera at the QR on the bill.';
+  } catch (err){ $('scanSaid').textContent = 'Camera error: ' + err; cam = null; }
+};
+$('billCamStop').onclick = async () => {
+  if (cam){ try { await cam.stop(); cam.clear(); } catch (e){} cam = null; }
+  $('billCamBox').style.display = 'none'; $('scanSaid').textContent = '';
+};
+
+{% if inv and not inv.is_cancelled and not settled_already and till_role != 'billing' %}
 const BILL_ID = {{ inv.id }};
-const DUE = r2({{ due }});
+//: This bill's due. DUE is what is being paid for: this bill plus any of the
+//: customer's other waiting bills ticked to be paid together.
+const BASE_DUE = r2({{ due }});
+let DUE = BASE_DUE;
+const picked = () => [...document.querySelectorAll('.other-pick:checked')];
+function repickBills(){
+  const extra = picked();
+  DUE = r2(BASE_DUE + extra.reduce((a, el) => a + Number(el.dataset.due || 0), 0));
+  $('rDue').innerText = fmt(DUE);
+  $('rDueLabel').innerText = extra.length ? `Amount due · ${extra.length + 1} bills` : 'Amount due';
+  $('billBtn').innerHTML = `<i class="bi bi-check-circle"></i> Settle${extra.length ? ` ${extra.length + 1} bills` : ''} &amp; print <kbd class="fkey">F10</kbd>`;
+  paint();
+}
+document.querySelectorAll('.other-pick').forEach((el) => el.addEventListener('change', repickBills));
+function pickAllBills(){
+  const boxes = [...document.querySelectorAll('.other-pick')];
+  if (!boxes.length) return;
+  const on = !boxes.every((b) => b.checked);
+  boxes.forEach((b) => { b.checked = on; });
+  repickBills();
+  $('cashIn').focus();
+}
+if ($('othersAll')) $('othersAll').onclick = pickAllBills;
 const CUSTOMER_ID = {{ inv.customer_id or 'null' }};
 const EXCHANGE = {{ exchange | tojson }};
 const METHODS = ['card', 'upi', 'credit_note', 'advance'];
@@ -280,14 +489,20 @@ $('billBtn').onclick = async () => {
   const f = figures();
   const payments = f.other.map((r) => ({method: r.method, amount: r.amount, tendered: r.amount, reference: r.reference || null}));
   if (f.cashIn > 0) payments.unshift({method: 'cash', amount: f.cashApplied, tendered: f.cashIn, reference: null});
+  const extra = picked().map((el) => Number(el.value));
+  const then = TILL_ROLE === "payment" ? "&then=queue" : "";
   try {
-    const j = await (await fetch(`${SHOP_ROOT}/pos/settle/${BILL_ID}`, {
+    // One bill, or several of this customer's paid for together (all or none).
+    const j = await (await fetch(extra.length ? `${SHOP_ROOT}/pos/settle-many` : `${SHOP_ROOT}/pos/settle/${BILL_ID}`, {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({payments: payments.filter((p) => p.amount > 0)}),
+      body: JSON.stringify({payments: payments.filter((p) => p.amount > 0),
+                            ...(extra.length ? {bill_ids: [BILL_ID, ...extra]} : {})}),
     })).json();
     if (j.error){ alert('Error: ' + j.error); btn.disabled = false; return; }
-    // The customer's copy, with what was received and the change on screen.
-    window.location = `${SHOP_ROOT}/pos/invoice/${BILL_ID}/print?copy=customer&fresh=1`;
+    // The customer's copy, with what was received and the change on screen —
+    // for several bills, each one's copy in turn.
+    const chain = extra.length ? `&chain=${extra.join(',')}` : '';
+    window.location = `${SHOP_ROOT}/pos/invoice/${BILL_ID}/print?copy=customer&fresh=1${chain}${then}`;
   } catch (err){
     alert('Settlement failed: ' + err);
     btn.disabled = false;
@@ -304,5 +519,134 @@ if (CUSTOMER_ID) lookupAdvance();
 paint();
 $('cashIn').focus();
 {% endif %}
+
+// ---- keyboard: settle without the mouse ---------------------------------------------
+// Same layout family as the billing counter (F1 help, F10 / Ctrl+Enter finish).
+// Every key presses or focuses something already on this screen, so a key can
+// never do what a click could not. Settling is always a deliberate key: Enter in
+// a box only moves onto Settle & print, and a second Enter (or F10) presses it.
+const PAYABLE = {{ 'true' if inv and not inv.is_cancelled and not settled_already and till_role != 'billing' else 'false' }};
+const tenderKey = {card: 'F3', upi: 'F4', credit_note: 'F6', advance: 'F7'};
+
+function goPending(step){
+  const rows = [...document.querySelectorAll('.pend-list a.list-group-item')];
+  if (!rows.length) return;
+  const cur = rows.findIndex((a) => a.classList.contains('active'));
+  const to = rows[cur < 0 ? 0 : Math.max(0, Math.min(rows.length - 1, cur + step))];
+  if (to && !to.classList.contains('active')) window.location = to.href;
+}
+function flashWarn(){
+  const w = $('sWarn'); if (!w) return;
+  w.animate([{opacity: .2}, {opacity: 1}], {duration: 250, iterations: 2});
+}
+// Settle if the figures allow it; otherwise say why, where the warning already is.
+function settleByKey(){
+  const b = $('billBtn');
+  if (!b) return;
+  if (b.disabled){ paint(); flashWarn(); return; }
+  b.click();
+}
+// A tender by its key: put the rest of the bill on it (when it is still empty)
+// and go to its reference box — the approval no., UPI ref, credit note no.
+function useTender(m){
+  const amt = amtEl(m), ref = refEl(m);
+  if (m === 'credit_note'){ ref.focus(); ref.select(); return; }   // its number comes first
+  if (!num(amt)) document.querySelector(`.t-rest[data-method="${m}"]`).click();
+  ref.focus(); ref.select();
+}
+function clearTenders(){
+  $('cashIn').value = '';
+  METHODS.forEach((m) => { amtEl(m).value = ''; });
+  paint(); $('cashIn').focus();
+}
+
+if (PAYABLE){
+  // Enter in a box: on to Settle & print when the bill is covered, otherwise stay
+  // and show what is missing. The credit note's number is checked first.
+  document.querySelectorAll('#cashIn, .t-amt, .t-ref').forEach((el) => el.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || e.ctrlKey || e.metaKey) return;
+    e.preventDefault();
+    if (el.classList.contains('t-ref') && el.dataset.method === 'credit_note'){
+      el.dispatchEvent(new Event('change'));
+      amtEl('credit_note').focus(); amtEl('credit_note').select();
+      return;
+    }
+    el.dispatchEvent(new Event('change'));
+    paint();
+    if ($('billBtn').disabled) flashWarn(); else $('billBtn').focus();
+  }));
+
+  // the key beside what it presses
+  const tag = (el, k) => el && el.insertAdjacentHTML('beforeend', ` <kbd class="fkey">${k}</kbd>`);
+  tag(document.querySelector('label[for="cashIn"]'), 'F2');
+  tag($('cashExact'), 'F8');
+  // +100…+2000 are Alt+1…4; said in their tooltip, not on the face — four more
+  // labels make the row wider than its box
+  document.querySelectorAll('.cash-add').forEach((b, i) => { b.title = `Alt+${i + 1}`; });
+  Object.entries(tenderKey).forEach(([m, k]) => tag(document.querySelector(`.tender[data-method="${m}"] .t-name`), k));
+  tag($('billBtn'), 'F10');
+}
+document.querySelectorAll('.pend-list a.list-group-item').length > 1
+  && document.querySelector('.pend .border-bottom .fw-bold')
+       ?.insertAdjacentHTML('beforeend', ' <kbd class="fkey">PgUp/PgDn</kbd>');
+
+document.addEventListener('keydown', (e) => {
+  if (e.isComposing) return;
+  const plain = !e.ctrlKey && !e.altKey && !e.metaKey;
+  const k = e.key;
+  if (k === 'F1' && plain){ e.preventDefault(); settleHelp.show(); return; }
+  if (k === 'F9' && plain){ e.preventDefault(); $('billFind').focus(); $('billFind').select(); return; }
+  if ((k === 'PageDown' || k === 'PageUp') && plain){
+    e.preventDefault(); goPending(k === 'PageDown' ? 1 : -1); return;
+  }
+  if (!PAYABLE) return;
+  if (document.querySelector('.modal.show')) return;          // the help card is open
+  if (plain && k === 'F2'){ e.preventDefault(); $('cashIn').focus(); $('cashIn').select(); return; }
+  if (plain && k === 'F8'){ e.preventDefault(); $('cashExact').click(); $('cashIn').focus(); return; }
+  const m = plain && Object.keys(tenderKey).find((x) => tenderKey[x] === k);
+  if (m){ e.preventDefault(); useTender(m); return; }
+  if (e.altKey && !e.ctrlKey && e.code === 'KeyA'){ e.preventDefault(); pickAllBills(); return; }
+  if (e.altKey && !e.ctrlKey && /^Digit[1-4]$/.test(e.code)){
+    const b = document.querySelectorAll('.cash-add')[Number(e.code.slice(5)) - 1];
+    if (b){ e.preventDefault(); b.click(); $('cashIn').focus(); }
+    return;
+  }
+  if ((plain && k === 'F10') || ((e.ctrlKey || e.metaKey) && k === 'Enter')){
+    e.preventDefault(); settleByKey(); return;
+  }
+  if (plain && k === 'Escape'){ e.preventDefault(); clearTenders(); }
+});
+
+const settleHelp = (() => {
+  const keys = [
+    ['F2', 'Cash received'], ['F8', 'Exact cash'], ['Alt+1 … Alt+4', 'Add ₹100 / 200 / 500 / 2000 cash'],
+    ['F3', 'Card — rest of the bill, then approval no.'], ['F4', 'UPI — rest of the bill, then UPI ref'],
+    ['F6', 'Credit note — its number, then the amount'], ['F7', 'Advance — rest of the bill'],
+    ['Enter', 'On to Settle & print (when the bill is covered)'],
+    ['F10 / Ctrl+Enter', 'Settle & print'], ['Esc', 'Clear the amounts entered'],
+    ['PgUp / PgDn', 'Previous / next bill waiting'],
+    ['Alt+A', "Pay all of this customer's waiting bills together"],
+    ['F9', 'Find a bill — scan its QR or type the number, Enter'], ['F1', 'This list'],
+  ];
+  document.body.insertAdjacentHTML('beforeend', `
+    <div class="modal fade" id="settleHelpModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
+      <div class="modal-header py-2"><b>Settlement keys</b>
+        <button class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>
+      <div class="modal-body p-2"><table class="table table-sm mb-0 small">
+        ${keys.map(([k, w]) => `<tr><td class="text-nowrap"><kbd class="fkey">${k}</kbd></td><td>${w}</td></tr>`).join('')}
+      </table></div>
+    </div></div></div>`);
+  const el = $('settleHelpModal');
+  el.addEventListener('hidden.bs.modal', () => { if ($('cashIn')) $('cashIn').focus(); });
+  return new bootstrap.Modal(el);
+})();
 </script>
+<style>
+  kbd.fkey { font: 600 10px/1 ui-monospace, SFMono-Regular, Consolas, monospace; padding: 2px 4px;
+    border-radius: 3px; background: rgba(0,0,0,.06); color: inherit; border: 1px solid rgba(0,0,0,.15);
+    box-shadow: none; vertical-align: 1px; opacity: .8; }
+  .btn-brand kbd.fkey { background: rgba(255,255,255,.18); border-color: rgba(255,255,255,.35); }
+  /* on a narrow till the quick-cash buttons wrap rather than run into the next box */
+  .tender:not([data-method]) .t-quick { flex-wrap: wrap; }
+</style>
 {% endblock %}

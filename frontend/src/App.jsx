@@ -1,6 +1,7 @@
 import React, { useEffect, useLayoutEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { api, session, warehouse, setUnauthorizedHandler, swr, readCache } from './api.js'
 import { parseDictation, coerceSpoken, dictationTargets } from './voicefill.js'
+import { KeyboardLayer } from './keyboard.jsx'
 
 // ---------- helpers ----------
 const num = (v) => (v === '' || v == null ? null : isNaN(+v) ? v : +v)
@@ -19065,6 +19066,8 @@ export default function App() {
           title="Jump to any screen (Ctrl + K)" aria-label="Jump to a screen">
           <Icon name="search" size={14} /><span className="ph">Search screens…</span><kbd>Ctrl K</kbd>
         </button>
+        <button className="th-ctl th-keys" onClick={() => window.dispatchEvent(new Event('essa:kbhelp'))}
+          title="Keyboard shortcuts (F1)" aria-label="Keyboard shortcuts"><kbd>F1</kbd> Keys</button>
         <NotificationBell onOpen={() => setNotifsOpen(true)} tick={notifTick} />
         <span className="th-div" aria-hidden="true" />
         {/* Who you are signed in as, and at what level. On a shared warehouse
@@ -19227,6 +19230,7 @@ export default function App() {
         onClose={() => setNavOpen(false)} />}
       {jumpOpen && <JumpPalette groups={jumpGroups} onGo={jumpTo}
         onClose={() => setJumpOpen(false)} />}
+      <KeyboardLayer menu={navItems} onGo={jumpTo} />
       {scanning && <ScanningOverlay url={scanning.url} name={scanning.name}
         vision={!!providers.claude_vision} />}
       {/* At the app root, not in the header the bell sits in: everything under

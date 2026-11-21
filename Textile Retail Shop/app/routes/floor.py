@@ -17,6 +17,7 @@ from datetime import datetime
 from sqlalchemy import func
 from app import db
 from app import billing_numbers, promotions, warehouse_items
+from app import gstin as gstin_mod
 from app.models import (
     SaleSession, SaleSessionItem, Product, Customer,
     Invoice, InvoiceItem, StockMovement, LoyaltyTxn
@@ -107,7 +108,7 @@ def customer_lookup():
         return jsonify({"error": f"No customer matches '{q}'"}), 404
     return jsonify({
         "id": c.id, "name": c.name, "phone": c.phone or "",
-        "email": c.email or "", "gstin": c.gstin or "",
+        "email": c.email or "", "gstin": c.gstin or "", "state_code": c.state_code or "",
         "loyalty_points": round(c.loyalty_points or 0, 2),
         "total_spent": round(c.total_spent or 0, 2),
         "invoice_count": len(c.invoices),
@@ -125,16 +126,24 @@ def customer_new():
         return jsonify({"error": "Name required"}), 400
     if phone and Customer.query.filter_by(phone=phone).first():
         return jsonify({"error": "Phone already exists"}), 400
+    # Optional. Given, the customer is a registered business and their bills are
+    # B2B; left blank, B2C. Its first two digits are their state, which decides
+    # IGST vs CGST+SGST, so a GSTIN overrides whatever state code was typed.
+    g, err = gstin_mod.clean(data.get("gstin"))
+    if err:
+        return jsonify({"error": err}), 400
     c = Customer(
         # No phone is a missing phone, not an empty one — the number is optional.
         name=name, phone=phone or None,
         email=(data.get("email") or "").strip(),
-        state_code=(data.get("state_code") or "33").strip(),
+        gstin=g or None,
+        state_code=gstin_mod.state_code(g) or (data.get("state_code") or "33").strip(),
     )
     db.session.add(c)
     db.session.commit()
     return jsonify({
         "id": c.id, "name": c.name, "phone": c.phone or "",
+        "gstin": c.gstin or "", "state_code": c.state_code or "",
         "loyalty_points": 0, "total_spent": 0, "invoice_count": 0,
     })
 

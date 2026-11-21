@@ -16,8 +16,13 @@
   {% endif %}
   {# A bill raised and not yet paid: its next stop is Settlement. #}
   {% if (inv.payment_status or '') == 'pending' and not inv.is_cancelled %}
+  {% if till_role == 'billing' %}
+  <span class="badge text-bg-warning align-self-center" title="This till is Billing only">
+    <i class="bi bi-cash-coin"></i> To be paid at the cash desk</span>
+  {% else %}
   <a href="{{ then_url or url_for('pos.settle', id=inv.id) }}" class="btn btn-warning btn-sm">
     <i class="bi bi-cash-coin"></i> Go to settlement</a>
+  {% endif %}
   {% endif %}
   <button class="btn btn-outline-primary btn-sm" id="billDownload" type="button">
     <i class="bi bi-download"></i> Download PDF</button>
@@ -89,7 +94,7 @@
       {% endif %}
     </div>
     <div class="text-end">
-      <h5 class="mb-0">TAX INVOICE</h5>
+      <h5 class="mb-0">TAX INVOICE <span class="supply-type">· {{ inv.supply_type }}</span></h5>
       <div class="bill-copy-label">{{ copy }}</div>
       <div><strong>{{ inv.invoice_number }}</strong></div>
       {# The bill number as a symbol, so the delivery desk reads it off the
@@ -113,7 +118,9 @@
         {{ inv.customer.name }}<br>
         {% if inv.customer.phone %}Ph: {{ inv.customer.phone }}<br>{% endif %}
         {% if inv.customer.address %}{{ inv.customer.address }}<br>{% endif %}
-        {% if inv.customer.gstin %}GSTIN: {{ inv.customer.gstin }}{% endif %}
+        {# the GSTIN as billed, not as the customer record says today #}
+        {% if inv.billed_gstin %}GSTIN: <strong>{{ inv.billed_gstin }}</strong><br>
+        State code: {{ inv.billed_gstin[:2] }}{% endif %}
       {% else %}
         Walk-in customer
       {% endif %}

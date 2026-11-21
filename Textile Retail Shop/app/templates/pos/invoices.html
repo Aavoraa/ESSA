@@ -102,7 +102,9 @@
             {% else %}<span class="text-muted">—</span>{% endif %}</td>
           <td>{{ i.invoice_date.strftime('%d %b %Y %H:%M') }}</td>
           <td>
-            {% if i.customer %}{{ i.customer.name }}<br><small class="text-muted">{{ i.customer.phone or '' }}</small>
+            {% if i.customer %}{{ i.customer.name }}
+              {% if i.is_b2b %}<span class="badge text-bg-primary" title="GSTIN {{ i.billed_gstin }}">B2B</span>{% endif %}
+              <br><small class="text-muted">{{ i.customer.phone or '' }}</small>
             {% else %}Walk-in{% endif %}
           </td>
           <td>{{ (i.staff.full_name if i.staff else i.cashier.full_name) }}</td>

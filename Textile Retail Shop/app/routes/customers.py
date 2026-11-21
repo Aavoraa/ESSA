@@ -5,6 +5,7 @@ from flask_login import current_user, login_required
 from sqlalchemy import func
 
 from app import db, messaging, places, vouchers
+from app import gstin as gstin_mod
 from app.paging import paged
 from app.models import (Customer, CustomerAdvance, CustomerFeedback, Invoice,
                         LoyaltyTxn, MESSAGE_KINDS, PAYMENT_METHODS, ScheduledMessage)
@@ -27,14 +28,21 @@ def _date(name):
 
 
 def _fill(c):
+    """Copy the form onto `c`. Returns an error to show, or None."""
+    g, err = gstin_mod.clean(request.form.get("gstin", ""))
+    if err:
+        return err
     c.name = request.form["name"].strip()
     c.phone = request.form.get("phone", "").strip()
     c.email = request.form.get("email", "").strip()
     c.address = request.form.get("address", "")
-    c.gstin = request.form.get("gstin", "").strip()
-    c.state_code = request.form.get("state_code", "33").strip()
+    c.gstin = g or None
+    # a GSTIN names its state; a typed state code that disagrees would bill a
+    # registered buyer at the wrong tax (CGST+SGST vs IGST)
+    c.state_code = gstin_mod.state_code(g) or request.form.get("state_code", "33").strip()
     c.dob = _date("dob")
     c.anniversary = _date("anniversary")
+    return None
 
 
 @customers_bp.route("/")
@@ -55,7 +63,10 @@ def list_customers():
 def new_customer():
     if request.method == "POST":
         c = Customer()
-        _fill(c)
+        err = _fill(c)
+        if err:
+            flash(err, "danger")
+            return render_template("customers/form.html", customer=None)
         db.session.add(c)
         db.session.commit()
         flash("Customer added.", "success")
@@ -92,7 +103,11 @@ def customer_card(cid):
 def edit_customer(cid):
     c = Customer.query.get_or_404(cid)
     if request.method == "POST":
-        _fill(c)
+        err = _fill(c)
+        if err:
+            db.session.rollback()
+            flash(err, "danger")
+            return render_template("customers/form.html", customer=c)
         db.session.commit()
         flash("Customer updated.", "success")
         return redirect(url_for("customers.view_customer", cid=cid))
