@@ -17,6 +17,20 @@ if errorlevel 1 (
 call deactivate
 cd ..
 
+REM A client package ships the screens already built (frontend\dist) and no
+REM frontend sources, so there is nothing to build and Node.js is not needed.
+if not exist frontend\package.json (
+  if exist frontend\dist\index.html (
+    echo.
+    echo ==^> Frontend: already built, nothing to do
+    goto done
+  )
+  echo.
+  echo ERROR: frontend\dist is missing. Copy the complete ESSA package again.
+  pause
+  exit /b 1
+)
+
 echo.
 echo ==^> Frontend: installing + building
 cd frontend
@@ -30,6 +44,7 @@ if errorlevel 1 (
 )
 cd ..
 
+:done
 echo.
 echo Setup complete. Now run:  run.bat
 pause

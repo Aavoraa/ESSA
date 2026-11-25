@@ -1,0 +1,4 @@
+# The migration scripts (load_backup / load_legacy / prepare_target / migrate / validate)
+# use psycopg 3. ESSA itself does not need it. Install into ESSA's own Python:
+#   backend\.venv\Scripts\python.exe -m pip install -r migration\tqa\requirements.txt
+psycopg[binary]==3.3.6

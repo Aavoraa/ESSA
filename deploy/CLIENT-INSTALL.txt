@@ -1,0 +1,47 @@
+ESSA - INSTALLING AT THE CLIENT
+===============================
+
+Needs on the SERVER PC (only this PC):
+  - Windows 10/11
+  - Python 3.12  (python.org - tick "Add python.exe to PATH" while installing)
+  - PostgreSQL   (with the ESSA database, or an empty one to restore into)
+Node.js is NOT needed: the screens are already built.
+
+1. Copy this ESSA folder to  C:\ESSA
+
+2. Double-click  setup.bat
+   Installs ESSA's Python packages (needs internet, a few minutes).
+
+3. Connect ESSA to PostgreSQL - in C:\ESSA open a command prompt and run ONE of:
+     deploy\server\postgres_setup.bat adopt --db essa   (database already holds the ESSA data)
+     deploy\server\postgres_setup.bat                   (new, empty database)
+   It asks for the PostgreSQL "postgres" password (typed hidden, not saved).
+
+4. Right-click  deploy\server\server_setup.bat  >  Run as administrator
+   ESSA starts with Windows, the firewall is opened for the shop network,
+   and it prints the address for the other PCs, e.g.  http://192.168.1.10:8000
+
+5. Windows settings on the server PC:
+   - Network  = Private   (Settings > Network & internet)
+   - Fixed IP: reserve the server's IP in the router
+
+6. Every other PC: open the address from step 4 in Chrome or Edge and sign in.
+   Nothing to install. Edge > ... > Apps > Install this site as an app = desktop icon.
+
+7. Backups: right-click  deploy\backup\daily_backup.bat > Run as administrator (nightly),
+   and run  deploy\backup\instant_backup.bat  once before go-live.
+
+CONVERTING THE OLD SOFTWARE'S DATA ON SITE (only if not done before the visit)
+  The old database (TAQUALIVE) is only read from a backup file - never changed.
+  1. Install the migration's one extra package:
+       backend\.venv\Scripts\python.exe -m pip install -r migration\tqa\requirements.txt
+  2. Take a fresh backup of TAQUALIVE (pgAdmin > Backup, format "Custom").
+  3. Follow  migration\tqa\README.md  > "Refreshing from a newer TAQUALIVE database backup"
+     (load_backup.py > prepare_target.py > migrate.py > validate.py), using
+     backend\.venv\Scripts\python.exe. Passwords go in environment variables only.
+  4. Then continue from step 3 above with:  postgres_setup.bat adopt --db essa
+
+Check any time:      deploy\server\server_setup.bat status
+Restart ESSA:        deploy\server\server_setup.bat restart   (as administrator)
+Server log:          C:\ProgramData\ESSA\server.log
+Full guide:          deploy\server\SERVER-GUIDE.md

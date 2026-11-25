@@ -1,0 +1,5 @@
+# build output of build_exe.bat
+.buildenv/
+build/
+dist/
+essa.ico

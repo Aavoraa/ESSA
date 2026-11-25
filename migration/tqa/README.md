@@ -79,6 +79,33 @@ trained invoice formats — matched by name. Transactions entered in ESSA since
 then are not replayed into the rebuilt ledger; they are listed in
 `output/post_golive_transactions.csv` for re-entry.
 
+## Loading from a JSON export
+
+When Quanta / TAQUALIVE data comes as JSON instead, `load_json.py` loads it into the
+same `legacy_tqa.raw.*`. Every column is TEXT in PostgreSQL's output form: booleans `t`/`f`,
+exact numbers, timestamps with a space. Timestamps carrying a time zone become IST wall-clock
+time, as legacy timestamps are. So `prepare_target.py`, `migrate.py` and `validate.py` run unchanged.
+
+```bash
+python load_json.py "C:/…/quanta-json"  --dry-run   # read + convert only, no database
+python load_json.py "C:/…/quanta-json"              # LEGACY_DATABASE_URL=…/legacy_tqa
+python load_json.py "C:/…/quanta-json.zip" bill billitems   # just these tables
+```
+
+On Windows, `load_json.bat` does the same without typing commands. Double-click it and give the path, or drag the
+export onto it. It asks for the database and the password (hidden), and offers to install psycopg if it is missing.
+It takes the same arguments, e.g. `load_json.bat "D:\quanta-json" --dry-run`.
+
+It accepts a file, a folder or a zip:
+- `<table>.json` holding a list of rows, or the list under `data`, `rows` or `records`
+- `<table>.jsonl` / `.ndjson`
+- one file holding several tables: `{"bill": [...], "billitems": [...]}`
+
+Large arrays are streamed rather than read into memory. Keys left out of a row become NULL. If `raw.<table>`
+was loaded before, its columns are kept (NULL where the JSON lacks them), and the gap is
+reported in `raw._load_log`. That way the migration SQL still finds every column, and a column the
+export dropped is visible rather than silent.
+
 ## Steps (dependency order, from ESSA's foreign keys)
 
 | Step | Writes | From |

@@ -71,6 +71,9 @@ POLICY = [
     # --- accounts and the server's own configuration ---
     (r"^/api/users", "superadmin", "superadmin", "users"),
     (r"^/api/settings", "superadmin", "superadmin", "users"),
+    # Testing / inspecting an OUTSIDE PostgreSQL (the client's), read-only. The
+    # server's own configuration, so the super admin's, like the settings above.
+    (r"^/api/admin/database", "superadmin", "superadmin", "users"),
 
     # --- the company's control center ---
     # Asking a question and tracing a document are an admin's tools as much as the

@@ -106,7 +106,7 @@ const CACHE_MAX_CHARS = 20 * 1024 * 1024          // Stock Outward's list is ~10
 const CACHE_MAX_ENTRIES = 60
 const KEPT_MAX_ENTRIES = 80                         // dashboards + reports, least recently used goes
 // (/api/notifications: the bell's count is live, so the list under it must be too)
-const NEVER_CACHE = [/^\/api\/auth\//, /^\/api\/status$/, /^\/api\/notifications/,
+const NEVER_CACHE = [/^\/api\/auth\//, /^\/api\/admin\//, /^\/api\/status$/, /^\/api\/notifications/,
   /^\/api\/lr(\?|$|\/page|\/search)/, /^\/api\/search\//, /print|label|qr\.|barcode|\.csv|format=csv|download|export|backup/]
 // The dashboards (Command Center, Central, warehouse Dashboard and its charts)
 // and the reports are kept for the whole session: no minute's limit, and a save does not empty
@@ -1053,6 +1053,21 @@ export const api = {
 
   // settings / vision
   getSettings: () => fetch('/api/settings').then(J),
+
+  // the client's PostgreSQL, tested and inspected read-only — super admin only
+  dbStatus: () => fetch('/api/admin/database/status').then(J),
+  dbTest: (body) => fetch('/api/admin/database/test', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(J),
+  dbSaveConfig: (body) => fetch('/api/admin/database/config', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(J),
+  dbConnect: (body) => fetch('/api/admin/database/connect', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(J),
+  dbDisconnect: () => fetch('/api/admin/database/disconnect', { method: 'POST' }).then(J),
+  dbWriteApproval: (body) => fetch('/api/admin/database/write-approval', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(J),
+  dbInspect: (schema) => fetch('/api/admin/database/inspect' + (schema ? '?schema=' + encodeURIComponent(schema) : '')).then(J),
+  dbInspectTable: (schema, table) => fetch('/api/admin/database/inspect/table?schema=' + encodeURIComponent(schema)
+    + '&table=' + encodeURIComponent(table)).then(J),
   setVisionKey: (api_key, model) => fetch('/api/settings/vision', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ api_key, model }) }).then(J),

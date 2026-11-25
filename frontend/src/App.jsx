@@ -2,6 +2,7 @@ import React, { useEffect, useLayoutEffect, useState, useCallback, useRef, useMe
 import { api, session, warehouse, setUnauthorizedHandler, swr, readCache } from './api.js'
 import { parseDictation, coerceSpoken, dictationTargets } from './voicefill.js'
 import { KeyboardLayer } from './keyboard.jsx'
+import DatabaseConnection from './DatabaseConnection.jsx'
 
 // ---------- helpers ----------
 const num = (v) => (v === '' || v == null ? null : isNaN(+v) ? v : +v)
@@ -16793,7 +16794,7 @@ const IN_STOCK_AUDIT = { physical_audit: 'qty' }
 
 //: The whole company-level menu. Anything not here needs a warehouse first.
 const COMPANY_LEVEL = new Set(['command', 'audit', 'central', 'locator', 'reports',
-                               'locations', 'users'])
+                               'locations', 'users', 'database'])
 
 //: Four ranked roles — services/users.py holds the same four, and everything is
 //: compared by RANK so the top one inherits every screen below it.
@@ -16871,6 +16872,9 @@ const MODULES = [
   // who may do what, the other what they did.
   { key: 'audit', icon: '📝', label: 'Audit Trail', blurb: 'Who did what, when and in which warehouse', min: 'admin' },
   { key: 'users', icon: '👤', label: 'Users & Access', blurb: 'Who can sign in, and how much of this they see', min: 'superadmin' },
+  // The client's own PostgreSQL, tested and inspected read-only before ESSA is
+  // deployed against it. Server configuration, so the super admin's.
+  { key: 'database', icon: '🗄', label: 'Database Connection', blurb: "Test and inspect the client's PostgreSQL — read-only", min: 'superadmin' },
 ]
 
 // ==========================================================================
@@ -17019,6 +17023,7 @@ const ICONS = {
   undo: <><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /></>,
   rupee: <path d="M6 3h12M6 8h12M6 13l8.5 8M6 13h3M9 13c6.667 0 6.667-10 0-10" />,
   factory: <><path d="M2 20a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8l-7 5V8l-7 5V4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z" /><path d="M17 18h1M12 18h1M7 18h1" /></>,
+  database: <><ellipse cx="12" cy="5" rx="9" ry="3" /><path d="M3 5v14a9 3 0 0 0 18 0V5" /><path d="M3 12a9 3 0 0 0 18 0" /></>,
   sliders: <path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4" />,
   book: <><path d="M12 7v14" /><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z" /></>,
   building: <><path d="M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z" /><path d="M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2M10 6h4M10 10h4M10 14h4M10 18h4" /></>,
@@ -17066,7 +17071,7 @@ const NAV_ICON = {
   pricing: 'tag', deadstock: 'octagon', labels: 'qr', labelprint: 'printer',
   outward: 'outward', inward: 'inward', returns: 'undo', payments: 'rupee',
   reports: 'spreadsheet', suppliers: 'factory', masters: 'sliders', catalogues: 'book',
-  locations: 'pin', users: 'users',
+  locations: 'pin', users: 'users', database: 'database',
   'pos:home': 'dashboard', 'pos:floor': 'trending', 'pos:counter': 'card', 'pos:settlement': 'rupee',
   'pos:delivery': 'truck', 'pos:inventory': 'boxes', 'pos:audits': 'clipcheck',
   'pos:stock_inward': 'truck', 'pos:transfer_goods': 'truck',
@@ -17206,7 +17211,7 @@ const NAV_RAIL = {
     { key: 'home', label: 'Home', icon: 'dashboard', screens: ['command', 'central', 'pickwh'] },
     { key: 'stock', label: 'Stock', icon: 'boxes', screens: ['locator'] },
     { key: 'reports', label: 'Reports', icon: 'trending', screens: ['reports', 'audit'] },
-    { key: 'setup', label: 'Setup', icon: 'sliders', screens: ['locations', 'users'] },
+    { key: 'setup', label: 'Setup', icon: 'sliders', screens: ['locations', 'users', 'database'] },
   ],
   warehouse: [
     { key: 'home', label: 'Home', icon: 'dashboard', screens: ['dashboard'] },
@@ -17217,7 +17222,7 @@ const NAV_RAIL = {
     { key: 'transfers', label: 'Transfers', icon: 'truck', screens: ['outward', 'inward'] },
     { key: 'labels', label: 'Labels', icon: 'qr', screens: ['labels', 'labelprint'] },
     { key: 'reports', label: 'Reports', icon: 'trending', screens: ['reports', 'audit'] },
-    { key: 'setup', label: 'Setup', icon: 'sliders', screens: ['masters', 'catalogues', 'locations', 'users'] },
+    { key: 'setup', label: 'Setup', icon: 'sliders', screens: ['masters', 'catalogues', 'locations', 'users', 'database'] },
   ],
   store: [
     { key: 'home', label: 'Home', icon: 'dashboard', screens: ['pos:home'] },
@@ -19383,6 +19388,8 @@ export default function App() {
         <Locations toast={toast} />
       ) : k === 'users' ? (
         <Users toast={toast} me={user} />
+      ) : k === 'database' ? (
+        <DatabaseConnection toast={toast} />
       ) : k === 'suppliers' ? (
         <Suppliers toast={toast} />
       ) : (

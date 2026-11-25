@@ -3,6 +3,8 @@ backend/.venv/
 backend/.venv*/
 backend/data/essa.db
 backend/data/settings.json
+# outside-database connection settings (passwords sealed with DPAPI, still never in Git)
+backend/data/db_connections.json
 backend/data/uploads/*
 !backend/data/uploads/.gitkeep
 frontend/node_modules/
@@ -41,3 +43,11 @@ Textile Retail Shop/textile_shop.db
 # does not, so both are named here rather than relying on that.
 Textile Retail Shop/.venv/
 Textile Retail Shop/.venv-win/
+
+# the desktop launcher, built by deploy/desktop/build_exe.bat
+/ESSA.exe
+
+# Written on the machine where postgres_setup runs: the undo file for "adopt"
+# (names that machine's database owners) and the schema-build log.
+deploy/server/owners-before-adopt-*.sql
+deploy/server/*.log
