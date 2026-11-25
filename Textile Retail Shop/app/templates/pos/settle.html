@@ -14,7 +14,6 @@
       {# The customer hands over the delivery copy: scan its QR, or type the number. #}
       <form class="px-2 pt-2" method="get" action="{{ url_for('pos.settle') }}" autocomplete="off">
         <div class="input-group input-group-sm">
-          <span class="input-group-text"><i class="bi bi-qr-code-scan"></i></span>
           <input id="billFind" name="bill" class="form-control font-monospace"
                  placeholder="Scan the bill's QR or type its number (F9)">
           <button id="billCam" class="btn btn-outline-primary" type="button" title="Scan the bill with the camera">
@@ -83,7 +82,7 @@
   </aside>
 
   <section class="card pos-pay">
-    <div class="px-3 py-2 border-bottom d-flex align-items-center gap-2"><span class="fw-bold"><i class="bi bi-cash-coin"></i> SETTLEMENT</span>
+    <div class="px-3 py-2 border-bottom d-flex align-items-center gap-2"><span class="fw-bold"><i class="bi bi-cash-coin"></i> Settlement</span>
       {% if inv %}<span class="font-monospace">{{ inv.invoice_number }}</span>{% endif %}
       {# what this till does — a cash desk never sees the counter, so it is changed here too #}
       <select id="tillRole" class="form-select form-select-sm ms-auto w-auto" title="What this till does">

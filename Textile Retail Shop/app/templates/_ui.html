@@ -1,0 +1,79 @@
+{#- ==========================================================================
+    ESSA AI design system — Jinja macros for the shop
+    --------------------------------------------------------------------------
+    The same components as ESSA's React ones (frontend/src/design/ui.jsx), with
+    the same .ui- classes, styled by the shared tokens.css / components.css that
+    every frontend build copies into static/css. Icons come from the shared
+    sprite (static/icons/sprite.svg), generated from the same icon set.
+
+    Use:  {% import '_ui.html' as ui %}
+          {{ ui.page_header('Invoices', 'Every bill raised…') }}
+    Nothing here carries logic: a template moving onto these keeps its own
+    forms, fields and routes.
+    ========================================================================== -#}
+
+{% macro icon(name, size=16, cls='') -%}
+<svg class="ui-icon {{ cls }}" width="{{ size }}" height="{{ size }}" aria-hidden="true" focusable="false"><use href="{{ url_for('static', filename='icons/sprite.svg') }}#i-{{ name }}"/></svg>
+{%- endmacro %}
+
+{# actions: rendered HTML (use a {% call %} block) #}
+{% macro page_header(title, sub=None, breadcrumb=None) -%}
+<header class="ui-pagehead">
+  <div class="ui-pagehead__text">
+    {% if breadcrumb %}<nav class="ui-breadcrumb" aria-label="Breadcrumb">
+      {% for label, href in breadcrumb %}{% if not loop.first %}{{ icon('chevron', 12) }}{% endif %}
+        {% if loop.last %}<span aria-current="page">{{ label }}</span>{% elif href %}<a href="{{ href }}">{{ label }}</a>{% else %}<span>{{ label }}</span>{% endif %}
+      {% endfor %}</nav>{% endif %}
+    <h1 class="ui-pagehead__title">{{ title }}</h1>
+    {% if sub %}<p class="ui-pagehead__sub">{{ sub }}</p>{% endif %}
+  </div>
+  {% if caller %}<div class="ui-pagehead__actions">{{ caller() }}</div>{% endif %}
+</header>
+{%- endmacro %}
+
+{% macro button(label, variant='default', icon_name=None, href=None, type='button', size=None, attrs='') -%}
+{% set cls = 'ui-btn' ~ (' ui-btn--' ~ variant if variant != 'default' else '') ~ (' ui-btn--' ~ size if size else '') %}
+{% if href %}<a class="{{ cls }}" href="{{ href }}" {{ attrs|safe }}>{% if icon_name %}{{ icon(icon_name) }}{% endif %}{{ label }}</a>
+{% else %}<button class="{{ cls }}" type="{{ type }}" {{ attrs|safe }}>{% if icon_name %}{{ icon(icon_name) }}{% endif %}{{ label }}</button>{% endif %}
+{%- endmacro %}
+
+{# tone: money | warning | error | info #}
+{% macro kpi(label, value, icon_name='dashboard', meta=None, tone=None, href=None, live=False) -%}
+{% set tag = 'a' if href else 'div' %}
+<{{ tag }} class="ui-kpi{% if tone %} ui-kpi--{{ tone }}{% endif %}"{% if href %} href="{{ href }}"{% endif %}>
+  <span class="ui-kpi__icon">{{ icon(icon_name, 18) }}</span>
+  <span class="ui-kpi__body">
+    <span class="ui-kpi__label">{{ label }}</span>
+    <span class="ui-kpi__value{% if (value|string)|length >= 12 %} ui-kpi__value--long{% endif %}">{{ value }}</span>
+    {% if meta %}<span class="ui-kpi__meta">{% if live %}<i class="ui-dot"></i>{% endif %}{{ meta }}</span>{% endif %}
+  </span>
+</{{ tag }}>
+{%- endmacro %}
+
+{# {% call ui.card('Recent invoices', icon_name='receipt') %} …body… {% endcall %} #}
+{% macro card(title=None, icon_name=None, sub=None, flush=False, actions=None) -%}
+<section class="ui-card">
+  {% if title %}<div class="ui-card__head">
+    {% if icon_name %}{{ icon(icon_name, 18) }}{% endif %}
+    <div><h2 class="ui-card__title">{{ title }}</h2>{% if sub %}<div class="ui-card__sub">{{ sub }}</div>{% endif %}</div>
+    {% if actions %}<div class="ui-card__actions">{{ actions }}</div>{% endif %}
+  </div>{% endif %}
+  <div class="ui-card__body{% if flush %} ui-card__body--flush{% endif %}">{{ caller() if caller }}</div>
+</section>
+{%- endmacro %}
+
+{# tone: success | warning | error | info | primary | neutral #}
+{% macro badge(text, tone='neutral') -%}
+<span class="ui-badge{% if tone != 'neutral' %} ui-badge--{{ tone }}{% endif %}">{{ text }}</span>
+{%- endmacro %}
+
+{% macro empty(title, text=None, icon_name='inbox') -%}
+<div class="ui-empty"><span class="ui-empty__icon">{{ icon(icon_name, 20) }}</span>
+  <p class="ui-empty__title">{{ title }}</p>{% if text %}<p class="ui-empty__text">{{ text }}</p>{% endif %}</div>
+{%- endmacro %}
+
+{% macro alert(text, tone='info', title=None) -%}
+{% set ic = {'info': 'info', 'success': 'checkcircle', 'warning': 'alerttri', 'error': 'alertcircle'}[tone] %}
+<div class="ui-alert ui-alert--{{ tone }}" role="{{ 'alert' if tone == 'error' else 'status' }}">{{ icon(ic, 18) }}
+  <div>{% if title %}<p class="ui-alert__title">{{ title }}</p>{% endif %}<div>{{ text }}</div></div></div>
+{%- endmacro %}

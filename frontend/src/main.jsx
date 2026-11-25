@@ -1,6 +1,8 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App.jsx'
+import './design/tokens.css'
+import './design/components.css'
 import './styles.css'
 
 // This app is never a frame's content. It PUTS the shop in a frame; nothing puts
@@ -69,9 +71,16 @@ if (framed) {
     setTimeout(() => { queued = false; linkLabels() }, 60)
   }).observe(document.getElementById('root'), { childList: true, subtree: true })
 
-  ReactDOM.createRoot(document.getElementById('root')).render(
-    <React.StrictMode>
-      <App />
-    </React.StrictMode>,
-  )
+  const root = ReactDOM.createRoot(document.getElementById('root'))
+  // The design-system gallery, on the dev server only (vite drops this branch,
+  // and the Gallery module with it, from a production build).
+  if (import.meta.env.DEV && location.hash === '#ui-gallery') {
+    import('./design/Gallery.jsx').then(({ default: Gallery }) => root.render(<Gallery />))
+  } else {
+    root.render(
+      <React.StrictMode>
+        <App />
+      </React.StrictMode>,
+    )
+  }
 }

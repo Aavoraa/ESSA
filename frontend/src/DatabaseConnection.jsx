@@ -110,7 +110,7 @@ export default function DatabaseConnection({ toast }) {
   return (
     <div className="screen scrolls">
       <div className="pagehead">
-        <h2>🗄 Database Connection</h2>
+        <h2>Database Connection</h2>
         <div className="pagesub small">
           Test and inspect the client's PostgreSQL — read-only. Nothing here writes to that database,
           and ESSA's own database is not changed.

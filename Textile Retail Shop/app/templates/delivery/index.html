@@ -83,8 +83,8 @@
 
       <div class="table-responsive border rounded" style="min-height:220px">
         <table class="table table-sm mb-0">
-          <thead><tr><th>BILL NO</th><th class="text-end">QTY</th>
-            <th class="text-end">AMOUNT</th><th></th></tr></thead>
+          <thead><tr><th>Bill no</th><th class="text-end">Qty</th>
+            <th class="text-end">Amount</th><th></th></tr></thead>
           <tbody id="billRows"></tbody>
         </table>
       </div>
@@ -105,11 +105,11 @@
     <div class="card p-3 h-100">
       <div class="row small mb-2">
         <div class="col-7">
-          <div class="row g-0"><div class="col-4 text-muted">DATE</div>
+          <div class="row g-0"><div class="col-4 text-muted">Date</div>
             <div class="col-8">{{ today }}</div></div>
-          <div class="row g-0"><div class="col-4 text-muted">LOCATION</div>
+          <div class="row g-0"><div class="col-4 text-muted">Location</div>
             <div class="col-8" id="placeLocationName">{{ chosen_location.name if chosen_location else '—' }}</div></div>
-          <div class="row g-0"><div class="col-4 text-muted">COUNTER</div>
+          <div class="row g-0"><div class="col-4 text-muted">Counter</div>
             <div class="col-8" id="placeCounterName">{{ chosen_counter.name if chosen_counter else '—' }}</div></div>
         </div>
         <div class="col-5 text-end">

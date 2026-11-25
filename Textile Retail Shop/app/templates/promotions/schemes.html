@@ -5,10 +5,10 @@
    the filter being built on the left; the filters the scheme has in the middle;
    what qualifying goods get on the right. The rules behind every box are in
    app/schemes.py. #}
-<div class="sch-head d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
-  <h5 class="mb-0"><i class="bi bi-gift"></i> Store / Sales Promotions Scheme
+<div class="page-head sch-head d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
+  <h4 class="page-title mb-0"><i class="bi bi-gift"></i> Promotions Scheme
     <span id="schCode" class="badge text-bg-light border font-monospace ms-1 d-none"></span>
-    <span id="schStatus" class="badge ms-1 d-none"></span></h5>
+    <span id="schStatus" class="badge ms-1 d-none"></span></h4>
   <div class="d-flex gap-1 flex-wrap">
     <button type="button" id="btnNew" class="btn btn-outline-secondary btn-sm"><i class="bi bi-file-earmark"></i> New</button>
     <button type="button" id="btnSave" class="btn btn-brand btn-sm"><i class="bi bi-save"></i> Save</button>
@@ -56,7 +56,7 @@
     </div>
 
     <hr class="my-2">
-    <label class="form-label small mb-0" for="fMode">FILTER MODE</label>
+    <label class="form-label small mb-0" for="fMode">Filter mode</label>
     <div class="input-group input-group-sm mb-1">
       <select id="fMode" class="form-select">
         <option value="">Choose a filter…</option>
@@ -70,7 +70,7 @@
   {# ---- the filters the scheme has ------------------------------------- #}
   <section class="card sch-mid">
     <table class="table table-sm mb-0 sch-table">
-      <thead><tr><th style="width:44px">S.NO</th><th style="width:150px">MODE</th><th>ATTRIBUTES</th><th style="width:60px">ACTION</th></tr></thead>
+      <thead><tr><th style="width:44px">S.No</th><th style="width:150px">Mode</th><th>Attributes</th><th style="width:60px">Action</th></tr></thead>
       <tbody id="fBody"></tbody>
     </table>
     <div id="fEmpty" class="text-muted small text-center py-4">No filters — every item qualifies.<br>
@@ -83,13 +83,13 @@
      next one. A row's Edit puts it back up here; ADD then reads UPDATE. #}
   <section class="card p-2 sch-right">
     <div id="condBox">
-    <h6 class="mb-1">QTY/RATE CONDITION</h6>
+    <h6 class="mb-1">Qty / rate condition</h6>
     <div class="cond-grid">
-      <label for="cQtyFrom">QTY BETWEEN</label>
+      <label for="cQtyFrom">Qty between</label>
       <input id="cQtyFrom" type="number" min="0" step="1" class="form-control form-control-sm" placeholder="From">
       <span>AND</span>
       <input id="cQtyTo" type="number" min="0" step="1" class="form-control form-control-sm" placeholder="0">
-      <label for="cRateFrom">RATE BETWEEN</label>
+      <label for="cRateFrom">Rate between</label>
       <input id="cRateFrom" type="number" min="0" step="any" class="form-control form-control-sm" placeholder="0">
       <span>AND</span>
       <input id="cRateTo" type="number" min="0" step="any" class="form-control form-control-sm" placeholder="0">
@@ -97,8 +97,8 @@
     <div class="small text-muted mt-1">0 at the top end means no limit.</div>
     </div>
 
-    <h6 class="mb-1 mt-3" id="bHead">BENEFITS</h6>
-    <label class="form-label small mb-0" for="bMode">MODE</label>
+    <h6 class="mb-1 mt-3" id="bHead">Benefits</h6>
+    <label class="form-label small mb-0" for="bMode">Mode</label>
     <div class="input-group input-group-sm mb-1">
       <select id="bMode" class="form-select">
         <option value="">Choose a benefit…</option>
@@ -107,7 +107,7 @@
       <button type="button" id="bAdd" class="btn btn-primary">ADD</button>
     </div>
     <div id="bvBox" class="cond-grid mb-1" hidden>
-      <label for="bvFrom">BILL VALUE BETWEEN</label>
+      <label for="bvFrom">Bill value between</label>
       <input id="bvFrom" type="number" min="0" step="any" class="form-control form-control-sm" placeholder="0">
       <span>AND</span>
       <input id="bvTo" type="number" min="0" step="any" class="form-control form-control-sm" placeholder="0">
@@ -116,8 +116,8 @@
     <div id="bHint" class="small text-muted mb-2"></div>
     <div class="sch-bwrap">
       <table class="table table-sm mb-0 sch-table">
-        <thead><tr><th style="width:40px">S.NO</th><th>MODE</th><th>Qty Range</th><th>Price Range</th>
-          <th>Value</th><th>Additional</th><th style="width:110px">ACTION</th></tr></thead>
+        <thead><tr><th style="width:40px">S.No</th><th>Mode</th><th>Qty Range</th><th>Price Range</th>
+          <th>Value</th><th>Additional</th><th style="width:110px">Action</th></tr></thead>
         <tbody id="bBody"></tbody>
       </table>
     </div>

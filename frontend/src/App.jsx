@@ -1,3 +1,4 @@
+import { Icon } from './design/ui.jsx'
 import React, { useEffect, useLayoutEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { api, session, warehouse, setUnauthorizedHandler, swr, readCache } from './api.js'
 import { parseDictation, coerceSpoken, dictationTargets } from './voicefill.js'
@@ -2146,7 +2147,7 @@ function InvoiceRegister({ onOpenGrn, active = true }) {
   return (
     <div style={{ flex: 1, minWidth: 0, overflow: 'auto', padding: '0 var(--gutter) var(--gutter)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '14px 0 8px' }}>
-        <h3 style={{ margin: 0, textTransform: 'uppercase', letterSpacing: '.5px', fontSize: 13 }}>
+        <h3 className="listtitle">
           Saved invoices · {(c.all ?? pg.total).toLocaleString('en-IN')}</h3>
         {busy && <span className="small">loading…</span>}
         <div style={{ flex: 1 }} />
@@ -2285,7 +2286,7 @@ function InvoiceTable({ active = true, reloadKey, onOpen, onDeleteDoc, onClearAl
   return (
     <div style={{ flex: 1, minWidth: 0, overflow: 'auto', padding: '0 var(--gutter) var(--gutter)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '14px 0 8px' }}>
-        <h3 style={{ margin: 0, textTransform: 'uppercase', letterSpacing: '.5px', fontSize: 13 }}>
+        <h3 className="listtitle">
           Invoices · {(c.all ?? pg.total).toLocaleString('en-IN')}</h3>
         {busy && <span className="small">loading…</span>}
         <div style={{ flex: 1 }} />
@@ -6383,7 +6384,7 @@ const voiceBlockedBecause = () => {
   return null
 }
 
-function VoiceButton({ onInterim, onSpoken, disabled }) {
+function VoiceButton({ onInterim, onSpoken, disabled, big }) {
   const [listening, setListening] = useState(false)
   const [err, setErr] = useState('')
   const [lang, setLang] = useState(() => {
@@ -6455,10 +6456,14 @@ function VoiceButton({ onInterim, onSpoken, disabled }) {
 
   return (
     <span className="askvoice">
-      <button className={'askmic' + (listening ? ' on' : '')} disabled={disabled}
+      <button className={'askmic' + (big ? ' big' : '') + (listening ? ' on' : '')} disabled={disabled}
         onClick={() => (listening ? stop() : start())}
         title={listening ? 'Stop listening' : `Ask by voice (${VOICE_LANGS.find(([l]) => l === lang)?.[2]})`}>
-        {listening ? '⏹' : '🎤'}
+        {big
+          ? (listening
+            ? <><span className="micdot" aria-hidden="true" />Listening… <small>tap to stop</small></>
+            : <><Icon name="mic" size={18} />Speak</>)
+          : (listening ? '⏹' : '🎤')}
       </button>
       {/* Which language to listen for. Two buttons rather than a select: it is a
           two-way switch someone flips mid-shift, not a setting to go and find. */}
@@ -6468,7 +6473,7 @@ function VoiceButton({ onInterim, onSpoken, disabled }) {
             disabled={listening} onClick={() => pickLang(l)}>{short}</button>
         ))}
       </span>
-      {listening && <span className="asklistening" title="Listening — speak your question">listening…</span>}
+      {listening && !big && <span className="asklistening" title="Listening — speak your question">listening…</span>}
       {err && <span className="askvoice-err" title={err}>{err}</span>}
     </span>
   )
@@ -6476,23 +6481,23 @@ function VoiceButton({ onInterim, onSpoken, disabled }) {
 
 function AskBar({ value, onChange, onAsk, busy, engine }) {
   return (
-    <div className="askbar">
-      <span className="ico" aria-hidden="true">✨</span>
+    <div className="askbar askcard">
+      <span className="ico" aria-hidden="true"><Icon name="sparkle" size={18} /></span>
       {/* the clear button is positioned against this wrapper, not the bar, so
           adding controls to the right of the input cannot displace it */}
       <span className="askfield">
         <input value={value} onChange={(e) => onChange(e.target.value)}
-          placeholder="Ask a question, or press 🎤 — “what did we buy last month”, “நிலுவை பாக்கி எவ்வளவு”"
+          placeholder="Ask a question — “what did we buy last month”, “நிலுவை பாக்கி எவ்வளவு”"
           title="Ask in English or Tamil, typed or spoken. The question is routed to one of the reports on the left."
           onKeyDown={(e) => { if (e.key === 'Enter' && value.trim()) onAsk() }} />
         {value && <button className="askclear" title="Clear" onClick={() => onChange('')}>×</button>}
       </span>
       {/* Spoken words land in the same box, so voice is a way of filling this
           control rather than a second path through the feature. */}
-      <VoiceButton onInterim={onChange} onSpoken={(t) => onAsk(t)} disabled={busy} />
+      <VoiceButton big onInterim={onChange} onSpoken={(t) => onAsk(t)} disabled={busy} />
       {/* onAsk() called with no argument on purpose — onClick={onAsk} would hand
           it the click event as the question text. */}
-      <button className="btn primary" disabled={busy || !value.trim()} onClick={() => onAsk()}
+      <button className="btn primary askgo" disabled={busy || !value.trim()} onClick={() => onAsk()}
         title="Find the report that answers this">{busy ? 'Reading…' : 'Ask'}</button>
       {engine === 'keywords' && (
         <span className="askengine" title={'No vision/API key is set, so questions are matched on keywords rather than read. '
@@ -6805,8 +6810,8 @@ function Reports() {
             <span className="small">{storeEntry?.group_label} · run by the Store
               {storeKey && storeAt[storeKey] && <> · loaded {storeAt[storeKey].toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}</>}</span>
             <div style={{ flex: 1 }} />
-            <button className="btn" onClick={() => storeKey && reloadStore(storeKey)}
-              title="Run this report again for the latest figures">↻ Refresh</button>
+            <button className="cd-refresh" onClick={() => storeKey && reloadStore(storeKey)}
+              title="Run this report again for the latest figures"><Icon name="refresh" size={15} /> Refresh</button>
           </div>
           {/* The shop's own page for each report — its filters, its table and its
               CSV export, exactly as Store → Store Reports shows it. Same origin,
@@ -6964,7 +6969,7 @@ function VisionSettings({ onClose, onChanged, toast }) {
       <div style={{ width: 540, maxWidth: 'calc(100vw - 32px)', background: 'var(--panel)', border: '1px solid var(--line)',
         borderRadius: 12, padding: 24, boxShadow: 'var(--shadow-3)' }} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: 'flex', alignItems: 'center', marginBottom: 6 }}>
-          <h2 style={{ margin: 0, fontSize: 18 }}>👁 Vision extraction</h2>
+          <h2 style={{ margin: 0, fontSize: 18 }}>Vision extraction</h2>
           <div className="spacer" style={{ flex: 1 }} />
           <button className="btn" style={{ padding: '2px 9px' }} onClick={onClose}>×</button>
         </div>
@@ -12430,8 +12435,8 @@ function DeadStock({ toast, go, intent, onIntentUsed }) {
           Stock that has stopped moving, what it is worth to clear, and whether the clearance worked
         </div>
         <div style={{ flex: 1 }} />
-        <button className="btn" onClick={() => readCache.refresh(loadSummary)} disabled={busy}
-          title="Re-read the stock, the till and the ledger">{busy ? 'Reading…' : '↻ Refresh'}</button>
+        <button className="cd-refresh" onClick={() => readCache.refresh(loadSummary)} disabled={busy}
+          title="Re-read the stock, the till and the ledger"><Icon name="refresh" size={15} /> {busy ? 'Reading…' : 'Refresh'}</button>
       </div>
 
       <div style={{ padding: '14px var(--gutter) 0' }}>
@@ -13953,7 +13958,7 @@ function Users({ toast, me }) {
           start where every other module's title starts. It wears the same band
           as the rest now, and the card below it holds the page's gutter. */}
       <div className="pagehead">
-        <h2>👤 Users &amp; Access</h2>
+        <h2>Users &amp; Access</h2>
         <div className="pagesub small">
           Who can sign in, and what each account is allowed to open
         </div>
@@ -14783,7 +14788,7 @@ function Locations({ toast }) {
           and the tills standing on them
         </div>
         <div style={{ flex: 1 }} />
-        <button className="btn" onClick={() => readCache.refresh(load)}>↻ Refresh</button>
+        <button className="cd-refresh" onClick={() => readCache.refresh(load)}><Icon name="refresh" size={15} /> Refresh</button>
         <button className="btn primary" onClick={() => setEdit({ kind: 'warehouse' })}>
           + New warehouse</button>
       </div>
@@ -15099,16 +15104,18 @@ function AskAnything({ go, big, placeholder, seed }) {
   return (
     <div className={'cc-ask' + (big ? ' big' : '')}>
       <div className="askbar">
-        <span className="ico" aria-hidden="true">✨</span>
+        <span className="ico" aria-hidden="true">{big ? <Icon name="sparkle" size={18} /> : '✨'}</span>
         <span className="askfield">
           <input value={q} onChange={(e) => setQ(e.target.value)}
-            placeholder={placeholder || 'Ask anything — press 🎤 and say “today’s total invoices” — or paste a GRN, bill or QR code'}
+            placeholder={placeholder || (big
+              ? 'Ask anything, or paste a GRN, bill or QR code…'
+              : 'Ask anything — press 🎤 and say “today’s total invoices” — or paste a GRN, bill or QR code')}
             title="Speak it or type it, in English or Tamil. A code pasted here is tracked end to end."
             onKeyDown={(e) => { if (e.key === 'Enter' && q.trim()) run() }} />
           {q && <button className="askclear" title="Clear" onClick={() => { setQ(''); setAns(null) }}>×</button>}
         </span>
-        <VoiceButton onInterim={setQ} onSpoken={(t) => { spoken.current = true; run(t) }} disabled={busy} />
-        <button className="btn primary" disabled={busy || !q.trim()} onClick={() => run()}>
+        <VoiceButton big={big} onInterim={setQ} onSpoken={(t) => { spoken.current = true; run(t) }} disabled={busy} />
+        <button className="btn primary askgo" disabled={busy || !q.trim()} onClick={() => run()}>
           {busy ? 'Working…' : 'Ask'}</button>
         {meta?.engine === 'keywords' && (
           <span className="askengine" title="No AI key is set, so questions are matched on keywords rather than read as sentences. A super admin can set one in the top bar.">
@@ -15117,10 +15124,10 @@ function AskAnything({ go, big, placeholder, seed }) {
       </div>
 
       {!ans && big && (
-        <div className="cc-voicehint small">
-          🎤 Press the microphone and say it — “today’s total sales”, “today’s total
-          invoices”, “today’s total LR entries”, “today’s billing”, “which floor has
-          the highest sales” — in English or Tamil. The answer is read back to you.
+        <div className="cc-voicehint">
+          <span className="vh-badge"><Icon name="mic" size={13} /> Voice</span>
+          <span>Press <b>Speak</b> and say <i>“today’s total sales”</i>, <i>“today’s billing”</i> or
+            <i> “which floor has the highest sales”</i> — in English or Tamil. The answer is read back to you.</span>
         </div>
       )}
       {!ans && meta?.examples && (
@@ -15322,29 +15329,38 @@ function CommandCenter({ go, toast, user, role, onEnter, active = true }) {
   }
 
   return (
-    <div className="screen scrolls">
-      <div className="pagehead">
-        <h2>🧭 Command Center</h2>
-        <div className="pagesub">
-          {ov ? `${ov.label} · ${ov.counts?.warehouses ?? 0} warehouse(s), ${ov.counts?.stores ?? 0} store(s), ${ov.counts?.counters ?? 0} till(s)` : 'The whole business on one screen'}
-          {ov?.scope?.warehouse ? ` · ${ov.scope.warehouse} only`
-            : ov?.scope?.restricted ? ' · your allotted warehouses only' : ''}
+    <div className="screen scrolls cd">
+      <div className="cd-head">
+        <div className="cd-title">
+          <h2>Command Center</h2>
+          <p>
+            {ov ? `${ov.label} · ${ov.counts?.warehouses ?? 0} warehouse(s), ${ov.counts?.stores ?? 0} store(s), ${ov.counts?.counters ?? 0} till(s)` : 'The whole business on one screen'}
+            {ov?.scope?.warehouse ? ` · ${ov.scope.warehouse} only`
+              : ov?.scope?.restricted ? ' · your allotted warehouses only' : ''}
+          </p>
         </div>
         {/* Scopes the WHOLE screen — tiles, charts, alerts and activity — to one
             building, the way the Central Dashboard's picker does. The warehouse
             table below is the other way in: click a row. */}
-        <select className="sel" value={scope || ''} style={{ minWidth: 190 }}
-          title="Show one warehouse — its stock, its stores' takings, its GRNs and its people"
-          onChange={(e) => setScope(e.target.value ? +e.target.value : null)}>
-          <option value="">All warehouses</option>
-          {(ov?.places?.picker || []).map((w) => (
-            <option key={w.warehouse_id} value={w.warehouse_id}>{w.name}</option>
-          ))}
-        </select>
-        <input type="date" value={day} max={ov?.day} style={{ width: 150 }}
-          title="Look at another business day" onChange={(e) => setDay(e.target.value)} />
-        {day && <button className="btn" onClick={() => setDay('')}>Today</button>}
-        <button className="btn" onClick={() => readCache.refresh(load)} disabled={busy}>{busy ? 'Reading…' : 'Refresh'}</button>
+        <div className="cd-tools">
+          <label className="cd-select" title="Show one warehouse — its stock, its stores' takings, its GRNs and its people">
+            <Icon name="building" size={16} />
+            <select value={scope || ''} onChange={(e) => setScope(e.target.value ? +e.target.value : null)}>
+              <option value="">All Warehouses</option>
+              {(ov?.places?.picker || []).map((w) => (
+                <option key={w.warehouse_id} value={w.warehouse_id}>{w.name}</option>
+              ))}
+            </select>
+            <Icon name="chevdown" size={16} />
+          </label>
+          <label className="cd-select cd-date" title="Look at another business day">
+            <Icon name="calendar" size={16} />
+            <input type="date" value={day} max={ov?.day} onChange={(e) => setDay(e.target.value)} />
+          </label>
+          {day && <button className="cd-btn" onClick={() => setDay('')}>Today</button>}
+          <button className="cd-refresh" onClick={() => readCache.refresh(load)} disabled={busy}>
+            <Icon name="refresh" size={15} /> {busy ? 'Reading…' : 'Refresh'}</button>
+        </div>
       </div>
 
       <div className="screenbody">
@@ -15364,40 +15380,40 @@ function CommandCenter({ go, toast, user, role, onEnter, active = true }) {
               </div>
             )}
 
-            <div className="dgrid" style={{ marginBottom: 'var(--sp-4)' }}>
-              <DashTile label={`${ov.label}'s Sales`} value={short(k.sales?.value)} accent="money"
+            <div className="cd-tiles four">
+              <CdTile icon="rupee" label={`${ov.label}'s Sales`} value={short(k.sales?.value)}
                 sub={`${n0(k.sales?.bills || 0)} bill(s) · ${fmtQty(k.sales?.units || 0)} units`}
                 hint={`Billed ₹${money(k.sales?.gross || 0)} less ₹${money(k.sales?.returns || 0)} of customer returns`}
                 onClick={() => go('central')} />
-              <DashTile label="Purchases" value={short(k.purchases?.value)} accent="stock"
+              <CdTile icon="cart" label="Purchases" value={short(k.purchases?.value)}
                 sub={`${n0(k.purchases?.grns || 0)} GRN(s) · ${fmtQty(k.purchases?.units || 0)} units`}
                 hint="GRNs posted today — goods that actually became stock"
                 onClick={() => go('purchases')} />
-              <DashTile label="Stock Value" value={short(k.stock_value?.value)} accent="count"
+              <CdTile icon="boxes" tone="warm" label="Stock Value" value={short(k.stock_value?.value)}
                 sub={`${fmtQty(k.stock_value?.qty || 0)} units · ${n0(k.stock_value?.items || 0)} items`}
                 hint="Quantity × each warehouse's own weighted-average cost"
                 onClick={() => go('inventory')} />
-              <DashTile label="Profit" value={short(k.profit?.value)} accent="money"
-                tone={k.profit?.value > 0 ? 'ok' : ''}
+              <CdTile icon="trending" label="Profit" value={short(k.profit?.value)}
+                live={k.profit?.value > 0}
                 sub={k.profit?.margin_pct != null ? `${k.profit.margin_pct}% margin` : 'no sales yet'}
                 hint="Store sales before tax, less what those goods cost at the till" />
             </div>
 
-            <div className="dgrid small-tiles" style={{ marginBottom: 'var(--sp-4)' }}>
-              <DashTile label="Warehouses" value={n0(ov.counts?.warehouses || 0)} accent="count"
-                sub="open" onClick={() => go('locations')} />
-              <DashTile label="Stores" value={n0(ov.counts?.stores || 0)} accent="count"
-                sub="selling" onClick={() => go('locations')} />
-              <DashTile label="POS Counters" value={n0(ov.counts?.counters || 0)} accent="count"
+            <div className="cd-tiles six">
+              <CdTile icon="building" label="Warehouses" value={n0(ov.counts?.warehouses || 0)}
+                live sub="Open" onClick={() => go('locations')} />
+              <CdTile icon="store" label="Stores" value={n0(ov.counts?.stores || 0)}
+                live sub="Selling" onClick={() => go('locations')} />
+              <CdTile icon="calc" label="POS Counters" value={n0(ov.counts?.counters || 0)}
                 sub="tills" onClick={() => go('locations')} />
               {ov.counts?.users != null && (
-                <DashTile label="Users" value={n0(ov.counts.users)} accent="count"
+                <CdTile icon="users" label="Users" value={n0(ov.counts.users)}
                   sub="can sign in" onClick={() => go('users')} />
               )}
-              <DashTile label="Low Stock" value={n0(k.low_stock?.count || 0)} accent="back"
-                tone={k.low_stock?.count ? 'warn' : ''} sub="in the stores"
+              <CdTile icon="tag" tone={k.low_stock?.count ? 'warn' : ''} label="Low Stock"
+                value={n0(k.low_stock?.count || 0)} sub="in the stores"
                 hint="Store products at or below their reorder level" />
-              <DashTile label="Returns" value={short(k.returns?.value)} accent="back"
+              <CdTile icon="undo" tone="rose" label="Returns" value={short(k.returns?.value)}
                 sub={`${n0(k.returns?.store_notes || 0)} customer · ${n0(k.returns?.debit_notes || 0)} supplier`} />
             </div>
 
@@ -15707,7 +15723,7 @@ function AuditTrail({ go }) {
   return (
     <div className="screen scrolls">
       <div className="pagehead">
-        <h2>📝 Audit Trail</h2>
+        <h2>Audit Trail</h2>
         <div className="pagesub">Every change, who made it and where — newest first</div>
         <div style={{ flex: 1 }} />
         <SearchBox value={f.q} onChange={(v) => set('q', v)} placeholder="Search the trail…" style={{ width: 280 }} />
@@ -15799,8 +15815,9 @@ function AuditTrail({ go }) {
 //  tiles, a table and two charts that fetched each part separately would open
 //  in N round trips.
 // ==========================================================================
-function CentralDashboard({ toast, go, onEnter, active = true }) {
+function CentralDashboard({ toast, go, onEnter, storeHome = 'pos:home', active = true }) {
   const [ov, setOv] = useState(null)
+  const [storeView, setStoreView] = useState('list')     // Stores / POS as a list or as cards
   const [err, setErr] = useState(null)
   const [scope, setScope] = useState(null)      // warehouse id, or null for all
   const [days, setDays] = useState(14)
@@ -15854,167 +15871,199 @@ function CentralDashboard({ toast, go, onEnter, active = true }) {
   const stores = ov?.stores || []
   const tf = ov?.transfers || { totals: {}, warehouses: [] }
 
+  const storesCsv = () => {
+    const head = ['Store / POS', 'Code', 'Warehouse', 'Trades in', 'Type', 'Tills', 'Status']
+    const cell = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`
+    const lines = [head, ...stores.map((x) => [x.name, x.code, x.warehouse || '', x.catalogue || '',
+      x.type, x.terminals, x.active ? 'Active' : 'Closed'])].map((r) => r.map(cell).join(','))
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(new Blob([lines.join('\r\n')], { type: 'text/csv' }))
+    a.download = 'stores-pos.csv'
+    a.click()
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000)
+  }
+
   return (
-    <div className="screen scrolls">
-      <div className="pagehead">
-        <h2>Central Dashboard</h2>
-        <div className="pagesub">Every warehouse at once — stock, value, stores, POS sales and what moved</div>
-        <select value={scope || ''} style={{ minWidth: 200 }}
-          onChange={(e) => setScope(e.target.value ? +e.target.value : null)}
-          title="Scope the tiles and the chart to one warehouse">
-          <option value="">All warehouses</option>
-          {rows.map((w) => (
-            <option key={w.warehouse_id} value={w.warehouse_id}>{w.name}</option>
-          ))}
-        </select>
-        <select value={days} style={{ minWidth: 120 }}
-          onChange={(e) => setDays(+e.target.value)}
-          title="How far back the movement chart looks">
-          <option value={7}>Last 7 days</option>
-          <option value={14}>Last 14 days</option>
-          <option value={30}>Last 30 days</option>
-          <option value={90}>Last 90 days</option>
-        </select>
-        <button className="btn" onClick={() => readCache.refresh(load)}>Refresh</button>
+    <div className="screen scrolls cd">
+      <div className="cd-head">
+        <div className="cd-title">
+          <h2>Central Dashboard</h2>
+        </div>
+        <div className="cd-tools">
+          <label className="cd-select" title="Scope the tiles and the chart to one warehouse">
+            <Icon name="building" size={18} />
+            <select value={scope || ''} onChange={(e) => setScope(e.target.value ? +e.target.value : null)}>
+              <option value="">All Warehouses</option>
+              {rows.map((w) => (
+                <option key={w.warehouse_id} value={w.warehouse_id}>{w.name}</option>
+              ))}
+            </select>
+            <Icon name="chevdown" size={16} />
+          </label>
+          <label className="cd-select" title="How far back the movement chart looks">
+            <Icon name="calendar" size={18} />
+            <select value={days} onChange={(e) => setDays(+e.target.value)}>
+              <option value={7}>Last 7 Days</option>
+              <option value={14}>Last 14 Days</option>
+              <option value={30}>Last 30 Days</option>
+              <option value={90}>Last 90 Days</option>
+            </select>
+            <Icon name="chevdown" size={16} />
+          </label>
+          <button className="cd-refresh" onClick={() => readCache.refresh(load)}>
+            <Icon name="refresh" size={18} /> Refresh</button>
+        </div>
       </div>
 
       <div className="screenbody">
-        {/* The same question box the Command Center leads with. An admin never
-            sees that screen, and "what did we sell today" is not a question only
-            the owner asks — so it is here too, answered inside whatever
-            warehouses this account is allotted. */}
-        <AskAnything go={go} />
-
         {err && <div className="warnbox" style={{ marginBottom: 14 }}>
           <h4>The dashboard could not be read</h4>
           <div className="small" style={{ color: 'var(--text-2)' }}>{err}</div></div>}
 
         {!ov ? <div className="empty" style={{ marginTop: 40 }}>Loading…</div> : (
           <FitPages>
-            <div className="dgrid" style={{ marginBottom: 'var(--sp-4)' }}>
-              <DashTile label="Total Warehouses" value={t.warehouses ?? 0}
-                accent="count" sub={scoped ? scoped.name : 'active'}
+            <div className="cd-tiles">
+              <CdTile icon="building" label="Total Warehouses" value={t.warehouses ?? 0}
+                live={!scoped} sub={scoped ? scoped.name : 'Active'}
                 hint="Warehouses that are open. A closed one keeps its history and stops being offered."
                 onClick={() => go && go('locations')} />
-              <DashTile label="Total Stores / POS" value={t.stores ?? 0}
-                accent="count" sub={scope ? 'supplied by this warehouse' : 'active'}
+              <CdTile icon="store" label="Total Stores / POS" value={t.stores ?? 0}
+                live={!scope} sub={scope ? 'supplied by this warehouse' : 'Active'}
                 hint="Stores that sell. Their stock lives in the shop's own till database."
                 onClick={() => go && go('locations')} />
-              <DashTile label="Total Inventory (Qty)" value={fmtQty(t.qty)}
-                accent="stock" sub={`${t.items ?? 0} distinct item(s)`}
+              <CdTile icon="boxes" tone="warm" label="Total Inventory (Qty)" value={fmtQty(t.qty)}
+                sub={`${t.items ?? 0} distinct item(s)`}
                 hint="Units on hand, counted in each product's own unit."
                 onClick={() => go && go('inventory')} />
-              <DashTile label="Total Value" value={'₹ ' + money(t.value)}
-                accent="money" sub="at weighted-average cost"
+              <CdTile icon="rupee" label="Total Value" value={'₹ ' + money(t.value)}
+                sub="at weighted-average cost"
                 hint="Quantity × the warehouse's own average cost, summed."
                 onClick={() => go && go('inventory')} />
-              <DashTile label="Today's Inward" value={fmtQty(ov.today?.inward)}
-                accent="move" sub="units received" tone={ov.today?.inward ? 'ok' : ''}
+              <CdTile icon="clock" label="Today's Inward" value={fmtQty(ov.today?.inward)}
+                sub="units received"
                 hint="Everything that added stock today — receipts and transfers in."
                 onClick={() => go && go('purchases')} />
-              <DashTile label="Today's Outward" value={fmtQty(ov.today?.outward)}
-                accent="move" sub="units dispatched" tone={ov.today?.outward ? 'ok' : ''}
+              <CdTile icon="swap" label="Today's Outward" value={fmtQty(ov.today?.outward)}
+                sub="units dispatched"
                 hint="Everything that removed stock today — dispatches, transfers out, returns."
                 onClick={() => go && go('outward')} />
             </div>
 
-            <Section id="cd.overview" title="Warehouse Overview"
-              summary={`${rows.length} warehouse(s)`}>
-              <div className="tablewrap">
-                <table className="items">
+            <div className="cd-card">
+              <div className="cd-cardhead">
+                <Icon name="building" size={24} />
+                <h3>Warehouse Overview</h3>
+                <span className="spacer" />
+                <button className="cd-btn" onClick={() => go && go('locations')}
+                  title="Every warehouse and store, under Locations">
+                  View Details <Icon name="arrowright" size={16} /></button>
+              </div>
+              <div className="cd-tablewrap">
+                <table className="cd-table">
                   <thead><tr>
                     <th>Warehouse</th><th>Code</th><th>Location</th><th>Trades in</th>
-                    <th className="num">Stores / POS</th>
-                    <th className="num">Stock (Qty)</th>
-                    <th className="num">Stock Value</th>
-                    <th>Status</th>
-                    <th></th>
+                    <th>Stores / POS</th><th>Stock (Qty)</th><th>Stock Value</th>
+                    <th>Status</th><th>Action</th>
                   </tr></thead>
                   <tbody>
                     {!rows.length && (
-                      <tr><td colSpan={9} className="small" style={{ padding: 16 }}>
-                        No warehouses yet. Add one under Locations.</td></tr>
+                      <tr><td colSpan={9} className="cd-none">No warehouses yet. Add one under Locations.</td></tr>
                     )}
                     {rows.map((w) => (
                       <tr key={w.warehouse_id}
                         className={w.warehouse_id === scope ? 'sel' : ''}
                         style={{ cursor: 'pointer' }}
-                        title="Scope this dashboard to this warehouse"
-                        onClick={() => setScope(w.warehouse_id === scope ? null : w.warehouse_id)}>
-                        <td><b>{w.name}</b></td>
-                        <td className="mono small">{w.code || '—'}</td>
-                        <td className="small">{w.address || '—'}</td>
-                        <td className="small">{w.catalogue || '—'}</td>
-                        <td className="num">{w.store_count}</td>
-                        <td className="num mono">{fmtQty(w.qty)}</td>
-                        <td className="num mono">₹ {money(w.value)}</td>
-                        <td>{w.active
-                          ? <span className="badge confirmed">Active</span>
-                          : <span className="badge review">Closed</span>}</td>
-                        {/* The way IN. Everything from here — LR entry, invoices,
-                            GRN, inventory, labels, outward, inward, returns —
-                            then shows this warehouse's work and nobody else's. */}
-                        <td><button className="btn" style={{ padding: '2px 10px' }}
-                          title={`Work inside ${w.name} — every screen shows only its own`}
-                          onClick={(e) => { e.stopPropagation(); onEnter && onEnter(w) }}>
-                          Open →</button></td>
+                        title={`Open ${w.name}`}
+                        onClick={() => onEnter && onEnter(w)}>
+                        <td className="cd-name"><i className={w.active ? 'on' : ''} />{w.name}</td>
+                        <td>{w.code || '—'}</td>
+                        <td>{w.address || '—'}</td>
+                        <td>{w.catalogue || '—'}</td>
+                        <td>{w.store_count}</td>
+                        <td>{fmtQty(w.qty)}</td>
+                        <td className="cd-money">₹ {money(w.value)}</td>
+                        <td><CdStatus active={w.active} /></td>
+                        <td onClick={(e) => e.stopPropagation()}>
+                          <CdMenu label="Open" title={`Work inside ${w.name} — every screen shows only its own`}
+                            items={[
+                              { label: 'Warehouse', hint: `Everything at ${w.name}`, run: () => onEnter && onEnter(w) },
+                              { label: 'Store / POS', hint: 'Billing, floor sales and store stock',
+                                run: () => onEnter && onEnter(w, storeHome) },
+                            ]} />
+                        </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
-              <div className="items-foot">
+              <div className="cd-foot">
+                <Icon name="bars" size={20} />
                 <span>{rows.length} warehouse(s)</span>
                 <span>Σ qty <b>{fmtQty(sum(rows, (r) => r.qty))}</b></span>
                 <span>Σ value <b>₹ {money(sum(rows, (r) => r.value))}</b></span>
-                <span className="spacer" />
-                <button className="btn" disabled={busy} onClick={rebuild}
+                <button className="cd-btn" disabled={busy} onClick={rebuild}
                   title="Recompute every warehouse balance from the movement ledger. Always safe — the ledger is the source of truth and this only rebuilds the running totals from it.">
+                  <Icon name="refresh" size={16} />
                   {busy ? 'Recomputing…' : 'Recompute from ledger'}</button>
               </div>
-            </Section>
+            </div>
 
             {/* ---- Stores / POS, under the warehouse that supplies each ---- */}
-            <Section id="cd.stores" title="Stores / POS"
-              summary={`${stores.length} store(s)`}
-              actions={<button className="btn" style={{ padding: '2px 9px' }}
-                onClick={() => go && go('reports')}
-                title="Open the Stores / POS by Warehouse report">Report →</button>}>
-              <div className="tablewrap">
-                <table className="items">
-                  <thead><tr>
-                    <th>Store / POS</th><th>Code</th><th>Warehouse</th>
-                    <th>Trades in</th><th>Type</th>
-                    <th className="num">Tills</th><th>Status</th>
-                  </tr></thead>
-                  <tbody>
-                    {!stores.length && (
-                      <tr><td colSpan={7} className="small" style={{ padding: 16 }}>
-                        No stores yet. Add them under Locations.</td></tr>
-                    )}
-                    {stores.map((s) => (
-                      <tr key={s.id}>
-                        <td><b>{s.name}</b></td>
-                        <td className="mono small">{s.code || '—'}</td>
-                        <td className="small">{s.warehouse || '(not assigned)'}</td>
-                        <td className="small">{s.catalogue || '—'}</td>
-                        <td className="small" title={s.terminals
-                          ? 'Has a till, so it can bill'
-                          : 'No till — it holds stock but cannot bill'}>{s.type}</td>
-                        <td className="num">{s.terminals}</td>
-                        <td>{s.active
-                          ? <span className="badge confirmed">Active</span>
-                          : <span className="badge review">Closed</span>}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+            <div className="cd-card">
+              <div className="cd-cardhead">
+                <Icon name="store" size={24} />
+                <h3>Stores / POS</h3>
+                <CdMenu label="Report" items={[
+                  { label: 'Open in Reports', hint: 'The Stores / POS by Warehouse report', run: () => go && go('reports') },
+                  { label: 'Download CSV', hint: 'This list, for Excel', run: storesCsv },
+                ]} />
+                <span className="spacer" />
+                <div className="cd-seg" role="tablist" aria-label="View">
+                  <button role="tab" aria-selected={storeView === 'list'} className={storeView === 'list' ? 'on' : ''}
+                    onClick={() => setStoreView('list')}><Icon name="list" size={16} /> List</button>
+                  <button role="tab" aria-selected={storeView === 'grid'} className={storeView === 'grid' ? 'on' : ''}
+                    onClick={() => setStoreView('grid')}><Icon name="grid" size={16} /> Grid</button>
+                </div>
               </div>
-              <div className="items-foot">
-                <span>{stores.length} store(s)</span>
-                <span>Σ tills <b>{sum(stores, (s) => s.terminals)}</b></span>
-              </div>
-            </Section>
+              {storeView === 'grid' ? (
+                <div className="cd-storegrid">
+                  {!stores.length && <div className="cd-none">No stores yet. Add them under Locations.</div>}
+                  {stores.map((x) => (
+                    <div key={x.id} className="cd-store">
+                      <div className="cd-store-top"><b>{x.name}</b><CdStatus active={x.active} /></div>
+                      <div className="cd-store-meta">{x.code || '—'} · {x.type}</div>
+                      <div className="cd-store-meta">{x.warehouse || '(not assigned)'} · {x.catalogue || '—'}</div>
+                      <div className="cd-store-meta">{x.terminals} till(s)</div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="cd-tablewrap">
+                  <table className="cd-table">
+                    <thead><tr>
+                      <th>Store / POS</th><th>Code</th><th>Warehouse</th>
+                      <th>Trades in</th><th>Type</th><th>Tills</th><th>Status</th>
+                    </tr></thead>
+                    <tbody>
+                      {!stores.length && (
+                        <tr><td colSpan={7} className="cd-none">No stores yet. Add them under Locations.</td></tr>
+                      )}
+                      {stores.map((x) => (
+                        <tr key={x.id}>
+                          <td className="cd-strong">{x.name}</td>
+                          <td>{x.code || '—'}</td>
+                          <td>{x.warehouse || '(not assigned)'}</td>
+                          <td>{x.catalogue || '—'}</td>
+                          <td title={x.terminals ? 'Has a till, so it can bill' : 'No till — it holds stock but cannot bill'}>{x.type}</td>
+                          <td>{x.terminals}</td>
+                          <td><CdStatus active={x.active} /></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
 
             {/* ---- What the shops sold, per branch ---- */}
             <Section id="cd.sales" title="POS Sales by Store"
@@ -16999,68 +17048,7 @@ function PosScreen({ screen, available, error, warehouse: wh, active = true }) {
 //  the shell needs forty of them, and a package several times the size of this
 //  set is not worth it for the chrome.
 // ==========================================================================
-const ICONS = {
-  dashboard: <><rect width="7" height="9" x="3" y="3" rx="1" /><rect width="7" height="5" x="14" y="3" rx="1" /><rect width="7" height="9" x="14" y="12" rx="1" /><rect width="7" height="5" x="3" y="16" rx="1" /></>,
-  grid: <><rect width="7" height="7" x="3" y="3" rx="1" /><rect width="7" height="7" x="14" y="3" rx="1" /><rect width="7" height="7" x="14" y="14" rx="1" /><rect width="7" height="7" x="3" y="14" rx="1" /></>,
-  search: <><circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" /></>,
-  spreadsheet: <><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" /><path d="M14 2v4a2 2 0 0 0 2 2h4" /><path d="M8 13h2M14 13h2M8 17h2M14 17h2" /></>,
-  filetext: <><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" /><path d="M14 2v4a2 2 0 0 0 2 2h4" /><path d="M10 9H8M16 13H8M16 17H8" /></>,
-  pin: <><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0" /><circle cx="12" cy="10" r="3" /></>,
-  users: <><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" /></>,
-  usercheck: <><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="m16 11 2 2 4-4" /></>,
-  cart: <><circle cx="8" cy="21" r="1" /><circle cx="19" cy="21" r="1" /><path d="M2.05 2.05h2l2.66 12.42a2 2 0 0 0 2 1.58h9.78a2 2 0 0 0 1.95-1.57l1.65-7.43H5.12" /></>,
-  truck: <><path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2" /><path d="M15 18H9" /><path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.624l-3.48-4.35A1 1 0 0 0 17.52 8H14" /><circle cx="17" cy="18" r="2" /><circle cx="7" cy="18" r="2" /></>,
-  clipcheck: <><rect width="8" height="4" x="8" y="2" rx="1" /><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" /><path d="m9 14 2 2 4-4" /></>,
-  boxes: <><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z" /><path d="m3.3 7 8.7 5 8.7-5M12 22V12" /></>,
-  shield: <><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" /><path d="m9 12 2 2 4-4" /></>,
-  calc: <><rect width="16" height="20" x="4" y="2" rx="2" /><path d="M8 6h8M16 14v4M16 10h.01M12 10h.01M8 10h.01M12 14h.01M8 14h.01M12 18h.01M8 18h.01" /></>,
-  tag: <><path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z" /><circle cx="7.5" cy="7.5" r="1" /></>,
-  octagon: <><path d="M12 16h.01M12 8v4" /><path d="M15.312 2a2 2 0 0 1 1.414.586l4.688 4.688A2 2 0 0 1 22 8.688v6.624a2 2 0 0 1-.586 1.414l-4.688 4.688a2 2 0 0 1-1.414.586H8.688a2 2 0 0 1-1.414-.586l-4.688-4.688A2 2 0 0 1 2 15.312V8.688a2 2 0 0 1 .586-1.414l4.688-4.688A2 2 0 0 1 8.688 2z" /></>,
-  qr: <><rect width="5" height="5" x="3" y="3" rx="1" /><rect width="5" height="5" x="16" y="3" rx="1" /><rect width="5" height="5" x="3" y="16" rx="1" /><path d="M21 16h-3a2 2 0 0 0-2 2v3M21 21v.01M12 7v3a2 2 0 0 1-2 2H7M3 12h.01M12 3h.01M12 16v.01M16 12h1M21 12v.01M12 21v-1" /></>,
-  printer: <><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" /><path d="M6 9V3a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v6" /><rect x="6" y="14" width="12" height="8" rx="1" /></>,
-  outward: <path d="m18 9-6-6-6 6M12 3v14M5 21h14" />,
-  inward: <path d="M12 17V3M6 11l6 6 6-6M19 21H5" />,
-  undo: <><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /></>,
-  rupee: <path d="M6 3h12M6 8h12M6 13l8.5 8M6 13h3M9 13c6.667 0 6.667-10 0-10" />,
-  factory: <><path d="M2 20a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8l-7 5V8l-7 5V4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z" /><path d="M17 18h1M12 18h1M7 18h1" /></>,
-  database: <><ellipse cx="12" cy="5" rx="9" ry="3" /><path d="M3 5v14a9 3 0 0 0 18 0V5" /><path d="M3 12a9 3 0 0 0 18 0" /></>,
-  sliders: <path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4" />,
-  book: <><path d="M12 7v14" /><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z" /></>,
-  building: <><path d="M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z" /><path d="M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2M10 6h4M10 10h4M10 14h4M10 18h4" /></>,
-  store: <><path d="m2 7 4.41-4.41A2 2 0 0 1 7.83 2h8.34a2 2 0 0 1 1.42.59L22 7" /><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8" /><path d="M15 22v-4a2 2 0 0 0-2-2h-2a2 2 0 0 0-2 2v4M2 7h20M22 7v3a2 2 0 0 1-2 2 2.7 2.7 0 0 1-2-1 2.7 2.7 0 0 1-2 1 2.7 2.7 0 0 1-2-1 2.7 2.7 0 0 1-2 1 2.7 2.7 0 0 1-2-1 2.7 2.7 0 0 1-2 1 2.7 2.7 0 0 1-2-1 2.7 2.7 0 0 1-2 1 2 2 0 0 1-2-2V7" /></>,
-  trending: <path d="M22 7 13.5 15.5 8.5 10.5 2 17M16 7h6v6" />,
-  card: <><rect width="20" height="14" x="2" y="5" rx="2" /><path d="M2 10h20" /></>,
-  receipt: <><path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1Z" /><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8M12 17.5v-11" /></>,
-  scissors: <><circle cx="6" cy="6" r="3" /><path d="M8.12 8.12 12 12M20 4 8.12 15.88" /><circle cx="6" cy="18" r="3" /><path d="M14.8 14.8 20 20" /></>,
-  layers: <><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z" /><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65M22 12.65l-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65" /></>,
-  percent: <><path d="M19 5 5 19" /><circle cx="6.5" cy="6.5" r="2.5" /><circle cx="17.5" cy="17.5" r="2.5" /></>,
-  x: <path d="M18 6 6 18M6 6l12 12" />,
-  pencil: <><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" /><path d="m15 5 4 4" /></>,
-  trash: <><path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" /><path d="M10 11v6M14 11v6" /></>,
-  panelClose: <><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M9 3v18M16 15l-3-3 3-3" /></>,
-  panelOpen: <><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M9 3v18M14 9l3 3-3 3" /></>,
-  chevron: <path d="m9 18 6-6-6-6" />,
-  menu: <path d="M4 12h16M4 6h16M4 18h16" />,
-  bell: <><path d="M10.268 21a2 2 0 0 0 3.464 0" /><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326" /></>,
-  eye: <><path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0" /><circle cx="12" cy="12" r="3" /></>,
-  cpu: <><rect width="16" height="16" x="4" y="4" rx="2" /><rect width="6" height="6" x="9" y="9" rx="1" /><path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2" /></>,
-  logout: <><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><path d="m16 17 5-5-5-5M21 12H9" /></>,
-  upload: <><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="m17 8-5-5-5 5M12 3v12" /></>,
-  plus: <path d="M5 12h14M12 5v14" />,
-  compass: <><circle cx="12" cy="12" r="10" /><path d="m16.24 7.76-1.8 5.41a2 2 0 0 1-1.27 1.27L7.76 16.24l1.8-5.41a2 2 0 0 1 1.27-1.27z" /></>,
-  history: <><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5M12 7v5l3.5 2" /></>,
-  sparkle: <><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1" /><circle cx="12" cy="12" r="3" /></>,
-}
 
-function Icon({ name, size = 16, className }) {
-  return (
-    <svg className={'ico-svg' + (className ? ' ' + className : '')} width={size} height={size}
-      viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
-      strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
-      {ICONS[name] || ICONS.dashboard}
-    </svg>
-  )
-}
 
 // Which mark each screen wears in the sidebar, the palette and the module cards.
 const NAV_ICON = {
@@ -17208,13 +17196,13 @@ function NavSidebar({ kind, context, items, tab, go, online, foot, drawer, onClo
 // new screen is never lost from the rail.
 const NAV_RAIL = {
   central: [
-    { key: 'home', label: 'Home', icon: 'dashboard', screens: ['command', 'central', 'pickwh'] },
+    { key: 'home', label: 'Home', icon: 'home', screens: ['command', 'central', 'pickwh'] },
     { key: 'stock', label: 'Stock', icon: 'boxes', screens: ['locator'] },
     { key: 'reports', label: 'Reports', icon: 'trending', screens: ['reports', 'audit'] },
     { key: 'setup', label: 'Setup', icon: 'sliders', screens: ['locations', 'users', 'database'] },
   ],
   warehouse: [
-    { key: 'home', label: 'Home', icon: 'dashboard', screens: ['dashboard'] },
+    { key: 'home', label: 'Home', icon: 'home', screens: ['dashboard'] },
     { key: 'purchase', label: 'Purchase', icon: 'filetext',
       screens: ['purchase_orders', 'lr', 'documents', 'purchases', 'returns', 'payments', 'suppliers'] },
     { key: 'stock', label: 'Stock', icon: 'boxes',
@@ -17225,7 +17213,7 @@ const NAV_RAIL = {
     { key: 'setup', label: 'Setup', icon: 'sliders', screens: ['masters', 'catalogues', 'locations', 'users', 'database'] },
   ],
   store: [
-    { key: 'home', label: 'Home', icon: 'dashboard', screens: ['pos:home'] },
+    { key: 'home', label: 'Home', icon: 'home', screens: ['pos:home'] },
     { key: 'billing', label: 'Billing', icon: 'receipt',
       screens: ['pos:floor', 'pos:counter', 'pos:settlement', 'pos:delivery', 'pos:invoices', 'pos:returns'] },
     { key: 'stock', label: 'Stock', icon: 'boxes',
@@ -17280,6 +17268,43 @@ function CategoryPage({ group, context, tab, go, onClose }) {
           ))}
         </div>
       </div>
+    </div>
+  )
+}
+
+// The signed-in account, top right: avatar, role and username, and a ⌄ that
+// opens the account menu.
+function UserMenu({ user, role, onPassword, onKeys, onLogout }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+  useEffect(() => {
+    if (!open) return undefined
+    const away = (e) => { if (!ref.current?.contains(e.target)) setOpen(false) }
+    const esc = (e) => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', away)
+    document.addEventListener('keydown', esc)
+    return () => { document.removeEventListener('mousedown', away); document.removeEventListener('keydown', esc) }
+  }, [open])
+  const label = ROLE_LABEL[role] || role
+  const pick = (f) => () => { setOpen(false); f() }
+  return (
+    <div className="th-usermenu" ref={ref}>
+      <button className="th-user" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((o) => !o)}
+        title={`${user} · ${label}${ROLE_HELP[role] ? ' — ' + ROLE_HELP[role] : ''}`}>
+        <span className="th-avatar" aria-hidden="true">{initialsOf(user)}</span>
+        <span className="th-who">
+          <span className="th-role">{label}</span>
+          <span className="th-name">{user}</span>
+        </span>
+        <Icon name="chevdown" size={18} />
+      </button>
+      {open && (
+        <div className="th-umenu" role="menu">
+          <button role="menuitem" type="button" onClick={pick(onPassword)}><Icon name="key" size={16} /> Change password</button>
+          <button role="menuitem" type="button" onClick={pick(onKeys)}><Icon name="keyboard" size={16} /> Keyboard shortcuts <kbd>F1</kbd></button>
+          <button role="menuitem" type="button" className="out" onClick={pick(onLogout)}><Icon name="logout" size={16} /> Sign out</button>
+        </div>
+      )}
     </div>
   )
 }
@@ -17864,6 +17889,55 @@ function DashTile({ label, value, sub, tone, accent, hint, onClick }) {
   )
 }
 
+// The Central Dashboard's own tile: a round icon, the label, the figure, and a
+// line under it ("● Active" when `live`).
+function CdTile({ icon, label, value, sub, live, tone, hint, onClick }) {
+  return (
+    <button className={'cd-tile' + (tone ? ' ' + tone : '')} onClick={onClick}
+      title={hint || `Open ${label}`}>
+      <span className="cd-ic"><Icon name={icon} size={22} /></span>
+      <span className="cd-tx">
+        <span className="lbl">{label}</span>
+        <span className={'val' + (longValue(value) ? ' long' : '')}>{value}</span>
+        <span className={'sub' + (live ? ' live' : '')}>{live && <i />}{sub || ' '}</span>
+      </span>
+    </button>
+  )
+}
+
+function CdStatus({ active }) {
+  return <span className={'cd-status' + (active ? '' : ' off')}><i />{active ? 'ACTIVE' : 'CLOSED'}</span>
+}
+
+// A small button with a ⌄ that opens a list of actions under it.
+function CdMenu({ label, items, title }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+  useEffect(() => {
+    if (!open) return undefined
+    const away = (e) => { if (!ref.current?.contains(e.target)) setOpen(false) }
+    const esc = (e) => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', away)
+    document.addEventListener('keydown', esc)
+    return () => { document.removeEventListener('mousedown', away); document.removeEventListener('keydown', esc) }
+  }, [open])
+  return (
+    <span className="cd-menu" ref={ref}>
+      <button className="cd-btn" aria-haspopup="menu" aria-expanded={open} title={title}
+        onClick={() => setOpen((o) => !o)}>{label} <Icon name="chevdown" size={16} /></button>
+      {open && (
+        <div className="cd-menu-list" role="menu">
+          {items.map((it) => (
+            <button key={it.label} role="menuitem" type="button"
+              onClick={() => { setOpen(false); it.run() }}>
+              <b>{it.label}</b>{it.hint && <small>{it.hint}</small>}</button>
+          ))}
+        </div>
+      )}
+    </span>
+  )
+}
+
 const sum = (rows, f) => rows.reduce((a, r) => a + (+f(r) || 0), 0)
 
 // The graphical half. Kept in its own component so its data is fetched only when
@@ -18219,8 +18293,8 @@ function Dashboard({ modules, go, company, docs, refreshDocs, user, openDeadStoc
             className={'seg' + (view === 'graphical' ? ' on' : '')} onClick={() => setView('graphical')}
             title="The same warehouse as trends and shares over time">📈 Charts</button>
         </div>
-        <button className="btn" onClick={() => readCache.refresh(() => { refreshDocs(); load() })} disabled={busy}
-          title="Re-read every figure on this screen">{busy ? 'Refreshing…' : '↻ Refresh'}</button>
+        <button className="cd-refresh" onClick={() => readCache.refresh(() => { refreshDocs(); load() })} disabled={busy}
+          title="Re-read every figure on this screen"><Icon name="refresh" size={15} /> {busy ? 'Refreshing…' : 'Refresh'}</button>
       </div>
 
       <div className="dash">
@@ -19061,33 +19135,22 @@ export default function App() {
       <div className="topbar">
         <button className="th-icon th-menu" onClick={() => setNavOpen(true)}
           aria-label="Open navigation menu" title="Menu"><Icon name="menu" size={20} /></button>
-        <div className="th-brand">
+        <div className="th-brand" title={companyName}>
           <span className="th-logo" aria-hidden="true">E</span>
-          <div className="brand">ESSA AI <span>· Enterprise ERP</span>
-            <small>{companyName} — multi-warehouse inventory &amp; retail supply chain</small></div>
+          <div className="brand">ESSA AI <span>– Enterprise ERP</span></div>
         </div>
         <div className="spacer" />
         <button className="th-ctl th-search" onClick={() => setJumpOpen(true)}
           title="Jump to any screen (Ctrl + K)" aria-label="Jump to a screen">
-          <Icon name="search" size={14} /><span className="ph">Search screens…</span><kbd>Ctrl K</kbd>
+          <Icon name="search" size={18} /><span className="ph">Search anything… (Ctrl + K)</span>
         </button>
-        <button className="th-ctl th-keys" onClick={() => window.dispatchEvent(new Event('essa:kbhelp'))}
-          title="Keyboard shortcuts (F1)" aria-label="Keyboard shortcuts"><kbd>F1</kbd> Keys</button>
         <NotificationBell onOpen={() => setNotifsOpen(true)} tick={notifTick} />
-        <span className="th-div" aria-hidden="true" />
         {/* Who you are signed in as, and at what level. On a shared warehouse
             terminal the second half is the load-bearing one: it is the answer
-            to "why can I not see Reports today", visible without asking. */}
-        <button className="th-user" onClick={() => setShowPassword(true)}
-          title={`${user} · ${ROLE_LABEL[role] || role}${ROLE_HELP[role] ? ' — ' + ROLE_HELP[role] : ''}\nClick to change your password`}>
-          <span className="th-avatar" aria-hidden="true">{initialsOf(user)}</span>
-          <span className="th-who">
-            <span className="th-role">{ROLE_LABEL[role] || role}</span>
-            <span className="th-name">{user}</span>
-          </span>
-        </button>
-        <button className="th-icon th-logout" title={'Sign out of ' + user} aria-label="Sign out"
-          onClick={logout}><Icon name="logout" /></button>
+            to "why can I not see Reports today", visible without asking.
+            The ⌄ opens the account menu: password, shortcuts, sign out. */}
+        <UserMenu user={user} role={role} onPassword={() => setShowPassword(true)}
+          onKeys={() => window.dispatchEvent(new Event('essa:kbhelp'))} onLogout={logout} />
       </div>
 
       {/* 2. The context bar. WHERE YOU ARE, loud on purpose: every screen below
@@ -19262,7 +19325,7 @@ export default function App() {
   function stashedScreen(x, on) {
     if (x.tab === 'command') return <CommandCenter go={setTab} toast={toast} user={user} role={role}
       onEnter={enterWarehouse} active={on} />
-    if (x.tab === 'central') return <CentralDashboard toast={toast} go={setTab} onEnter={enterWarehouse} active={on} />
+    if (x.tab === 'central') return <CentralDashboard toast={toast} go={setTab} onEnter={enterWarehouse} storeHome={storeHome} active={on} />
     if (x.tab === 'dashboard') return <Dashboard modules={modules} go={setTab} company={status?.company?.name}
       docs={docs} refreshDocs={refresh} user={user} openDeadStock={openDeadStock} here={x.wh} active={on} />
     if (x.tab === 'pos:home') return <PosScreen screen={POS_HOME} available={status?.pos?.available}
@@ -19381,7 +19444,7 @@ export default function App() {
       ) : k === 'audit' ? (
         <AuditTrail go={setTab} />
       ) : k === 'central' ? (
-        <CentralDashboard toast={toast} go={setTab} onEnter={enterWarehouse} />
+        <CentralDashboard toast={toast} go={setTab} onEnter={enterWarehouse} storeHome={storeHome} />
       ) : k === 'catalogues' ? (
         <Catalogues toast={toast} />
       ) : k === 'locations' ? (

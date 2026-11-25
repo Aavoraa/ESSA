@@ -1,0 +1,75 @@
+/* ==========================================================================
+   ESSA AI — design tokens (the ONE source)
+   --------------------------------------------------------------------------
+   Used by both front ends: the React app imports this file, and every build
+   copies it to the shop at  Textile Retail Shop/app/static/css/tokens.css
+   (see vite.config.js). Edit it here only.
+
+   Everything is prefixed --ui- so it can sit beside the older variables while
+   screens move over to it one at a time.
+   ========================================================================== */
+:root {
+  /* ---- colour: brand ---- */
+  --ui-primary: #075B45;          /* deep emerald — primary actions, active nav */
+  --ui-primary-hover: #064C3A;
+  --ui-primary-press: #053D2F;
+  --ui-secondary: #168568;        /* muted green — focus ring, icons, links */
+  --ui-green-50: #F3F9F6;         /* hover rows, quiet fills */
+  --ui-green-100: #E8F4EE;        /* light green — selected, chips */
+  --ui-green-200: #CFE6DA;        /* tinted borders */
+  --ui-accent: #D9A441;           /* champagne amber — money / attention only */
+  --ui-accent-50: #FBF4E6;
+
+  /* ---- colour: surfaces and text ---- */
+  --ui-bg: #F6F8F7;               /* page */
+  --ui-surface: #FFFFFF;          /* cards */
+  --ui-surface-2: #F9FBFA;        /* table heads, card footers */
+  --ui-text: #182B25;
+  --ui-text-2: #68756F;
+  --ui-text-3: #8E9993;           /* placeholders, disabled */
+  --ui-border: #E5EBE7;
+  --ui-border-strong: #CFD8D3;
+
+  /* ---- colour: status ---- */
+  --ui-success: #249B68;  --ui-success-bg: #E7F5EE;
+  --ui-warning: #D99A35;  --ui-warning-bg: #FBF2E2;  --ui-warning-text: #8A5A12;
+  --ui-error:   #D9534F;  --ui-error-bg:   #FBEBEA;  --ui-error-text:   #A8322E;
+  --ui-info:    #4385B8;  --ui-info-bg:    #E9F1F8;  --ui-info-text:    #2C6491;
+  --ui-neutral-bg: #EEF1EF;
+
+  /* ---- type ---- */
+  --ui-font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --ui-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --ui-fs-page: 26px;     /* page title */
+  --ui-fs-section: 16px;  /* section / card header */
+  --ui-fs-card: 13px;     /* card title, KPI label */
+  --ui-fs-body: 14px;
+  --ui-fs-table: 13px;
+  --ui-fs-small: 12px;
+  --ui-fs-kpi: 24px;      /* KPI value */
+  --ui-lh: 1.45;
+
+  /* ---- space (4px base) ---- */
+  --ui-s1: 4px;  --ui-s2: 8px;  --ui-s3: 12px;  --ui-s4: 16px;
+  --ui-s5: 20px; --ui-s6: 24px; --ui-s8: 32px;
+
+  /* ---- shape ---- */
+  --ui-r-sm: 6px;   /* inputs, badges */
+  --ui-r: 10px;     /* buttons, cards */
+  --ui-r-lg: 14px;  /* dialogs, flyouts */
+
+  /* ---- elevation ---- */
+  --ui-shadow-card: 0 1px 2px rgba(24,43,37,.05);
+  --ui-shadow-pop: 0 8px 24px rgba(24,43,37,.12), 0 2px 6px rgba(24,43,37,.06);
+  --ui-shadow-modal: 0 24px 60px rgba(24,43,37,.22);
+
+  /* ---- controls ---- */
+  --ui-h-sm: 30px; --ui-h: 36px; --ui-h-lg: 44px;
+  --ui-focus: 0 0 0 3px rgba(22,133,104,.22);
+  --ui-ease: cubic-bezier(.2,.7,.2,1);
+
+  /* ---- shell ---- */
+  --ui-sidebar-w: 232px;
+  --ui-sidebar-w-collapsed: 72px;
+  --ui-header-h: 56px;
+}

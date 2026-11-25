@@ -1320,3 +1320,98 @@ body:not(:has(.pos-screen)) textarea.form-control { font-size: .8125rem; border:
 .form-control:focus, .form-select:focus { border-color: var(--brand, #0B3D2E);
   box-shadow: 0 0 0 3px rgba(47,143,104,.18); }
 body:not(:has(.pos-screen)) .input-group > .btn { padding-top: 3px; padding-bottom: 3px; }
+
+/* ==========================================================================
+   2026-11 refresh: the same card look as the ESSA screens around this frame
+   ========================================================================== */
+html.in-frame body { background: #F7F8F7; }
+.card { border-color: #E6EAE7; border-radius: 12px; box-shadow: 0 1px 3px rgba(15,23,42,.04); }
+.table > thead > tr > th { background: #F7F8F7; color: #444; font-weight: 600; }
+.btn { border-radius: 8px; }
+.form-control, .form-select, .input-group-text { border-radius: 8px; }
+.badge { border-radius: 7px; }
+/* inside ESSA the account is already shown in ESSA's own header */
+html.in-frame .brand-nav .nav-item.dropdown:has(> .user-chip) { display: none; }
+
+/* ==========================================================================
+   2026-11 refresh, store screens: ESSA's page title, tiles and module cards
+   ========================================================================== */
+/* page title: green bar, title, subtitle under it */
+.page-head > div:first-child:has(> .page-title), .page-head > div:first-child:has(> h4) {
+  border-left: 3px solid #0B5A3C; padding-left: 14px; }
+.page-head h4, .page-head .page-title { font-size: 1.375rem; font-weight: 700; color: #111; letter-spacing: -.01em; }
+.page-sub, .page-head .page-head-sub { font-size: .84rem; color: #555; margin-top: 2px; }
+.page-actions .btn, .page-head .btn { border-radius: 9px; height: 36px; display: inline-flex; align-items: center; gap: 6px; }
+
+/* tiles: round icon on the left, then label, figure and note */
+.kpi-card { display: grid; grid-template-columns: 40px minmax(0, 1fr); column-gap: 12px; align-items: start;
+  border: 1px solid #E6EAE7; border-radius: 12px; padding: 16px 14px;
+  background: linear-gradient(135deg, #fff 45%, #EEF7F1 100%); box-shadow: 0 1px 3px rgba(15,23,42,.04); }
+.kpi-top { display: contents; }
+.kpi-icon { grid-column: 1; grid-row: 1 / span 3; width: 40px; height: 40px; border-radius: 50%;
+  background: #E0F0E6; color: #0B5A3C; display: inline-flex; align-items: center; justify-content: center; font-size: 1.05rem; }
+.kpi-icon.warn { background: #FDECB5; color: #B45309; }
+.kpi-label { grid-column: 2; grid-row: 1; font-size: .8rem; font-weight: 500; text-transform: capitalize;
+  letter-spacing: 0; color: #333; }
+.kpi-badge { grid-column: 2; justify-self: start; }
+.kpi-value { grid-column: 2; margin-top: 4px; font-size: 1.35rem; color: #111; }
+.kpi-sub { grid-column: 2; margin-top: 2px; font-size: .75rem; color: #555; }
+
+/* panel headers in title case */
+.card-header { background: #fff; font-size: .95rem; font-weight: 600; color: #111;
+  text-transform: none !important; letter-spacing: 0 !important; }
+.card-header > span > .bi:first-child { color: #0B5A3C; }
+
+/* module cards */
+.qa-card { border: 1px solid #E6EAE7; border-radius: 12px; padding: 14px 14px; gap: 12px; background: #fff;
+  transition: border-color .12s, box-shadow .12s, transform .12s; }
+.qa-card:hover { border-color: #9EC4AF; background: #F7FBF8; box-shadow: 0 6px 16px rgba(15,23,42,.07); transform: translateY(-1px); }
+.qa-ico { width: 38px; height: 38px; border-radius: 50%; background: #E0F0E6; color: #0B5A3C; font-size: 1rem;
+  display: inline-flex; align-items: center; justify-content: center; }
+.qa-title { font-size: .92rem; font-weight: 600; color: #111; }
+.qa-desc { font-size: .78rem; color: #555; }
+/* page titles written without a wrapper (Floor Sales and others) get the same bar */
+.page-head > h4:first-child, .page-head > .page-title:first-child { border-left: 3px solid #0B5A3C; padding-left: 14px; }
+/* ESSA's titles carry no icon; neither do these */
+.page-head h4 > .bi:first-child, .page-head .page-title > .bi:first-child { display: none; }
+/* panel titles in title case, never shouting */
+.card .fw-bold, .card-header { text-transform: none; }
+/* the bill-scan box on Settlement: one rounded field, like the Billing Counter's */
+.input-group:has(> #billFind) { border: 1.5px solid #9EC4AF; border-radius: 12px; overflow: hidden; background: #fff; }
+.input-group:has(> #billFind):focus-within { border-color: #2F8F68; box-shadow: 0 0 0 3px rgba(47,143,104,.15); }
+.input-group:has(> #billFind) > * { border: none !important; border-radius: 0 !important; box-shadow: none !important; height: 40px; }
+.input-group:has(> #billFind) > #billCam { border-left: 1px solid #E6EAE7 !important; color: #0B5A3C; background: #fff; }
+/* summary cards (Invoices, Returns, Coupons…): the dashboard tile, with a round icon on the left */
+.stat-card.card { display: grid; grid-template-columns: 40px minmax(0,1fr); column-gap: 12px; align-items: center;
+  border: 1px solid #E6EAE7; border-radius: 12px; padding: 16px 14px !important;
+  background: linear-gradient(135deg, #fff 45%, #EEF7F1 100%); box-shadow: 0 1px 3px rgba(15,23,42,.04); }
+.stat-card.card::before { grid-column: 1; grid-row: 1 / span 2; width: 40px; height: 40px; border-radius: 50%;
+  background: #E0F0E6; color: #0B5A3C; display: inline-flex; align-items: center; justify-content: center;
+  font-family: 'bootstrap-icons'; font-size: 1.05rem; content: '\F5BB'; }
+.stat-card.t-money::before { content: '\F636'; }
+.stat-card.t-stock::before { content: '\F1C8'; }
+.stat-card.t-adjust::before { content: '\F3E8'; }
+.stat-card .label { grid-column: 2; font-size: .8rem; font-weight: 500; text-transform: none !important;
+  letter-spacing: 0 !important; color: #333; }
+.stat-card .label::before { display: none; }
+.stat-card .value { grid-column: 2; font-size: 1.35rem; font-weight: 700; color: #111; }
+/* table headings in title case everywhere */
+.table > thead > tr > th { text-transform: none !important; letter-spacing: 0 !important; }
+/* the Store Reports question bar: the same card and Speak button as ESSA's */
+.card:has(#askBox) { background: linear-gradient(135deg, #fff 55%, #EAF6EF 100%) !important; border-color: #E6EAE7 !important;
+  border-radius: 14px; }
+#askBox { height: 44px; border-radius: 10px; font-size: .9rem; }
+.ask-speak { position: relative; height: 44px; padding: 0 20px; border-radius: 999px; border: none; color: #fff !important;
+  font-weight: 700; display: inline-flex; align-items: center; gap: 7px;
+  background: linear-gradient(160deg, #2BB57A, #13784F); box-shadow: 0 4px 14px rgba(19,120,79,.35); }
+.ask-speak:hover { background: linear-gradient(160deg, #31C285, #158556); color: #fff; }
+.ask-speak.btn-danger { background: linear-gradient(160deg, #F0435B, #C81E3A) !important; }
+.ask-speak:disabled { opacity: .55; }
+/* report group headings in title case */
+.rpt-head { text-transform: none !important; letter-spacing: 0 !important; font-size: .92rem; color: #111; }
+/* headings never in capitals, like ESSA's (badges and the till's tiny strip labels keep theirs) */
+h6.text-muted { text-transform: none !important; letter-spacing: 0 !important; font-size: .85rem; color: #333 !important; font-weight: 600; }
+.card.p-3 > .d-flex:first-child > h5.mb-0:first-child, .card.p-3 > .d-flex:first-child > h6.mb-0:first-child,
+.card > h5:first-child, .card > h6:first-child { text-transform: none !important; letter-spacing: 0 !important; }
+.table > thead > tr > th, .table > thead > tr > td, .table > thead th { text-transform: none !important;
+  letter-spacing: 0 !important; font-size: .78rem; color: #444; background: #F7F8F7; }

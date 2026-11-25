@@ -16,14 +16,13 @@
        line rather than once for the sale. #}
     <div class="card p-2">
       <div class="input-group">
-        <span class="input-group-text"><i class="bi bi-upc-scan"></i></span>
         <input id="scanBox" class="form-control" autocomplete="off" autofocus
                placeholder="Scan product / staff ID · customer mobile, bill # or card"
                title="One box for everything: scan a product tag, then the staff ID. Type a customer's mobile, a bill number or their card, then Enter.">
         <button id="camBtn" class="btn btn-outline-primary" type="button" title="Scan with the camera">
           <i class="bi bi-camera"></i></button>
       </div>
-      <div id="scanHint" class="scan-hint mt-1">Scan a product tag.</div>
+      <div id="scanHint" class="scan-hint mt-1"></div>
       <div id="camBox" style="display:none" class="mt-1">
         <div id="camReader" style="width:100%"></div>
         <button id="camStop" class="btn btn-outline-secondary btn-sm mt-1">Stop camera</button>
@@ -33,31 +32,35 @@
     {# Which entity is billing, from where, at which till — and the number the
        next bill will carry. Kept on screen (small) because a till left set to
        the wrong branch or floor is only noticed if the answer is in view. #}
-    <div class="card p-2 small">
-      <div class="d-flex align-items-center gap-2">
-        {% if till_role == 'billing' %}
-        <span class="badge text-bg-warning" title="Billing only — the customer pays at the cash desk. Change it in Change till (F9).">Billing only</span>
-        {% endif %}
+    <div class="card p-2 small till-card">
+      <div class="till-top">
+        <span class="till-lbl">Next bill</span>
         <span id="billNoBox" class="badge {{ 'text-bg-dark' if next_bill.mapped else 'text-bg-secondary' }}"
               title="{{ 'Next bill on ' ~ next_bill.floor if next_bill.mapped else 'No floor is set for this till, so it bills on the shop’s plain series' }}">
           <span id="pbBillNo">{{ next_bill.number }}</span></span>
+        {% if till_role == 'billing' %}
+        <span class="till-role" title="Billing only — the customer pays at the cash desk. Change it in Change till (F9).">Billing only</span>
+        {% endif %}
+      </div>
+      <div class="till-where" id="pbWhere"
+           title="{{ (chosen_company or default_company).name }} {{ (chosen_company or default_company).gstin or '' }}">
+        <i class="bi bi-geo-alt"></i>
+        <span class="text-truncate">
+          <span id="pbLocation">{{ chosen_location.name if chosen_location else 'No location' }}</span> ·
+          <span id="pbFloor">{{ chosen_floor.name if chosen_floor else 'no floor' }}</span> ·
+          <span id="pbCounter">{{ chosen_counter.name if chosen_counter else 'no counter' }}</span>
+        </span>
         <i id="pbUnmapped" class="bi bi-exclamation-triangle-fill till-warn {{ 'd-none' if next_bill.mapped }}"
            title="No floor set for this till — it bills on the shop's plain series. Press Change and pick the floor you are on, or ask a manager to put this till on one in the warehouse's Locations screen."
            aria-label="No floor set — plain series"></i>
-        <span class="d-flex gap-1 ms-auto">
-          <button class="btn btn-outline-primary btn-xs" data-bs-toggle="modal" data-bs-target="#placeModal"
-                  title="Company / location / floor / counter"><i class="bi bi-shop"></i> Change</button>
-          <a href="{{ url_for('drawer.index') }}"
-             class="btn btn-xs {{ 'btn-outline-secondary' if drawer_open else 'btn-outline-warning' }}"
-             title="{{ ('Drawer open since ' ~ drawer_open.opened_at.strftime('%H:%M')) if drawer_open else 'The cash drawer on this till has not been opened' }}">
-            <i class="bi bi-inbox"></i>{{ '' if drawer_open else ' closed' }}</a>
-        </span>
       </div>
-      <div class="text-muted text-truncate mt-1" id="pbWhere"
-           title="{{ (chosen_company or default_company).name }} {{ (chosen_company or default_company).gstin or '' }}">
-        <span id="pbLocation">{{ chosen_location.name if chosen_location else 'No location' }}</span> ·
-        <span id="pbFloor">{{ chosen_floor.name if chosen_floor else 'no floor' }}</span> ·
-        <span id="pbCounter">{{ chosen_counter.name if chosen_counter else 'no counter' }}</span>
+      <div class="till-actions">
+        <button class="btn btn-outline-primary btn-xs" data-bs-toggle="modal" data-bs-target="#placeModal"
+                title="Company / location / floor / counter"><i class="bi bi-shop"></i> Change till</button>
+        <a href="{{ url_for('drawer.index') }}"
+           class="btn btn-xs {{ 'btn-outline-secondary' if drawer_open else 'btn-outline-warning' }} till-drawer"
+           title="{{ ('Drawer open since ' ~ drawer_open.opened_at.strftime('%H:%M')) if drawer_open else 'The cash drawer on this till has not been opened' }}">
+          <i class="bi bi-inbox"></i> {{ 'Drawer open' if drawer_open else 'Drawer closed' }}</a>
       </div>
     </div>
 
@@ -347,6 +350,119 @@
   .bill-sums b { color:var(--text, #17221D); }
   .bill-grand { font-size:1.9rem; color:var(--brand-dark); }
   #promoBox { max-height:84px; overflow:auto; }
+
+  /* ---- 2026-11 refresh: the ESSA card look ---- */
+  .pos-screen { grid-template-columns: 330px minmax(0,1fr); gap:16px; }
+  @media (max-width: 1399px) { .pos-screen { grid-template-columns: 320px minmax(0,1fr); } }
+  .pos-side { gap:12px; }
+  .pos-side .card { padding:12px !important; border:1px solid #E6EAE7; border-radius:12px;
+    box-shadow:0 1px 3px rgba(15,23,42,.04) !important; background:#fff; }
+  /* the scan box: the one thing a cashier does all day */
+  .pos-side .card:first-child { background:linear-gradient(135deg,#fff 50%,#EAF6EF 100%); border-color:#CFE6D8; }
+  .pos-side .card:first-child .input-group { border-radius:10px; box-shadow:0 1px 2px rgba(15,23,42,.04); }
+  .pos-side .card:first-child .input-group > * { height:44px; }
+  .pos-side .card:first-child .input-group-text { background:#0B3D2E; color:#fff; border-color:#0B3D2E;
+    border-radius:10px 0 0 10px; padding:0 14px; font-size:1.05rem; }
+  .pos-side .card:first-child #scanBox { font-size:.92rem; border-color:#CFE0D6; border-radius:10px 0 0 10px !important; padding-left:14px; }
+  .pos-side .card:first-child #scanBox:focus { border-color:#2F8F68; box-shadow:0 0 0 3px rgba(47,143,104,.15); }
+  .pos-side .card:first-child #camBtn { border-radius:0 10px 10px 0; border-color:#CFE0D6; color:#0B5A3C; background:#fff; padding:0 14px; }
+  .pos-side .card:first-child #camBtn:hover { background:#E9F5EE; }
+  .scan-hint:empty { display:none; }
+  /* room for the cards' borders and shadows: the column clips at its edge */
+  .pos-side { padding:3px 4px 4px; }
+  /* the scan box is ONE layer: the field itself, no card around it */
+  .pos-side .card:first-child { background:none !important; border:none !important; padding:0 !important;
+    box-shadow:none !important; }
+  .pos-side .card:first-child .input-group { background:#fff; border:1px solid #CFE0D6; border-radius:10px;
+    box-shadow:0 1px 3px rgba(15,23,42,.05); overflow:hidden; }
+  .pos-side .card:first-child .input-group:focus-within { border-color:#2F8F68; box-shadow:0 0 0 3px rgba(47,143,104,.15); }
+  .pos-side .card:first-child #scanBox, .pos-side .card:first-child #scanBox:focus { border:none !important;
+    box-shadow:none !important; border-radius:0 !important; }
+  .pos-side .card:first-child #camBtn { border:none !important; border-left:1px solid #E6EAE7 !important; border-radius:0 !important; }
+  .scan-hint { margin-top:8px !important; font-size:.8rem; line-height:1.45; color:#555; }
+  .pos-side > .d-flex.gap-1 { flex-wrap:wrap; }
+  .pos-side .card .d-flex.gap-1 { flex-wrap:nowrap; }
+  .pos-side .card > .d-flex.align-items-center.gap-2 { flex-wrap:wrap; row-gap:6px; }
+  .pos-side .btn-xs { padding:3px 9px; border-radius:7px; font-size:.76rem; }
+  .pos-side .btn-sm { border-radius:9px; padding:7px 10px; font-weight:500; }
+  .pos-side .btn-outline-primary { color:#0B5A3C; border-color:#CFE0D6; background:#fff; }
+  .pos-side .btn-outline-primary:hover { background:#E9F5EE; border-color:#9CCBB4; color:#0B5A3C; }
+  .pos-side .btn-outline-secondary { color:#333; border-color:#DDE2DF; background:#fff; }
+  .pos-side .btn-outline-secondary:hover { background:#F4F6F5; color:#111; }
+  .pos-side .badge { border-radius:7px; font-weight:600; padding:.35em .65em; }
+  /* the total and the one big button */
+  .pos-go.card { background:linear-gradient(160deg,#0B3D2E,#0F5A42) !important; border:none !important; color:#fff;
+    padding:14px !important; box-shadow:0 6px 18px rgba(11,61,46,.25) !important; }
+  .pos-go .text-muted { color:rgba(231,244,236,.75) !important; letter-spacing:.06em; font-weight:600; }
+  .pos-go .pos-total { color:#fff; }
+  .pos-go #goSettle { background:linear-gradient(160deg,#2BB57A,#1A9363); border:none; color:#fff; font-weight:600;
+    height:44px; border-radius:10px; box-shadow:0 3px 10px rgba(0,0,0,.18); }
+  .pos-go #goSettle:disabled { background:rgba(255,255,255,.16); color:rgba(255,255,255,.7); box-shadow:none; opacity:1; }
+  .pos-go #clearBill { color:rgba(231,244,236,.75) !important; }
+  .pos-go #clearBill:hover { color:#fff !important; }
+  .pos-go #goWarn { color:#FECDD3 !important; }
+  /* the total panel, light: amount on top, one clear button, Clear bill under it */
+  .pos-go.card { background:#fff !important; color:#111; border:1px solid #E6EAE7 !important; border-radius:14px;
+    padding:16px !important; box-shadow:0 4px 16px rgba(15,23,42,.06) !important; }
+  .pos-go > .d-flex:first-child { align-items:center !important; padding-bottom:12px; margin-bottom:12px;
+    border-bottom:1px dashed #DDE5E0; }
+  .pos-go .text-muted { color:#666 !important; font-size:.72rem; letter-spacing:.08em; font-weight:700; }
+  .pos-go .pos-total { font-family:var(--font-sans); font-size:1.9rem !important; font-weight:800 !important;
+    color:#0B3D2E; letter-spacing:-.01em; font-variant-numeric:tabular-nums; }
+  .pos-go #goSettle { height:48px; border:none; border-radius:11px; font-weight:600; font-size:.95rem;
+    display:flex; align-items:center; justify-content:center; gap:8px; color:#fff;
+    background:linear-gradient(160deg,#13784F,#0B3D2E); box-shadow:0 4px 12px rgba(11,61,46,.25); margin-top:0 !important; }
+  .pos-go #goSettle:hover:not(:disabled) { background:linear-gradient(160deg,#168A5B,#0E4A37); }
+  .pos-go #goSettle:disabled { background:#EEF2EF; color:#8A968F; box-shadow:none; opacity:1; }
+  .pos-go #goSettle .fkey { background:rgba(255,255,255,.18); border:1px solid rgba(255,255,255,.3); color:inherit; }
+  .pos-go #goSettle:disabled .fkey { background:#fff; border-color:#DDE2DF; color:#8A968F; }
+  .pos-go #clearBill { margin-top:10px !important; color:#666 !important; font-size:.82rem; font-weight:500; }
+  .pos-go #clearBill:hover { color:#BE123C !important; }
+  .pos-go #clearBill .fkey { background:#F4F6F5; border:1px solid #E2E6E3; color:#666; }
+  .pos-go #goWarn { color:#BE123C !important; margin:-4px 0 8px; }
+  /* crisper edges: the borders were too pale against the page to see the corners */
+  .pos-side .card:first-child .input-group { border:1.5px solid #9EC4AF; border-radius:12px;
+    box-shadow:0 1px 2px rgba(15,23,42,.06); }
+  .pos-side .card:first-child .input-group:focus-within { border-color:#2F8F68; }
+  .pos-side .card:not(:first-child), .pos-go.card { border-color:#D6DFD9 !important; }
+  /* the till card: next bill number, where this till is, and its two actions */
+  .till-card { display:flex; flex-direction:column; gap:10px; }
+  .till-top { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .till-lbl { font-size:.7rem; font-weight:700; letter-spacing:.07em; text-transform:uppercase; color:#666; }
+  .till-card #billNoBox { background:#F1F8F3 !important; color:#0B5A3C !important; border:1px solid #CFE6D8;
+    font-family:var(--font-mono); font-size:.8rem; font-weight:600; padding:.38em .7em; border-radius:7px; }
+  .till-card #billNoBox.text-bg-secondary { background:#F4F6F5 !important; color:#444 !important; border-color:#DDE2DF; }
+  .till-role { margin-left:auto; font-size:.7rem; font-weight:700; padding:3px 8px; border-radius:999px;
+    background:#FEF3C7; color:#92400E; }
+  .till-where { display:flex; align-items:center; gap:7px; min-width:0; font-size:.8rem; color:#555;
+    background:#F7F8F7; border-radius:8px; padding:6px 10px; }
+  .till-where > .bi-geo-alt { color:#2F8F68; flex:0 0 auto; }
+  .till-where .till-warn { margin-left:auto; flex:0 0 auto; }
+  .till-actions { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .till-actions .btn { display:flex; align-items:center; justify-content:center; gap:6px; height:34px;
+    font-size:.8rem !important; font-weight:500; border-radius:9px !important; padding:0 8px !important; }
+  .till-actions .btn-outline-warning { color:#B45309; border-color:#F5D9A8; background:#FFFBF2; }
+  .till-actions .btn-outline-warning:hover { background:#FEF3C7; color:#92400E; border-color:#F2C77E; }
+  /* the bill */
+  .pos-bill.card { border:1px solid #D6DFD9; border-radius:14px; box-shadow:0 1px 3px rgba(15,23,42,.04); overflow:hidden; }
+  .pos-bill-head { padding:12px 18px !important; border-bottom:1px solid #ECEFED; background:#fff; }
+  .pos-bill-head .fw-bold { font-size:1rem; color:#111; }
+  .pos-bill-head .fw-bold .bi { display:inline-flex; width:30px; height:30px; border-radius:50%; align-items:center;
+    justify-content:center; background:#E0F0E6; color:#0B5A3C; margin-right:6px; }
+  .pos-bill-head #headBillNo { background:#F1F8F3; color:#0B5A3C; border:1px solid #CFE6D8; border-radius:7px; padding:3px 9px; font-weight:600; }
+  .pos-bill-head .badge { border-radius:7px; }
+  .bill-table thead th { background:#F7F8F7; color:#444; font-size:.75rem; font-weight:600; letter-spacing:0;
+    padding-top:9px; padding-bottom:9px; border-bottom:1px solid #ECEFED; }
+  .bill-table thead tr.entry-row td { top:34px; background:#F1F8F3; padding:7px 3px; border-bottom:1px solid #DCEBE2; }
+  .bill-table .entry-row .form-control { height:34px; border-radius:7px; font-size:.84rem; border-color:#D3E0D8; }
+  .bill-table tbody td { border-color:#F0F2F1; }
+  .bill-table tbody tr:hover td { background:#FAFCFB; }
+  .bill-empty { padding:4rem 1rem; color:#555; font-size:.95rem; }
+  .bill-empty .bi, .bill-empty svg { color:#2F8F68; }
+  .bill-foot { border-top:1px solid #ECEFED; background:#F7FAF8; padding:12px 18px !important; }
+  .bill-sums { font-size:.86rem; color:#555; }
+  .bill-sums b { color:#111; }
+  .bill-grand { color:#0B3D2E; }
   @media (max-width: 991px) {
     .pos-screen { grid-template-columns: 1fr; height:auto; }
     .bill-lines { max-height: 50vh; }
@@ -625,7 +741,7 @@ function paintHint(){
     h.innerText = `Now scan the staff ID for: ${waiting.name}`;
   } else {
     h.innerText = hintMsg ? `${hintMsg} — scan the next product.`
-      : 'Scan a product tag — or a customer’s mobile / bill # + Enter.';
+      : '';   // nothing to say: the placeholder in the box already says what to scan
   }
   hintMsg = null;
 }
