@@ -12080,18 +12080,19 @@ const NOTIF_LEVEL = {
 // render the same row, so a notice never says two different things in two places.
 function NoticeRow({ n, onOpen, onRead, onMute, compact }) {
   return (
-    <div className={'notice' + (n.unread ? ' unread' : '')}>
-      <span className="ndot" title={NOTIF_LEVEL[n.level]?.label}>{n.dot}</span>
+    <div className={'notice lv-' + (n.level || 'info') + (n.unread ? ' unread' : '')}>
+      <span className="ndot" title={NOTIF_LEVEL[n.level]?.label}>
+        <Icon name={n.level === 'critical' ? 'alerttri' : n.level === 'warn' ? 'alertcircle' : 'info'} size={16} stroke={1.75} /></span>
       <div className="nbody">
         <div className="ntitle">{n.title}</div>
         <div className="nsub">{n.body}</div>
         <div className="nmeta">
-          {n.waiting ? <>waiting {n.waiting}</> : null}
+          {n.waiting ? <><Icon name="clock" size={12} stroke={1.75} /> waiting {n.waiting}</> : null}
           {n.read_by ? <> · read by {n.read_by}</> : null}
         </div>
       </div>
       <div className="nacts">
-        <button className="btn" onClick={() => onOpen(n)} title="Open the screen that clears this">Open</button>
+        <button className="btn nopen" onClick={() => onOpen(n)} title="Open the screen that clears this">Open <Icon name="arrowright" size={13} /></button>
         {!compact && n.unread && (
           <button className="btn" onClick={() => onRead(n)} title="Acknowledge it at this count — it comes back if it grows">Mark read</button>
         )}
@@ -18031,64 +18032,43 @@ function DashDeadStock({ sum, open }) {
       actions={<button className="btn primary" style={{ padding: '3px 11px' }}
         onClick={() => open({ tab: 'register', status: 'dead' })}>Review dead stock</button>}>
 
-      {/* The notification management actually reads, with the two things they can
-          do about it beside it rather than in another module's menu. */}
-      <div className="warnbox" style={{ borderColor: 'var(--danger-line)', background: 'var(--danger-bg)', marginBottom: 14 }}>
-        <h4 style={{ border: 'none', margin: 0, color: 'var(--danger)' }}>
-          🔴 {dead.lines} product{dead.lines === 1 ? '' : 's'} have crossed {c.thresholds.dead} days without a sale
-        </h4>
-        <div className="small" style={{ color: 'var(--text-2)', marginTop: 4 }}>
-          {rupees(t.stock_value)} of stock value requires clearance review
-          {critical.lines ? <> · <b>{critical.lines}</b> of them unsold for {c.thresholds.critical}+ days</> : null}
-          {sum.pos && !sum.pos.available
-            ? <> · <b>the till is not readable here</b>, so these ages come from dispatches and receipts only</>
-            : null}
-        </div>
-        <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-          <button className="btn" onClick={() => open({ tab: 'register', status: 'dead' })}>Review dead stock</button>
-          <button className="btn" onClick={() => open({ tab: 'worksheet' })}>Clearance worksheets</button>
-          {critical.lines > 0 && (
-            <button className="btn" onClick={() => open({ tab: 'register', status: 'critical' })}>
-              {critical.lines} critical</button>
-          )}
-        </div>
+      {/* One quiet line: how much is dead, how bad, and the two ways in. */}
+      <div className="deadline">
+        <Icon name="alerttri" size={15} stroke={1.75} />
+        <span><b>{dead.lines}</b> product{dead.lines === 1 ? '' : 's'} unsold {c.thresholds.dead}+ days
+          {critical.lines ? <> · <b>{critical.lines}</b> past {c.thresholds.critical} days</> : null}
+          {c.approaching.lines ? <> · {c.approaching.lines} approaching</> : null}
+          {sum.pos && !sum.pos.available ? <> · till not readable — ages from dispatches only</> : null}</span>
+        <span className="spacer" />
+        <button className="linkbtn" onClick={() => open({ tab: 'worksheet' })}>Clearance worksheets</button>
+        {critical.lines > 0 && (
+          <button className="linkbtn" onClick={() => open({ tab: 'register', status: 'critical' })}>
+            View critical <Icon name="arrowright" size={13} /></button>
+        )}
       </div>
 
-      <div className="dgrid">
-        <DashTile label="Dead stock" value={dead.qty + ' pcs'} accent="stock" tone="warn"
-          sub={`${t.skus} SKU${t.skus === 1 ? '' : 's'} with no sale for ${c.thresholds.dead}+ days`}
-          hint="Open the Dead Stock Register"
+      <div className="dgrid deadtiles">
+        <DashTile label="Dead stock" value={dead.qty + ' pcs'} accent="stock"
+          sub={`${t.skus} SKUs`}
+          hint={`SKUs with no sale for ${c.thresholds.dead}+ days — open the Dead Stock Register`}
           onClick={() => open({ tab: 'register', status: 'dead' })} />
-        <DashTile label="Stock value" value={rupees(t.stock_value)} accent="money" tone="warn"
-          sub="locked — capital sitting on the shelf"
-          hint="Open the products holding it"
+        <DashTile label="Locked value" value={rupees(t.stock_value)} accent="money"
+          sub="at cost"
+          hint="Capital sitting on the shelf — open the products holding it"
           onClick={() => open({ tab: 'register', status: 'dead' })} />
-        <DashTile label="Clearance" value={rupees(t.expected_realisation)} accent="money"
-          sub="expected at the ladder's prices"
+        <DashTile label="Expected clearance" value={rupees(t.expected_realisation)} accent="money"
+          sub="at the ladder's prices"
           hint="Open the Clearance Worksheet"
           onClick={() => open({ tab: 'worksheet' })} />
         <DashTile label="Recovery" value={t.recovery_pct == null ? '—' : t.recovery_pct + '%'}
-          accent="adjust" sub="expected cash against what it cost"
-          hint="Open the Cash Impact"
+          accent="adjust" sub="of cost"
+          hint="Expected cash against what it cost — open the Cash Impact"
           onClick={() => open({ tab: 'cash' })} />
-        <DashTile label="Critical" value={critical.lines} accent="stock" tone={critical.lines ? 'warn' : ''}
-          sub={critical.lines
-            ? `unsold for ${c.thresholds.critical}+ days — ${rupees(critical.stock_value)}`
-            : 'nothing past the critical line'}
-          hint="Open the register filtered to the worst of it"
-          onClick={() => open({ tab: 'register', status: 'critical' })} />
-        <DashTile label="Approaching" value={c.approaching.lines} accent="stock"
-          tone={c.approaching.lines ? 'warn' : ''}
-          sub={c.approaching.lines
-            ? `quiet ${c.thresholds.approaching}+ days — dead within a month`
-            : 'nothing about to go dead'}
-          hint="Open the register filtered to what is about to go dead"
-          onClick={() => open({ tab: 'register', status: 'approaching' })} />
       </div>
 
-      <div className="vizgrid" style={{ marginTop: 16 }}>
+      <div className="vizgrid deadviz" style={{ marginTop: 16 }}>
         <ChartCard title="Dead stock by age"
-          note={`Pieces past ${c.thresholds.dead} days, by how long they have been still. One hue darkening, because the bands are an ordered scale.`}
+          note={`Pieces unsold past ${c.thresholds.dead} days`}
           columns={['Age band', 'Pieces', 'Lines', 'Stock value', 'Expected']}
           rows={(sum.by_bucket || []).map((b) => [b.bucket, b.qty, b.lines,
             money(b.stock_value), money(b.expected_realisation)])}>
@@ -18098,7 +18078,7 @@ function DashDeadStock({ sum, open }) {
         </ChartCard>
 
         <ChartCard title="Clearance performance"
-          note="What each month's worksheets promised against what the till has actually taken for those products, inside those dates. The gap is the shortfall, and it closes on its own as the goods sell."
+          note="Expected against realised, by month"
           legend={<Legend items={[{ label: 'Expected', color: VIZ[0] },
                                   { label: 'Realised', color: VIZ[1] }]} />}
           columns={['Month', 'Campaigns', 'Expected', 'Realised', 'Realised %', 'Sell-through %']}
@@ -18109,10 +18089,9 @@ function DashDeadStock({ sum, open }) {
             ? <GroupedBars labels={trend.map((r) => r.month)}
                 series={[{ name: 'Expected', values: trend.map((r) => r.expected) },
                          { name: 'Realised', values: trend.map((r) => r.actual) }]} unit="₹" />
-            : <div className="empty" style={{ margin: '20px 0', lineHeight: 1.6 }}>
-                No clearance worksheet has been run yet — so there is nothing to judge.<br />
-                <button className="btn" style={{ marginTop: 10 }}
-                  onClick={() => open({ tab: 'register', status: 'dead' })}>Build the first one</button>
+            : <div className="deadempty">
+                No clearance worksheet yet.
+                <button className="linkbtn" onClick={() => open({ tab: 'register', status: 'dead' })}>Build the first one <Icon name="arrowright" size={13} /></button>
               </div>}
         </ChartCard>
       </div>

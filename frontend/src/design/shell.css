@@ -125,3 +125,74 @@
 .cd-select.cd-date:hover { border-color: var(--ui-secondary); background: var(--ui-green-50); }
 .cd-select.cd-date .ico-svg { color: var(--ui-secondary); }
 .cd-tools .cd-refresh { height: 38px; }
+
+/* ---------------- notifications: one clean list ----------------
+   Rows inside one card, divided by hairlines (not a stack of orange-edged
+   boxes); a small round icon in the level's colour instead of an emoji. */
+.notice { gap: 14px !important; align-items: center !important; padding: 14px 16px !important; margin: 0 !important;
+  background: #fff !important; border: none !important; border-bottom: 1px solid var(--ui-border) !important;
+  border-radius: 0 !important; box-shadow: none !important; }
+.notice:last-child { border-bottom: none !important; }
+.notice:hover { background: var(--ui-green-50) !important; }
+.notice.unread { border-left: none !important; }
+.notice .ndot { width: 34px; height: 34px; flex: 0 0 34px; border-radius: 50%; display: inline-flex;
+  align-items: center; justify-content: center; font-size: 0 !important; background: var(--ui-green-100); color: var(--ui-primary); }
+.notice.lv-critical .ndot { background: var(--ui-error-bg); color: var(--ui-error-text); }
+.notice.lv-warn .ndot { background: var(--ui-warning-bg); color: var(--ui-warning-text); }
+.notice .ntitle { font-size: 13.5px; font-weight: 600; color: var(--ui-text); }
+.notice.unread .ntitle::after { content: ''; display: inline-block; width: 7px; height: 7px; margin-left: 8px; border-radius: 50%;
+  background: var(--ui-secondary); vertical-align: middle; position: relative; top: -1px; }
+.notice .nsub { font-size: 13px !important; color: var(--ui-text-2) !important; margin-top: 2px; }
+.notice .nmeta { display: flex; align-items: center; gap: 4px; font-size: 11.5px !important; color: var(--ui-text-3) !important; margin-top: 4px; }
+.notice .nacts .btn { height: 30px; padding: 0 12px !important; font-size: 12.5px !important; border-radius: 8px; gap: 6px; }
+.notice .nacts .nopen { color: var(--ui-primary); border-color: var(--ui-green-200); }
+.notice .nacts .nopen:hover { background: var(--ui-green-100); }
+.section:has(> .notice) { padding-bottom: 0; }
+.section > .notice:last-child { border-radius: 0 0 12px 12px !important; }
+
+/* ---------------- dashboard tiles: white cards ----------------
+   The same white card as the Central Dashboard: a round icon chip in a shade
+   of green, the figure in dark text. "Needs action" is said by an amber chip
+   and amber figure — never by painting the whole card yellow. */
+.dtile, .dtile.warn, .dtile.ok { background: #fff !important; border: 1px solid var(--ui-border) !important;
+  box-shadow: 0 1px 2px rgba(24,43,37,.04) !important; --tile-chip: var(--ui-green-100); --tile-bar: var(--ui-primary); }
+.dtile:hover { border-color: var(--ui-green-200) !important; box-shadow: 0 4px 12px -8px rgba(24,43,37,.25) !important; }
+.dtile.t-count  { --tile-chip: #E4F3EA; --tile-bar: #0B3D2E; }
+.dtile.t-stock  { --tile-chip: #F4F7F5; --tile-bar: #4E6A58; }
+.dtile.t-move   { --tile-chip: #EFF8F6; --tile-bar: #0E6B5C; }
+.dtile.t-money  { --tile-chip: #F6F8EF; --tile-bar: #56691F; }
+.dtile.t-back   { --tile-chip: #F2F6F4; --tile-bar: #36604E; }
+.dtile.t-adjust { --tile-chip: #F0F8F4; --tile-bar: #1F6E52; }
+.dtile.warn { --tile-chip: var(--ui-warning-bg) !important; --tile-bar: var(--ui-warning-text) !important; }
+.dtile .val { color: var(--ui-text) !important; }
+.dtile.warn .val { color: var(--ui-warning-text) !important; }
+.dtile .sub, .dtile.warn .sub { color: var(--ui-text-2) !important; }
+.dtile .lbl { color: #3D4A44 !important; }
+/* the dead-stock call-out on the warehouse dashboard: white, amber accent */
+.warnbox.deadbanner { background: #fff !important; border: 1px solid var(--ui-border) !important;
+  border-left: 3px solid var(--ui-warning) !important; border-radius: 10px; }
+.warnbox.deadbanner h4 { display: flex; align-items: center; gap: 8px; color: var(--ui-warning-text) !important; font-size: 14px; }
+
+/* ---------------- Dead Stock & Clearance, minimal ---------------- */
+.deadline { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; padding: 10px 14px;
+  border-radius: 10px; background: var(--ui-surface-2); border: 1px solid var(--ui-border); font-size: 13px; color: var(--ui-text-2); }
+.deadline > .ico-svg { color: var(--ui-warning-text); }
+.deadline b { color: var(--ui-text); font-weight: 600; }
+.deadline .spacer { flex: 1; }
+.linkbtn { display: inline-flex; align-items: center; gap: 5px; background: none; border: none; padding: 4px 6px;
+  border-radius: 6px; color: var(--ui-primary); font: 600 12.5px var(--ui-font); cursor: pointer; }
+.linkbtn:hover { background: var(--ui-green-100); }
+.deadtiles { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; }
+@media (max-width: 900px) { .deadtiles { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; } }
+.deadtiles .dtile { padding-top: 14px; padding-bottom: 12px; }
+.deadtiles .dtile .val { font-size: 20px; }
+/* the charts: no upscaling, so labels stay at text size on a wide screen */
+.deadviz .vizsvg { max-width: 520px; display: block; }
+.deadviz .vizplot { padding-top: 4px; }
+.deadempty { display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap;
+  padding: 28px 0; font-size: 13px; color: var(--ui-text-2); }
+
+/* "needs action" tiles: the figure stays dark like every other tile; only the
+   small icon chip carries the amber */
+.dtile.warn .val, .dtile.warn .sub { color: var(--ui-text) !important; }
+.dtile.warn .sub { color: var(--ui-text-2) !important; }
