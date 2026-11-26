@@ -254,3 +254,23 @@ Nothing will be deleted, renamed or re-routed. Module names, menu groups, routes
 | Gallery | `frontend/src/design/Gallery.jsx` | dev server only: `npm run dev`, open `http://localhost:5173/#ui-gallery`; excluded from production builds |
 
 No screen uses the new components yet, so the running application looks the same; screens move onto them from Phase 3.
+
+## Phase 3 — application shell (done)
+
+| Piece | Where | What changed |
+|---|---|---|
+| Sidebar | `NavRail` in `App.jsx`, styles in `frontend/src/design/shell.css` | fixed, icon + label rows, ESSA AI brand and workspace at the top, clear active marker, **collapses to 72 px icons with tooltips** (remembered per computer), connection status and Collapse at the bottom |
+| Fly-out | same | **white** panel beside the sidebar: module name, its one-line description and the building it applies to; each screen with an outline icon and its own description; the open screen in light green; scrolls on its own; closes on outside click, Escape, or choosing a screen; overlays the page without moving it; "All of … on one page" opens the existing category page |
+| Header | `App()` header | brand moves to the sidebar on desktop widths; **breadcrumbs** (place › menu group › screen); screen search with the Ctrl K hint; notifications; account menu |
+| Context bar | `App()` | Back, Central / Warehouse / Store, place chip — same behaviour, new tokens |
+| Palette | `styles.css`, shop `app.css` and templates | every brand green moved to the new palette (#075B45 family, 302 replacements) |
+| Menu descriptions | `NAV_RAIL` | one short description per menu group (17) |
+
+Unchanged on purpose: every module, menu group, screen, role check and workspace switch.
+Below 1024 px the sidebar gives way to the existing menu button and drawer (to be restyled with the forms in Phase 6).
+
+### Phase 3 — revised on request (2026-11-25)
+
+- **D1 reversed:** the side rail and its dark-green fly-out are kept as they were (`NavRail`, `.navrail*` styles). The new sidebar was removed.
+- **D2 reversed:** ESSA's original green stays everywhere — `--ui-primary #0B3D2E`, `--ui-secondary #2F8F68`, light green `#E7F4EC`. The design tokens now carry these values.
+- Kept from Phase 3: header breadcrumbs, the Ctrl K hint, context-bar styling, and one accent colour per KPI tile on the Central Dashboard and Command Center.

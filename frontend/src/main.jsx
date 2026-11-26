@@ -4,6 +4,7 @@ import App from './App.jsx'
 import './design/tokens.css'
 import './design/components.css'
 import './styles.css'
+import './design/shell.css'
 
 // This app is never a frame's content. It PUTS the shop in a frame; nothing puts
 // it in one.

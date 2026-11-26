@@ -1,4 +1,4 @@
-import { Icon } from './design/ui.jsx'
+import { Icon, FilterSelect as UiSelect } from './design/ui.jsx'
 import React, { useEffect, useLayoutEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { api, session, warehouse, setUnauthorizedHandler, swr, readCache } from './api.js'
 import { parseDictation, coerceSpoken, dictationTargets } from './voicefill.js'
@@ -403,15 +403,14 @@ const uniqOf = (rows, key) => [...new Set((rows || []).map((r) => r?.[key])
 
 // A Filters dropdown: "Any" plus the given options ([value, label] or a value).
 function FilterSelect({ label, value, onChange, options, anyLabel = 'Any', style }) {
+  const opts = options.map((o) => {
+    const [v, l] = Array.isArray(o) ? o : [o, o]
+    return { value: v, label: l }
+  })
   return (
     <div className="field" style={style}><label>{label}</label>
-      <select value={value ?? ''} onChange={(e) => onChange(e.target.value)}>
-        <option value="">{anyLabel}</option>
-        {options.map((o) => {
-          const [v, l] = Array.isArray(o) ? o : [o, o]
-          return <option key={v} value={v}>{l}</option>
-        })}
-      </select>
+      <UiSelect block value={value ?? ''} onChange={(v) => onChange(String(v))}
+        options={[{ value: '', label: anyLabel }, ...opts]} />
     </div>
   )
 }
@@ -15343,16 +15342,11 @@ function CommandCenter({ go, toast, user, role, onEnter, active = true }) {
             building, the way the Central Dashboard's picker does. The warehouse
             table below is the other way in: click a row. */}
         <div className="cd-tools">
-          <label className="cd-select" title="Show one warehouse — its stock, its stores' takings, its GRNs and its people">
-            <Icon name="building" size={16} />
-            <select value={scope || ''} onChange={(e) => setScope(e.target.value ? +e.target.value : null)}>
-              <option value="">All Warehouses</option>
-              {(ov?.places?.picker || []).map((w) => (
-                <option key={w.warehouse_id} value={w.warehouse_id}>{w.name}</option>
-              ))}
-            </select>
-            <Icon name="chevdown" size={16} />
-          </label>
+          <UiSelect icon="building" label="Warehouse" minWidth={190}
+            title="Show one warehouse — its stock, its stores' takings, its GRNs and its people"
+            value={scope || ''} onChange={(v) => setScope(v ? +v : null)}
+            options={[{ value: '', label: 'All Warehouses' },
+              ...(ov?.places?.picker || []).map((w) => ({ value: w.warehouse_id, label: w.name }))]} />
           <label className="cd-select cd-date" title="Look at another business day">
             <Icon name="calendar" size={16} />
             <input type="date" value={day} max={ov?.day} onChange={(e) => setDay(e.target.value)} />
@@ -15381,39 +15375,39 @@ function CommandCenter({ go, toast, user, role, onEnter, active = true }) {
             )}
 
             <div className="cd-tiles four">
-              <CdTile icon="rupee" label={`${ov.label}'s Sales`} value={short(k.sales?.value)}
+              <CdTile icon="rupee" tone="t-green" label={`${ov.label}'s Sales`} value={short(k.sales?.value)}
                 sub={`${n0(k.sales?.bills || 0)} bill(s) · ${fmtQty(k.sales?.units || 0)} units`}
                 hint={`Billed ₹${money(k.sales?.gross || 0)} less ₹${money(k.sales?.returns || 0)} of customer returns`}
                 onClick={() => go('central')} />
-              <CdTile icon="cart" label="Purchases" value={short(k.purchases?.value)}
+              <CdTile icon="cart" tone="t-blue" label="Purchases" value={short(k.purchases?.value)}
                 sub={`${n0(k.purchases?.grns || 0)} GRN(s) · ${fmtQty(k.purchases?.units || 0)} units`}
                 hint="GRNs posted today — goods that actually became stock"
                 onClick={() => go('purchases')} />
-              <CdTile icon="boxes" tone="warm" label="Stock Value" value={short(k.stock_value?.value)}
+              <CdTile icon="boxes" tone="t-amber" label="Stock Value" value={short(k.stock_value?.value)}
                 sub={`${fmtQty(k.stock_value?.qty || 0)} units · ${n0(k.stock_value?.items || 0)} items`}
                 hint="Quantity × each warehouse's own weighted-average cost"
                 onClick={() => go('inventory')} />
-              <CdTile icon="trending" label="Profit" value={short(k.profit?.value)}
+              <CdTile icon="trending" tone="t-teal" label="Profit" value={short(k.profit?.value)}
                 live={k.profit?.value > 0}
                 sub={k.profit?.margin_pct != null ? `${k.profit.margin_pct}% margin` : 'no sales yet'}
                 hint="Store sales before tax, less what those goods cost at the till" />
             </div>
 
             <div className="cd-tiles six">
-              <CdTile icon="building" label="Warehouses" value={n0(ov.counts?.warehouses || 0)}
+              <CdTile icon="building" tone="t-green" label="Warehouses" value={n0(ov.counts?.warehouses || 0)}
                 live sub="Open" onClick={() => go('locations')} />
-              <CdTile icon="store" label="Stores" value={n0(ov.counts?.stores || 0)}
+              <CdTile icon="store" tone="t-blue" label="Stores" value={n0(ov.counts?.stores || 0)}
                 live sub="Selling" onClick={() => go('locations')} />
-              <CdTile icon="calc" label="POS Counters" value={n0(ov.counts?.counters || 0)}
+              <CdTile icon="calc" tone="t-violet" label="POS Counters" value={n0(ov.counts?.counters || 0)}
                 sub="tills" onClick={() => go('locations')} />
               {ov.counts?.users != null && (
-                <CdTile icon="users" label="Users" value={n0(ov.counts.users)}
+                <CdTile icon="users" tone="t-teal" label="Users" value={n0(ov.counts.users)}
                   sub="can sign in" onClick={() => go('users')} />
               )}
-              <CdTile icon="tag" tone={k.low_stock?.count ? 'warn' : ''} label="Low Stock"
+              <CdTile icon="tag" tone={k.low_stock?.count ? 't-orange warn' : 't-orange'} label="Low Stock"
                 value={n0(k.low_stock?.count || 0)} sub="in the stores"
                 hint="Store products at or below their reorder level" />
-              <CdTile icon="undo" tone="rose" label="Returns" value={short(k.returns?.value)}
+              <CdTile icon="undo" tone="t-rose" label="Returns" value={short(k.returns?.value)}
                 sub={`${n0(k.returns?.store_notes || 0)} customer · ${n0(k.returns?.debit_notes || 0)} supplier`} />
             </div>
 
@@ -15890,26 +15884,16 @@ function CentralDashboard({ toast, go, onEnter, storeHome = 'pos:home', active =
           <h2>Central Dashboard</h2>
         </div>
         <div className="cd-tools">
-          <label className="cd-select" title="Scope the tiles and the chart to one warehouse">
-            <Icon name="building" size={18} />
-            <select value={scope || ''} onChange={(e) => setScope(e.target.value ? +e.target.value : null)}>
-              <option value="">All Warehouses</option>
-              {rows.map((w) => (
-                <option key={w.warehouse_id} value={w.warehouse_id}>{w.name}</option>
-              ))}
-            </select>
-            <Icon name="chevdown" size={16} />
-          </label>
-          <label className="cd-select" title="How far back the movement chart looks">
-            <Icon name="calendar" size={18} />
-            <select value={days} onChange={(e) => setDays(+e.target.value)}>
-              <option value={7}>Last 7 Days</option>
-              <option value={14}>Last 14 Days</option>
-              <option value={30}>Last 30 Days</option>
-              <option value={90}>Last 90 Days</option>
-            </select>
-            <Icon name="chevdown" size={16} />
-          </label>
+          <UiSelect icon="building" label="Warehouse" minWidth={190}
+            title="Scope the tiles and the chart to one warehouse"
+            value={scope || ''} onChange={(v) => setScope(v ? +v : null)}
+            options={[{ value: '', label: 'All Warehouses' },
+              ...rows.map((w) => ({ value: w.warehouse_id, label: w.name }))]} />
+          <UiSelect icon="calendar" label="Period" minWidth={160} align="end"
+            title="How far back the movement chart looks"
+            value={days} onChange={(v) => setDays(+v)}
+            options={[{ value: 7, label: 'Last 7 Days' }, { value: 14, label: 'Last 14 Days' },
+              { value: 30, label: 'Last 30 Days' }, { value: 90, label: 'Last 90 Days' }]} />
           <button className="cd-refresh" onClick={() => readCache.refresh(load)}>
             <Icon name="refresh" size={18} /> Refresh</button>
         </div>
@@ -15923,27 +15907,27 @@ function CentralDashboard({ toast, go, onEnter, storeHome = 'pos:home', active =
         {!ov ? <div className="empty" style={{ marginTop: 40 }}>Loading…</div> : (
           <FitPages>
             <div className="cd-tiles">
-              <CdTile icon="building" label="Total Warehouses" value={t.warehouses ?? 0}
+              <CdTile icon="building" tone="t-green" label="Total Warehouses" value={t.warehouses ?? 0}
                 live={!scoped} sub={scoped ? scoped.name : 'Active'}
                 hint="Warehouses that are open. A closed one keeps its history and stops being offered."
                 onClick={() => go && go('locations')} />
-              <CdTile icon="store" label="Total Stores / POS" value={t.stores ?? 0}
+              <CdTile icon="store" tone="t-blue" label="Total Stores / POS" value={t.stores ?? 0}
                 live={!scope} sub={scope ? 'supplied by this warehouse' : 'Active'}
                 hint="Stores that sell. Their stock lives in the shop's own till database."
                 onClick={() => go && go('locations')} />
-              <CdTile icon="boxes" tone="warm" label="Total Inventory (Qty)" value={fmtQty(t.qty)}
+              <CdTile icon="boxes" tone="t-violet" label="Total Inventory (Qty)" value={fmtQty(t.qty)}
                 sub={`${t.items ?? 0} distinct item(s)`}
                 hint="Units on hand, counted in each product's own unit."
                 onClick={() => go && go('inventory')} />
-              <CdTile icon="rupee" label="Total Value" value={'₹ ' + money(t.value)}
+              <CdTile icon="rupee" tone="t-amber" label="Total Value" value={'₹ ' + money(t.value)}
                 sub="at weighted-average cost"
                 hint="Quantity × the warehouse's own average cost, summed."
                 onClick={() => go && go('inventory')} />
-              <CdTile icon="clock" label="Today's Inward" value={fmtQty(ov.today?.inward)}
+              <CdTile icon="inward" tone="t-teal" label="Today's Inward" value={fmtQty(ov.today?.inward)}
                 sub="units received"
                 hint="Everything that added stock today — receipts and transfers in."
                 onClick={() => go && go('purchases')} />
-              <CdTile icon="swap" label="Today's Outward" value={fmtQty(ov.today?.outward)}
+              <CdTile icon="outward" tone="t-orange" label="Today's Outward" value={fmtQty(ov.today?.outward)}
                 sub="units dispatched"
                 hint="Everything that removed stock today — dispatches, transfers out, returns."
                 onClick={() => go && go('outward')} />
@@ -17196,31 +17180,31 @@ function NavSidebar({ kind, context, items, tab, go, online, foot, drawer, onClo
 // new screen is never lost from the rail.
 const NAV_RAIL = {
   central: [
-    { key: 'home', label: 'Home', icon: 'home', screens: ['command', 'central', 'pickwh'] },
-    { key: 'stock', label: 'Stock', icon: 'boxes', screens: ['locator'] },
-    { key: 'reports', label: 'Reports', icon: 'trending', screens: ['reports', 'audit'] },
-    { key: 'setup', label: 'Setup', icon: 'sliders', screens: ['locations', 'users', 'database'] },
+    { key: 'home', label: 'Home', icon: 'home', blurb: 'The whole company at a glance', screens: ['command', 'central', 'pickwh'] },
+    { key: 'stock', label: 'Stock', icon: 'boxes', blurb: 'Find any item across every building', screens: ['locator'] },
+    { key: 'reports', label: 'Reports', icon: 'trending', blurb: 'Registers, analysis and the audit trail', screens: ['reports', 'audit'] },
+    { key: 'setup', label: 'Setup', icon: 'sliders', blurb: 'Places, people and the database', screens: ['locations', 'users', 'database'] },
   ],
   warehouse: [
-    { key: 'home', label: 'Home', icon: 'home', screens: ['dashboard'] },
-    { key: 'purchase', label: 'Purchase', icon: 'filetext',
+    { key: 'home', label: 'Home', icon: 'home', blurb: 'What needs doing in this warehouse today', screens: ['dashboard'] },
+    { key: 'purchase', label: 'Purchase', icon: 'filetext', blurb: 'Orders, consignments, supplier bills and payments',
       screens: ['purchase_orders', 'lr', 'documents', 'purchases', 'returns', 'payments', 'suppliers'] },
-    { key: 'stock', label: 'Stock', icon: 'boxes',
+    { key: 'stock', label: 'Stock', icon: 'boxes', blurb: 'What is on hand, where it is, and what it is worth',
       screens: ['inventory', 'locator', 'stock_audit', 'physical_audit', 'pricing', 'deadstock'] },
-    { key: 'transfers', label: 'Transfers', icon: 'truck', screens: ['outward', 'inward'] },
-    { key: 'labels', label: 'Labels', icon: 'qr', screens: ['labels', 'labelprint'] },
-    { key: 'reports', label: 'Reports', icon: 'trending', screens: ['reports', 'audit'] },
-    { key: 'setup', label: 'Setup', icon: 'sliders', screens: ['masters', 'catalogues', 'locations', 'users', 'database'] },
+    { key: 'transfers', label: 'Transfers', icon: 'truck', blurb: 'Goods leaving and arriving', screens: ['outward', 'inward'] },
+    { key: 'labels', label: 'Labels', icon: 'qr', blurb: 'Design and print QR labels', screens: ['labels', 'labelprint'] },
+    { key: 'reports', label: 'Reports', icon: 'trending', blurb: 'Registers, analysis and the audit trail', screens: ['reports', 'audit'] },
+    { key: 'setup', label: 'Setup', icon: 'sliders', blurb: 'Masters, catalogues, places and people', screens: ['masters', 'catalogues', 'locations', 'users', 'database'] },
   ],
   store: [
-    { key: 'home', label: 'Home', icon: 'home', screens: ['pos:home'] },
-    { key: 'billing', label: 'Billing', icon: 'receipt',
+    { key: 'home', label: 'Home', icon: 'home', blurb: 'The store’s day at a glance', screens: ['pos:home'] },
+    { key: 'billing', label: 'Billing', icon: 'receipt', blurb: 'Selling, settling and handing goods over',
       screens: ['pos:floor', 'pos:counter', 'pos:settlement', 'pos:delivery', 'pos:invoices', 'pos:returns'] },
-    { key: 'stock', label: 'Stock', icon: 'boxes',
+    { key: 'stock', label: 'Stock', icon: 'boxes', blurb: 'The store’s own stock and counts',
       screens: ['pos:inventory', 'pos:stock_inward', 'pos:transfer_goods', 'pos:audits', 'pos:checker', 'pos:alterations'] },
-    { key: 'customers', label: 'Customers', icon: 'users', screens: ['pos:customers', 'pos:promotions'] },
-    { key: 'reports', label: 'Reports', icon: 'trending', screens: ['pos:reports'] },
-    { key: 'setup', label: 'Setup', icon: 'sliders', screens: ['pos:stores', 'pos:staff'] },
+    { key: 'customers', label: 'Customers', icon: 'users', blurb: 'Customers, loyalty and promotions', screens: ['pos:customers', 'pos:promotions'] },
+    { key: 'reports', label: 'Reports', icon: 'trending', blurb: 'Sales, tax and store registers', screens: ['pos:reports'] },
+    { key: 'setup', label: 'Setup', icon: 'sliders', blurb: 'Floors, tills and staff', screens: ['pos:stores', 'pos:staff'] },
   ],
 }
 // the rail's categories for one workspace, each holding the screens on offer
@@ -19139,10 +19123,25 @@ export default function App() {
           <span className="th-logo" aria-hidden="true">E</span>
           <div className="brand">ESSA AI <span>– Enterprise ERP</span></div>
         </div>
+        {/* Where you are: workspace › menu group › screen. The brand itself sits
+            at the top of the sidebar on a desktop-width window. */}
+        {(() => {
+          const grp = railGroups(ws, navItems).find((x) => x.items.some((m) => m.key === tab))
+          const place = ws === 'central' ? 'Central' : ws === 'store' ? `${here?.name} · Store` : here?.name
+          return (
+            <nav className="th-crumbs" aria-label="Breadcrumb">
+              <span className="th-crumb-ws">{place}</span>
+              {(catGroup || grp) && <><Icon name="chevron" size={13} />
+                <button type="button" onClick={() => setCatPage((catGroup || grp).key)}
+                  title={`Every screen in ${(catGroup || grp).label}`}>{(catGroup || grp).label}</button></>}
+              {!catGroup && tab && <><Icon name="chevron" size={13} /><span aria-current="page">{labelFor(tab)}</span></>}
+            </nav>
+          )
+        })()}
         <div className="spacer" />
         <button className="th-ctl th-search" onClick={() => setJumpOpen(true)}
           title="Jump to any screen (Ctrl + K)" aria-label="Jump to a screen">
-          <Icon name="search" size={18} /><span className="ph">Search anything… (Ctrl + K)</span>
+          <Icon name="search" size={16} stroke={1.75} /><span className="ph">Search screens…</span><kbd>Ctrl K</kbd>
         </button>
         <NotificationBell onOpen={() => setNotifsOpen(true)} tick={notifTick} />
         {/* Who you are signed in as, and at what level. On a shared warehouse
@@ -19245,7 +19244,7 @@ export default function App() {
       <div className="shell">
       {/* the category rail; on a narrow window the same screens open from the
           menu button as a drawer (below) */}
-      <NavRail ws={ws} items={navItems} tab={tab} go={setTab} online={!!status} foot={navFoot} engines={engines}
+      <NavRail ws={ws} kind={navKind} items={navItems} tab={tab} go={setTab} online={!!status} foot={navFoot} engines={engines}
         context={navContext} onOpenGroup={(g) => setCatPage(g.key)} page={catGroup ? catPage : null} />
       <main className="shellmain">
       {catGroup && <CategoryPage group={catGroup} context={navContext} tab={tab}

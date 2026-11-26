@@ -449,3 +449,107 @@ export function ToastHost({ toasts }) {
     </div>
   )
 }
+
+// ---------------------------------------------------------------- filter dropdown
+// A styled replacement for a native <select> in filter bars: an icon, the chosen
+// value and a chevron; the list opens as a menu with the selection ticked.
+// options: [{ value, label }]. Keyboard: ↑ ↓ Home End, Enter / Space, Escape.
+export function FilterSelect({ icon, value, options, onChange, label, title, align = 'start', minWidth, block }) {
+  const [open, setOpen] = useState(false)
+  const [hi, setHi] = useState(0)
+  const [q, setQ] = useState('')
+  const [pos, setPos] = useState(null)
+  const ref = useRef(null)
+  const btn = useRef(null)
+  const list = useRef(null)
+  const search = useRef(null)
+  useDismiss(open, setOpen, ref)
+  const searchable = options.length > 8
+  const s = q.trim().toLowerCase()
+  const shown = s ? options.filter((o) => String(o.label).toLowerCase().includes(s)) : options
+  const idx = Math.max(0, options.findIndex((o) => String(o.value) === String(value)))
+  const cur = options[idx]
+
+  // The list is placed against the window, not its parent, so a narrow or
+  // scrolling container (a Filters panel, a sidebar) can never clip it. It
+  // opens upward when there is more room above.
+  const place = () => {
+    const r = btn.current?.getBoundingClientRect()
+    if (!r) return
+    const below = window.innerHeight - r.bottom - 12
+    const above = r.top - 12
+    const up = below < 220 && above > below
+    const maxH = Math.min(340, up ? above : below)
+    setPos({
+      left: align === 'end' ? undefined : Math.max(8, r.left),
+      right: align === 'end' ? Math.max(8, window.innerWidth - r.right) : undefined,
+      top: up ? undefined : r.bottom + 6,
+      bottom: up ? window.innerHeight - r.top + 6 : undefined,
+      minWidth: Math.max(r.width, 200), maxWidth: Math.max(r.width, 360), maxHeight: maxH,
+    })
+  }
+  useEffect(() => {
+    if (!open) { setQ(''); return undefined }
+    place()
+    setHi(searchable ? 0 : idx)
+    setTimeout(() => (searchable ? search.current : list.current)?.focus(), 0)
+    const re = () => place()
+    window.addEventListener('resize', re)
+    window.addEventListener('scroll', re, true)
+    return () => { window.removeEventListener('resize', re); window.removeEventListener('scroll', re, true) }
+  }, [open]) // eslint-disable-line
+  useEffect(() => { if (open && searchable) setHi(0) }, [q]) // eslint-disable-line
+  useEffect(() => {
+    if (!open) return
+    list.current?.querySelector(`[data-i="${hi}"]`)?.scrollIntoView({ block: 'nearest' })
+  }, [hi, open])
+  const pick = (o) => { setOpen(false); if (String(o.value) !== String(value)) onChange(o.value); btn.current?.focus() }
+  const key = (e) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); setHi((h) => Math.min(shown.length - 1, h + 1)) }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setHi((h) => Math.max(0, h - 1)) }
+    else if (e.key === 'Home' && !searchable) { e.preventDefault(); setHi(0) }
+    else if (e.key === 'End' && !searchable) { e.preventDefault(); setHi(shown.length - 1) }
+    else if (e.key === 'Enter' || (e.key === ' ' && !searchable)) { e.preventDefault(); shown[hi] && pick(shown[hi]) }
+    else if (e.key === 'Tab') setOpen(false)
+  }
+  return (
+    <span className={cx('ui-menu-anchor ui-fsel-wrap', block && 'is-block')} ref={ref}>
+      <button ref={btn} type="button" className={cx('ui-fsel', open && 'is-open')} title={title} style={minWidth ? { minWidth } : undefined}
+        aria-haspopup="listbox" aria-expanded={open} aria-label={label ? `${label}: ${cur?.label}` : undefined}
+        onClick={() => setOpen((o) => !o)}
+        onKeyDown={(e) => { if (!open && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { e.preventDefault(); setOpen(true) } }}>
+        {icon && <Icon name={icon} size={16} stroke={1.75} className="ui-fsel__icon" />}
+        <span className="ui-fsel__text">
+          {label && <span className="ui-fsel__label">{label}</span>}
+          <span className="ui-fsel__value">{cur?.label}</span>
+        </span>
+        <Icon name="chevdown" size={15} stroke={1.75} className="ui-fsel__chev" />
+      </button>
+      {open && pos && (
+        <div className="ui-menu ui-fsel__menu" style={{ position: 'fixed', ...pos }} onKeyDown={key}>
+          {searchable && (
+            <div className="ui-fsel__search">
+              <Icon name="search" size={14} stroke={1.75} />
+              <input ref={search} value={q} onChange={(e) => setQ(e.target.value)}
+                placeholder={`Search ${options.length - 1} options…`} aria-label="Search the list" />
+            </div>
+          )}
+          <div ref={list} className="ui-fsel__list" role="listbox" tabIndex={-1} aria-activedescendant={`fsel-${hi}`}>
+            {!shown.length && <div className="ui-fsel__none">No match for “{q}”</div>}
+            {shown.map((o, i) => {
+              const sel = String(o.value) === String(value)
+              return (
+                <div key={String(o.value)} id={`fsel-${i}`} data-i={i} role="option" aria-selected={sel}
+                  className={cx('ui-fsel__opt', sel && 'is-selected', i === hi && 'is-hi')}
+                  onMouseEnter={() => setHi(i)} onMouseDown={(e) => e.preventDefault()} onClick={() => pick(o)}>
+                  <span>{o.label}</span>
+                  {sel && <Icon name="check" size={15} stroke={2} />}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+    </span>
+  )
+}

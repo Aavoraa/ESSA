@@ -10,13 +10,13 @@
    ========================================================================== */
 :root {
   /* ---- colour: brand ---- */
-  --ui-primary: #075B45;          /* deep emerald — primary actions, active nav */
-  --ui-primary-hover: #064C3A;
-  --ui-primary-press: #053D2F;
-  --ui-secondary: #168568;        /* muted green — focus ring, icons, links */
-  --ui-green-50: #F3F9F6;         /* hover rows, quiet fills */
-  --ui-green-100: #E8F4EE;        /* light green — selected, chips */
-  --ui-green-200: #CFE6DA;        /* tinted borders */
+  --ui-primary: #0B3D2E;          /* ESSA's forest green — primary actions, header */
+  --ui-primary-hover: #082C21;
+  --ui-primary-press: #06231A;
+  --ui-secondary: #2F8F68;        /* accent green — focus ring, icons, links */
+  --ui-green-50: #F2F8F4;         /* hover rows, quiet fills */
+  --ui-green-100: #E7F4EC;        /* light green — selected, chips */
+  --ui-green-200: #C5E3D2;        /* tinted borders */
   --ui-accent: #D9A441;           /* champagne amber — money / attention only */
   --ui-accent-50: #FBF4E6;
 
@@ -65,7 +65,7 @@
 
   /* ---- controls ---- */
   --ui-h-sm: 30px; --ui-h: 36px; --ui-h-lg: 44px;
-  --ui-focus: 0 0 0 3px rgba(22,133,104,.22);
+  --ui-focus: 0 0 0 3px rgba(47,143,104,.22);
   --ui-ease: cubic-bezier(.2,.7,.2,1);
 
   /* ---- shell ---- */

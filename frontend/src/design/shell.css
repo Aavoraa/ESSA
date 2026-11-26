@@ -1,0 +1,127 @@
+/* ==========================================================================
+   ESSA AI — the header (with breadcrumbs), the context bar and the KPI tile
+   colours. The side rail keeps its own, original styles in styles.css.
+   ========================================================================== */
+
+/* ---------------- header ---------------- */
+.topbar { height: var(--ui-header-h); background: var(--ui-primary) !important; border-bottom: 1px solid rgba(255,255,255,.08) !important;
+  padding: 0 20px !important; gap: 14px !important; font-family: var(--ui-font); }
+.th-crumbs { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 13px; color: rgba(255,255,255,.7); white-space: nowrap; }
+.th-crumbs .ico-svg { opacity: .55; flex: 0 0 auto; }
+.th-crumbs button { background: none; border: none; padding: 2px 4px; border-radius: 6px; color: inherit; font: inherit; cursor: pointer; }
+.th-crumbs button:hover { color: #fff; background: rgba(255,255,255,.1); }
+.th-crumb-ws { font-weight: 600; color: rgba(255,255,255,.9); overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
+.th-crumbs [aria-current] { color: #fff; font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 720px) { .th-crumbs { display: none; } }
+.topbar .th-search { min-width: 260px; height: 36px; border-radius: 9px; gap: 8px; padding: 0 10px 0 12px;
+  background: rgba(255,255,255,.12) !important; border: 1px solid rgba(255,255,255,.2) !important; }
+.topbar .th-search:hover { background: rgba(255,255,255,.18) !important; }
+.topbar .th-search .ph { color: rgba(255,255,255,.8); font-size: 13px; flex: 1; text-align: left; }
+.topbar .th-search kbd { font: 500 10.5px/1 var(--ui-mono); padding: 3px 5px; border-radius: 4px; color: #fff;
+  background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.25); }
+.topbar .th-avatar { width: 32px !important; height: 32px !important; background: #fff !important; color: var(--ui-primary) !important; }
+.topbar .bellcount { border-color: var(--ui-primary) !important; background: var(--ui-error) !important; }
+
+/* ---------------- context bar ---------------- */
+.ctxbar { background: var(--ui-surface) !important; border-bottom: 1px solid var(--ui-border) !important; min-height: 50px !important; }
+.wsseg button { color: var(--ui-text-2) !important; font-family: var(--ui-font); font-size: 13.5px !important; }
+.wsseg button:hover { color: var(--ui-text) !important; }
+.wsseg button.on { color: var(--ui-primary) !important; border-bottom-color: var(--ui-primary) !important; }
+.ctx-back { height: 32px !important; border-radius: 8px !important; border-color: var(--ui-border-strong) !important; font-size: 13px !important; }
+.ctx-chip { height: 32px !important; background: var(--ui-green-100) !important; border-color: var(--ui-green-200) !important;
+  color: var(--ui-primary) !important; font-size: 13px !important; }
+.ctx-chip .ico-svg { color: var(--ui-primary) !important; }
+.ctx-right { font-size: 12.5px !important; color: var(--ui-text-2) !important; }
+.ctx-right b { color: var(--ui-text) !important; }
+
+/* ---------------- KPI tiles: one colour per figure ----------------
+   Each tile on the Central Dashboard and the Command Center carries its own
+   hue — a top edge, a tinted icon chip and a faint wash — so the row reads as
+   six different figures, not six copies of one. Amber stays for money. */
+.cd-tile[class*=" t-"] { position: relative; overflow: hidden; border-color: var(--ui-border);
+  background: linear-gradient(140deg, #fff 55%, var(--tb) 160%) !important; }
+.cd-tile[class*=" t-"]::before { content: ''; position: absolute; left: 0; right: 0; top: 0; height: 3px; background: var(--tc); }
+.cd-tile[class*=" t-"] .cd-ic { background: var(--tb) !important; color: var(--tc) !important; }
+.cd-tile[class*=" t-"]:hover { border-color: var(--tc); }
+.cd-tile.t-green  { --tc: #0B3D2E; --tb: #E3F2EA; }
+.cd-tile.t-blue   { --tc: #2F6FA3; --tb: #E6EFF8; }
+.cd-tile.t-violet { --tc: #5E4FB3; --tb: #EEEBFA; }
+.cd-tile.t-amber  { --tc: #B07E1E; --tb: #FBF1DC; }
+.cd-tile.t-teal   { --tc: #0F7F86; --tb: #E1F3F4; }
+.cd-tile.t-orange { --tc: #C0612F; --tb: #FCEBE1; }
+.cd-tile.t-rose   { --tc: #C2416A; --tb: #FBE8EE; }
+.cd-tile.t-orange.warn .val { color: #A04C20 !important; }
+
+/* ---------------- KPI tiles: solid colour cards ----------------
+   Each figure is a card filled with its own deep colour, white text and a
+   translucent icon chip, so the six never read as copies of one another. */
+.cd-tile[class*=" t-"] { border: none !important; color: #fff !important;
+  background: linear-gradient(135deg, var(--tc) 0%, var(--td) 100%) !important;
+  box-shadow: 0 6px 16px -6px var(--tc), 0 1px 2px rgba(0,0,0,.08) !important; }
+.cd-tile[class*=" t-"]::before { display: none; }
+.cd-tile[class*=" t-"]::after { content: ''; position: absolute; right: -26px; bottom: -34px; width: 110px; height: 110px;
+  border-radius: 50%; background: rgba(255,255,255,.08); pointer-events: none; }
+.cd-tile[class*=" t-"]:hover { transform: translateY(-2px); box-shadow: 0 10px 22px -8px var(--tc), 0 2px 4px rgba(0,0,0,.1) !important; }
+.cd-tile[class*=" t-"] .cd-ic { background: rgba(255,255,255,.18) !important; color: #fff !important; }
+.cd-tile[class*=" t-"] .lbl { color: rgba(255,255,255,.88) !important; }
+.cd-tile[class*=" t-"] .val, .cd-tile.t-orange.warn .val { color: #fff !important; }
+.cd-tile[class*=" t-"] .sub, .cd-tile[class*=" t-"] .sub.live { color: rgba(255,255,255,.82) !important; }
+.cd-tile[class*=" t-"] .sub i { background: #A7F3D0 !important; }
+.cd-tile.t-green  { --tc: #0B3D2E; --td: #1A6B50; }
+.cd-tile.t-blue   { --tc: #245A87; --td: #3A7DB5; }
+.cd-tile.t-violet { --tc: #4B3E96; --td: #6D5FC4; }
+.cd-tile.t-amber  { --tc: #94680F; --td: #C28E2C; }
+.cd-tile.t-teal   { --tc: #0B666C; --td: #16939A; }
+.cd-tile.t-orange { --tc: #A44E22; --td: #D2733F; }
+.cd-tile.t-rose   { --tc: #A33357; --td: #CF5A80; }
+
+/* ---------------- KPI tiles: light tinted cards (replaces the dark fill) ----------------
+   Each card is a soft wash of its own colour with a slightly deeper border,
+   a white icon chip in that colour, and the figure in a dark shade of it. */
+.cd-tile[class*=" t-"] { color: var(--ui-text) !important; border: 1px solid var(--tl) !important;
+  background: linear-gradient(135deg, var(--tb) 0%, #fff 140%) !important; box-shadow: 0 1px 3px rgba(24,43,37,.05) !important; }
+.cd-tile[class*=" t-"]::after { background: var(--tl); opacity: .35; }
+.cd-tile[class*=" t-"]:hover { border-color: var(--tc) !important; box-shadow: 0 8px 18px -10px var(--tc) !important; }
+.cd-tile[class*=" t-"] .cd-ic { background: #fff !important; color: var(--tc) !important; box-shadow: 0 1px 2px rgba(0,0,0,.06); }
+.cd-tile[class*=" t-"] .lbl { color: #3D4A44 !important; }
+.cd-tile[class*=" t-"] .val, .cd-tile.t-orange.warn .val { color: var(--tc) !important; }
+.cd-tile[class*=" t-"] .sub, .cd-tile[class*=" t-"] .sub.live { color: #5B6862 !important; }
+.cd-tile[class*=" t-"] .sub i { background: #22A05B !important; }
+.cd-tile.t-green  { --tc: #0B3D2E; --tb: #E4F3EA; --tl: #C9E6D4; }
+.cd-tile.t-blue   { --tc: #245A87; --tb: #E6F0F9; --tl: #C9DDEF; }
+.cd-tile.t-violet { --tc: #4B3E96; --tb: #EEEBFB; --tl: #D9D3F4; }
+.cd-tile.t-amber  { --tc: #8A600E; --tb: #FCF2DE; --tl: #F1DDB0; }
+.cd-tile.t-teal   { --tc: #0B666C; --tb: #E2F4F5; --tl: #C2E5E7; }
+.cd-tile.t-orange { --tc: #A44E22; --tb: #FDEDE3; --tl: #F5D2BF; }
+.cd-tile.t-rose   { --tc: #A33357; --tb: #FCEAF0; --tl: #F3CBD8; }
+
+/* ---------------- KPI tiles: subtle, greens only (final) ----------------
+   Every card stays light and quiet; each takes a different shade of green so
+   the row still reads as separate figures. No decorative circle. */
+.cd-tile[class*=" t-"] { background: var(--tb) !important; border: 1px solid var(--tl) !important;
+  box-shadow: none !important; }
+.cd-tile[class*=" t-"]::after { display: none; }
+.cd-tile[class*=" t-"]:hover { border-color: var(--tc) !important; box-shadow: 0 4px 12px -8px var(--tc) !important; transform: none; }
+.cd-tile[class*=" t-"] .cd-ic { background: #fff !important; color: var(--tc) !important; box-shadow: none; border: 1px solid var(--tl); }
+.cd-tile[class*=" t-"] .val, .cd-tile.t-orange.warn .val { color: var(--tc) !important; }
+.cd-tile.t-green  { --tc: #0B3D2E; --tb: #F2F8F4; --tl: #D6EADF; }  /* forest */
+.cd-tile.t-blue   { --tc: #1F6E52; --tb: #F0F8F4; --tl: #D1EADF; }  /* emerald */
+.cd-tile.t-violet { --tc: #4E6A58; --tb: #F4F7F5; --tl: #DDE6E0; }  /* sage */
+.cd-tile.t-amber  { --tc: #56691F; --tb: #F6F8EF; --tl: #E2E9CE; }  /* olive — money */
+.cd-tile.t-teal   { --tc: #0E6B5C; --tb: #EFF8F6; --tl: #CDE8E2; }  /* teal green */
+.cd-tile.t-orange { --tc: #2F7A3A; --tb: #F2F8F2; --tl: #D5EAD6; }  /* leaf */
+.cd-tile.t-rose   { --tc: #36604E; --tb: #F2F6F4; --tl: #D8E4DE; }  /* pine */
+
+/* ---------------- KPI tiles: white cards ----------------
+   White background and a neutral border; the shade of green lives only in the
+   icon chip and the figure. */
+.cd-tile[class*=" t-"] { background: #fff !important; border: 1px solid var(--ui-border) !important;
+  box-shadow: 0 1px 2px rgba(24,43,37,.04) !important; }
+.cd-tile[class*=" t-"]:hover { border-color: var(--tl) !important; box-shadow: 0 4px 12px -8px rgba(24,43,37,.25) !important; }
+.cd-tile[class*=" t-"] .cd-ic { background: var(--tb) !important; border: none; }
+
+/* the Command Center's day picker, drawn to match the filter dropdowns */
+.cd-select.cd-date { height: 38px; border-radius: var(--ui-r); border-color: var(--ui-border-strong); padding: 0 10px 0 12px; }
+.cd-select.cd-date:hover { border-color: var(--ui-secondary); background: var(--ui-green-50); }
+.cd-select.cd-date .ico-svg { color: var(--ui-secondary); }
+.cd-tools .cd-refresh { height: 38px; }
