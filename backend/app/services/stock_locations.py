@@ -149,6 +149,24 @@ def balances_for(db: Session, product_id: int) -> list:
 # ---------------------------------------------------------------------------
 #  writing — the one way stock moves
 # ---------------------------------------------------------------------------
+def rolled_average(old_qty: float, old_avg: float, in_qty: float, rate: float) -> float:
+    """The weighted-average cost after receiving `in_qty` at `rate`.
+
+    Blends only when there is stock ON HAND to blend with. When the balance is
+    at or below zero — goods issued before their receipt was keyed, which the
+    migrated history does often — there is nothing left at the old cost, so the
+    receipt's own rate becomes the average. Blending a NEGATIVE quantity in
+    instead divides a large figure by the few units left over: a product that
+    went to −143 and came back to 1 was valued at crores per piece.
+    """
+    old_qty, old_avg = float(old_qty or 0), float(old_avg or 0)
+    in_qty, rate = float(in_qty or 0), float(rate or 0)
+    new_qty = round(old_qty + in_qty, 3)
+    if old_qty <= TOLERANCE or new_qty <= TOLERANCE:
+        return round(rate, 4)
+    return round(((old_qty * old_avg) + (in_qty * rate)) / new_qty, 4)
+
+
 def apply(db: Session, product, warehouse_id, qty_delta, *, kind, ref_type,
           ref_id=None, rate=None, note=None):
     """Move stock at one warehouse: append the movement, update the balance.
@@ -176,8 +194,7 @@ def apply(db: Session, product, warehouse_id, qty_delta, *, kind, ref_type,
     new_qty = round(old_qty + qty_delta, 3)
 
     if kind in _VALUING_KINDS and qty_delta > 0:
-        row.avg_cost = (round(((old_qty * old_avg) + (qty_delta * rate)) / new_qty, 4)
-                        if new_qty > TOLERANCE else rate)
+        row.avg_cost = rolled_average(old_qty, old_avg, qty_delta, rate)
     row.qty = new_qty
     row.updated_at = dt.datetime.utcnow()
 
@@ -251,11 +268,8 @@ def replay(db: Session, product, exclude_ids=()) -> dict:
         qty, avg = out.get(wid, (0.0, 0.0))
         delta = float(mv.qty_delta or 0)
         if delta > 0 and mv.kind in _VALUING_KINDS:
-            new_qty = round(qty + delta, 3)
-            rate = float(mv.rate or 0)
-            avg = (round(((qty * avg) + (delta * rate)) / new_qty, 4)
-                   if new_qty > TOLERANCE else rate)
-            qty = new_qty
+            avg = rolled_average(qty, avg, delta, mv.rate)
+            qty = round(qty + delta, 3)
         else:
             qty = round(qty + delta, 3)
         out[wid] = (qty, avg)
@@ -293,7 +307,15 @@ def rebuild(db: Session, product) -> float:
         row.updated_at = dt.datetime.utcnow()
 
     db.flush()
-    return roll_up(db, product)
+    total = roll_up(db, product)
+    # roll_up keeps the last average at zero stock. After a replay that average
+    # must come from the replay too, or a cost written wrongly before (the bug
+    # rolled_average fixes) would survive every rebuild on a sold-out product.
+    if total <= TOLERANCE:
+        last = [avg for (_q, avg) in replayed.values() if avg and avg > 0]
+        if last:
+            product.avg_cost = last[-1]
+    return total
 
 
 def rebuild_all(db: Session, product_ids=None) -> int:
