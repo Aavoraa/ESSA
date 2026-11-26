@@ -39,7 +39,8 @@ Right-click **`deploy\server\server_setup.bat`** › **Run as administrator**. I
 - opens port 8000 in Windows Firewall for the private (shop) network only,
 - creates ESSA's own login secret in `.env` (everyone signs in again once),
 - stops the PC from sleeping while plugged in,
-- waits until ESSA answers, then **prints the address for the other PCs**.
+- waits until ESSA answers, then **prints the address for the other PCs**,
+- puts two icons on every user's desktop: **Restart ESSA Server** and **ESSA**.
 
 ### A4. Two things in Windows settings
 - **Fixed IP:** reserve the server's IP in the router (DHCP reservation), or set a static IP.
@@ -80,7 +81,8 @@ choose Enabled, and restart the browser.
 | Is the server OK? | `deploy\server\server_setup.bat status` |
 | Update ESSA | Update the folder on the server, then restart the server PC. Every PC gets the new version on its next page load. |
 | Backups | Run on the server: `deploy\backup\daily_backup.bat` (Run as administrator, once) for 10:30 PM every night; `instant_backup.bat` for a backup right now. PostgreSQL backups hold ESSA's `public` and `shop` schemas. |
-| Restart ESSA (after changing `.env` or a database setting) | `deploy\server\server_setup.bat restart` (as administrator) |
+| ESSA not opening on the PCs / restart it | Double-click **Restart ESSA Server** on the server's desktop. It restarts ESSA, starts the start-up task again if it stopped, sets the server up again if the task is missing, and opens ESSA when it is back. (Same as `deploy\server\server_setup.bat repair` as administrator.) |
+| Desktop icons missing | `deploy\server\server_setup.bat shortcuts` (as administrator) |
 | Server log | `C:\ProgramData\ESSA\server.log` |
 | Stop being the server | `deploy\server\server_setup.bat remove` (as administrator). Data and `.env` are kept. |
 | Back to SQLite | Delete the `ESSA_DATABASE_URL` line in `.env` and restart ESSA |

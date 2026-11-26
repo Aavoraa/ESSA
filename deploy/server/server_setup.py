@@ -6,6 +6,10 @@
     server_setup.bat status     is it running, on which address, which database
     server_setup.bat remove     undo: remove the start-up task and firewall rule,
                                 stop the server (data and .env are kept)
+    server_setup.bat repair     one-click fix (the "Restart ESSA Server" desktop icon):
+                                restart ESSA, bring the start-up task back if it
+                                stopped, set it up again if it is missing
+    server_setup.bat shortcuts  put the two desktop icons on every user's desktop
 
 Every counter PC then opens  http://<this PC's IP>:8000  in Chrome or Edge.
 The setup itself is the same code ESSA.exe uses (deploy/desktop/essa_desktop.py),
@@ -174,7 +178,107 @@ def cmd_restart() -> int:
     return 0 if st else 1
 
 
+# ---------------------------------------------------------------------------
+#  one-click repair, and the desktop icons that run it
+# ---------------------------------------------------------------------------
+def wait_until_up(seconds: int = 240) -> dict | None:
+    deadline, st = time.time() + seconds, None
+    while time.time() < deadline:
+        st = status_at(f"http://localhost:{PORT}/")
+        if st and (st.get("pos") or {}).get("available") is not None:
+            return st
+        time.sleep(3)
+    return st
+
+
+def cmd_repair() -> int:
+    """What the "Restart ESSA Server" desktop icon runs.
+
+    Fixes whatever is wrong, in the gentlest order: restart ESSA; if the start-up
+    task itself had stopped, start it again; if it was never installed (or was
+    removed), run the full setup. Then open ESSA in the browser.
+    """
+    if not is_admin():
+        print("Run this as administrator.")
+        return 1
+    if not core.task_installed():
+        print("The ESSA start-up task is missing - setting the server up again...\n")
+        rc = cmd_setup()
+        if rc == 0:
+            cmd_shortcuts(quiet=True)
+        return rc
+
+    print("Restarting ESSA...")
+    stop_server_processes()
+    time.sleep(4)
+    # the task's loop normally brings it straight back; if the loop itself is
+    # not running, starting the task again does
+    core.ps(f"if ((Get-ScheduledTask -TaskPath '{core.TASK_PATH}' -TaskName '{core.TASK_NAME}').State -ne 'Running') "
+            f"{{ Start-ScheduledTask -TaskPath '{core.TASK_PATH}' -TaskName '{core.TASK_NAME}' }}")
+    st = wait_until_up(150)
+    if not st:
+        print("Not answering yet - restarting the start-up task itself...")
+        core.ps(f"Stop-ScheduledTask -TaskPath '{core.TASK_PATH}' -TaskName '{core.TASK_NAME}' -ErrorAction SilentlyContinue; "
+                f"Start-Sleep 2; Start-ScheduledTask -TaskPath '{core.TASK_PATH}' -TaskName '{core.TASK_NAME}'")
+        st = wait_until_up(180)
+
+    print(f"\nESSA {describe(st)}")
+    if st:
+        for ip in lan_addresses():
+            print(f"Other PCs open:  http://{ip}:{PORT}")
+        subprocess.run(["cmd", "/c", "start", "", f"http://localhost:{PORT}/"], capture_output=True)
+        return 0
+    print(f"\nESSA did not start. The reason is at the end of {os.path.join(core.SHARED, 'server.log')}.")
+    print("Common causes: PostgreSQL is stopped (Windows Services > postgresql > Start), "
+          "or the disk is full.")
+    return 1
+
+
+def _icon_file() -> str | None:
+    """ESSA's mark as an .ico for the shortcuts (made once from the app icon)."""
+    ico = os.path.join(core.SHARED, "essa.ico")
+    if os.path.exists(ico):
+        return ico
+    png = os.path.join(HOME, "backend", "app", "mobile", "icon-512.png")
+    try:
+        from PIL import Image
+        os.makedirs(core.SHARED, exist_ok=True)
+        Image.open(png).save(ico, sizes=[(16, 16), (32, 32), (48, 48), (64, 64), (256, 256)])
+        return ico
+    except Exception:
+        return None
+
+
+def cmd_shortcuts(quiet: bool = False) -> int:
+    """Two icons on every user's desktop (the Public desktop):
+    "Restart ESSA Server" runs repair as administrator, "ESSA" opens the app."""
+    if not is_admin():
+        print("Run this as administrator.")
+        return 1
+    desk = os.path.join(os.environ.get("PUBLIC") or r"C:\Users\Public", "Desktop")
+    bat = os.path.join(HERE, "restart_essa.bat")
+    ico = _icon_file() or ""
+    r = core.ps(
+        "$w = New-Object -ComObject WScript.Shell; "
+        f"$s = $w.CreateShortcut('{os.path.join(desk, 'Restart ESSA Server.lnk')}'); "
+        f"$s.TargetPath = '{bat}'; $s.WorkingDirectory = '{HERE}'; "
+        "$s.Description = 'Restart the ESSA server and fix it if it has stopped'; "
+        + (f"$s.IconLocation = '{ico},0'; " if ico else "") + "$s.Save()")
+    with open(os.path.join(desk, "ESSA.url"), "w", encoding="utf-8") as f:
+        f.write(f"[InternetShortcut]\nURL=http://localhost:{PORT}/\n"
+                + (f"IconFile={ico}\nIconIndex=0\n" if ico else ""))
+    if not quiet:
+        print(("Desktop icons created on every user's desktop:" if r.returncode == 0
+               else "Could not create the restart shortcut:")
+              + "\n  Restart ESSA Server  - restarts ESSA, and repairs it if it has stopped"
+              + "\n  ESSA                 - opens ESSA in the browser")
+    return 0 if r.returncode == 0 else 1
+
 if __name__ == "__main__":
     what = (sys.argv[1] if len(sys.argv) > 1 else "setup").lower()
-    sys.exit({"setup": cmd_setup, "status": cmd_status, "remove": cmd_remove,
-              "restart": cmd_restart}.get(what, cmd_status)())
+    if what == "setup":
+        rc = cmd_setup()
+        cmd_shortcuts()
+        sys.exit(rc)
+    sys.exit({"status": cmd_status, "remove": cmd_remove, "restart": cmd_restart,
+              "repair": cmd_repair, "shortcuts": cmd_shortcuts}.get(what, cmd_status)())
