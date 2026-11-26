@@ -6,8 +6,16 @@ echo ==^> Backend: creating venv + installing deps
 cd backend
 python -m venv .venv
 call .venv\Scripts\activate.bat
-python -m pip install --upgrade pip -q
-pip install -r requirements.txt
+REM A client package may carry every Python package in ..\wheels, so a server
+REM with no internet (or a strict proxy) installs from the folder instead.
+if exist "%~dp0wheels\" (
+  echo ==^> Installing from the bundled packages - no internet needed
+  python -m pip install --no-index --find-links "%~dp0wheels" -r requirements.txt
+  if exist "%~dp0migration\tqa\requirements.txt" python -m pip install --no-index --find-links "%~dp0wheels" -r "%~dp0migration\tqa\requirements.txt"
+) else (
+  python -m pip install --upgrade pip -q
+  pip install -r requirements.txt
+)
 if errorlevel 1 (
   echo.
   echo ERROR installing Python deps. Make sure Python 3.10+ is installed and on PATH.

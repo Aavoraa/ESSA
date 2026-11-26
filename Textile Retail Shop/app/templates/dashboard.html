@@ -183,10 +183,10 @@ new Chart(document.getElementById('trendChart'), {
       // the design's area fill: the accent at 25%, fading to nothing
       backgroundColor: (ctx) => {
         const area = ctx.chart.chartArea;
-        if (!area) return 'rgba(47,143,104,.25)';
+        if (!area) return 'rgba(16,185,129,.25)';
         const g = ctx.chart.ctx.createLinearGradient(0, area.top, 0, area.bottom);
-        g.addColorStop(0, 'rgba(47,143,104,.25)');
-        g.addColorStop(1, 'rgba(47,143,104,0)');
+        g.addColorStop(0, 'rgba(16,185,129,.25)');
+        g.addColorStop(1, 'rgba(16,185,129,0)');
         return g;
       },
       fill: true, tension: .3

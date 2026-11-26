@@ -226,7 +226,14 @@ def cmd_repair() -> int:
     if st:
         for ip in lan_addresses():
             print(f"Other PCs open:  http://{ip}:{PORT}")
-        subprocess.run(["cmd", "/c", "start", "", f"http://localhost:{PORT}/"], capture_output=True)
+        # Chrome or Edge, never the default browser: on Windows Server 2016 that
+        # is Internet Explorer 11, which cannot run ESSA.
+        browser = core.find_browser()
+        if browser:
+            subprocess.Popen([browser, f"http://localhost:{PORT}/"])
+        else:
+            print("Install Google Chrome or Microsoft Edge on this server to open ESSA here "
+                  "(Internet Explorer cannot run it). The other PCs are not affected.")
         return 0
     print(f"\nESSA did not start. The reason is at the end of {os.path.join(core.SHARED, 'server.log')}.")
     print("Common causes: PostgreSQL is stopped (Windows Services > postgresql > Start), "
@@ -264,9 +271,23 @@ def cmd_shortcuts(quiet: bool = False) -> int:
         f"$s.TargetPath = '{bat}'; $s.WorkingDirectory = '{HERE}'; "
         "$s.Description = 'Restart the ESSA server and fix it if it has stopped'; "
         + (f"$s.IconLocation = '{ico},0'; " if ico else "") + "$s.Save()")
-    with open(os.path.join(desk, "ESSA.url"), "w", encoding="utf-8") as f:
-        f.write(f"[InternetShortcut]\nURL=http://localhost:{PORT}/\n"
-                + (f"IconFile={ico}\nIconIndex=0\n" if ico else ""))
+    # "ESSA" opens in Chrome or Edge when installed (Windows Server 2016's default
+    # browser is Internet Explorer 11, which cannot run ESSA); otherwise it is a
+    # plain web link for whatever browser is the default.
+    browser = core.find_browser()
+    if browser:
+        old = os.path.join(desk, "ESSA.url")
+        if os.path.exists(old):
+            os.remove(old)
+        core.ps("$w = New-Object -ComObject WScript.Shell; "
+                f"$s = $w.CreateShortcut('{os.path.join(desk, 'ESSA.lnk')}'); "
+                f"$s.TargetPath = '{browser}'; $s.Arguments = 'http://localhost:{PORT}/'; "
+                "$s.Description = 'Open ESSA'; "
+                + (f"$s.IconLocation = '{ico},0'; " if ico else "") + "$s.Save()")
+    else:
+        with open(os.path.join(desk, "ESSA.url"), "w", encoding="utf-8") as f:
+            f.write(f"[InternetShortcut]\nURL=http://localhost:{PORT}/\n"
+                    + (f"IconFile={ico}\nIconIndex=0\n" if ico else ""))
     if not quiet:
         print(("Desktop icons created on every user's desktop:" if r.returncode == 0
                else "Could not create the restart shortcut:")

@@ -1,0 +1,73 @@
+ESSA - INSTALLING ON WINDOWS SERVER 2016 WITH POSTGRESQL 12
+=============================================================
+
+This package is the same ESSA, prepared for the client's server:
+Windows Server 2016 (64-bit) and PostgreSQL 12.
+
+NEEDS ON THE SERVER (only this PC)
+  - Python 3.12, 64-bit (python.org > Downloads > Windows > "Windows installer (64-bit)").
+    While installing tick "Add python.exe to PATH". Python 3.12 supports Server 2016.
+  - Google Chrome or Microsoft Edge. Server 2016 only has Internet Explorer 11,
+    which cannot run ESSA. Needed only to open ESSA ON the server itself - the
+    other PCs use their own Chrome / Edge.
+  - PostgreSQL 12 - already installed. Its "pgcrypto" extension is used by the
+    migration; it ships with every PostgreSQL Windows install.
+  Node.js is NOT needed (the screens are already built).
+  If the folder "wheels" is in this package, no internet is needed for setup.
+
+1. Copy this ESSA folder to  C:\ESSA
+
+2. Double-click  setup.bat
+   It installs ESSA's Python packages - from the "wheels" folder when present,
+   otherwise from the internet.
+
+3. CONVERT THE OLD SOFTWARE'S DATA (TAQUALIVE, 237 tables -> ESSA)
+   Do this ON THIS SERVER. A database made on our PC (PostgreSQL 19) cannot be
+   restored into PostgreSQL 12, so the conversion must run here.
+   Open PowerShell in C:\ESSA. Replace <pw> with the "postgres" password.
+
+   a. Back up TAQUALIVE: pgAdmin > right-click TAQUALIVE > Backup > Format "Custom"
+      > save as D:\migration\TAQUALIVE.backup   (TAQUALIVE itself is never changed)
+   b. pgAdmin > Databases > Create > Database...  name:  legacy_tqa
+   c. $env:LEGACY_DATABASE_URL = "postgresql://postgres:<pw>@localhost:5432/legacy_tqa"
+      backend\.venv\Scripts\python.exe migration\tqa\load_backup.py "D:\migration\TAQUALIVE.backup"
+      (it finds PostgreSQL 12's pg_restore by itself)
+   d. $env:ESSA_DATABASE_URL = "postgresql://postgres:<pw>@localhost:5432/essa"
+      backend\.venv\Scripts\python.exe migration\tqa\prepare_target.py --recreate --save-base
+   e. $env:TQA_TEMP_PASSWORD = "<the first sign-in password for every migrated user>"
+      backend\.venv\Scripts\python.exe migration\tqa\migrate.py
+   f. backend\.venv\Scripts\python.exe migration\tqa\validate.py
+      It must end with "no HARD check failed". Reports: migration\tqa\output\
+   g. CLOSE this PowerShell window (it holds the postgres password).
+   Allow a few hours for about 15 million rows. Re-run from a clean copy at any
+   time with:  prepare_target.py --from-base   then  migrate.py
+
+4. Link the converted database to ESSA - a NEW PowerShell window in C:\ESSA:
+     deploy\server\postgres_setup.bat adopt --db essa
+   It asks for the "postgres" password (hidden, not saved), creates ESSA's own
+   login, and writes the connection into C:\ESSA\.env.
+
+5. Right-click  deploy\server\server_setup.bat  >  Run as administrator
+   ESSA starts with Windows, port 8000 is opened in the firewall for the shop
+   network, and it prints the address for the other PCs, e.g. http://192.168.1.10:8000
+   It puts two icons on every user's desktop:
+     "Restart ESSA Server" - if ESSA stops opening anywhere, double-click it
+     "ESSA"                - opens ESSA on this server (in Chrome / Edge)
+
+6. Windows settings on the server:
+   - Network = Private (Server Manager > Local Server, or Settings > Network)
+   - Fixed IP: reserve the server's IP in the router, or set a static IP
+   - Server 2016: Windows Update active hours set to shop hours, so it never
+     restarts during billing
+
+7. Every other PC: open the address from step 5 in Chrome or Edge, sign in with
+   the temporary password from step 3e. Edge > ... > Apps > Install this site as an app.
+
+8. Backups (on the server): right-click deploy\backup\daily_backup.bat > Run as
+   administrator (every night 10:30 PM), and run deploy\backup\instant_backup.bat
+   once before the shop opens. They use PostgreSQL 12's own pg_dump.
+
+Check any time:   deploy\server\server_setup.bat status
+Restart / repair: double-click "Restart ESSA Server" on the desktop
+Server log:       C:\ProgramData\ESSA\server.log
+Full guides:      deploy\server\SERVER-GUIDE.md, migration\tqa\README.md

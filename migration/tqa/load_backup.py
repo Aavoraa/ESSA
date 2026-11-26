@@ -26,7 +26,7 @@ PostgreSQL empties unlogged tables after any unclean shutdown — which is how t
 first load's copy was found empty.
 
     LEGACY_DATABASE_URL=postgresql://postgres:***@localhost:5432/legacy_tqa \\
-        python load_backup.py "C:/path/TAQUALIVE.backup" [--pg-bin "C:/Program Files/PostgreSQL/18/bin"]
+        python load_backup.py "C:/path/TAQUALIVE.backup" [--pg-bin "C:/Program Files/PostgreSQL/12/bin"]  (default: the newest installed)
 """
 from __future__ import annotations
 
@@ -41,7 +41,22 @@ import psycopg
 from psycopg import sql
 
 SCRATCH = "public"          # where pg_restore puts the dump's tables (they are public.*)
-DEFAULT_PG_BIN = r"C:\Program Files\PostgreSQL\18\bin"
+
+
+def _newest_pg_bin() -> str:
+    """The newest installed PostgreSQL's bin folder (12 on the client, 18/19 here)."""
+    import glob
+    import re
+    root = os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "PostgreSQL")
+    found = [d for d in glob.glob(os.path.join(root, "*", "bin"))
+             if os.path.isfile(os.path.join(d, "pg_restore.exe"))]
+
+    def ver(d):
+        return [int(x) for x in re.findall(r"\d+", os.path.basename(os.path.dirname(d)))] or [0]
+    return max(found, key=ver) if found else os.path.join(root, "18", "bin")
+
+
+DEFAULT_PG_BIN = _newest_pg_bin()
 
 
 def _arg(name: str, default: str | None = None) -> str | None:

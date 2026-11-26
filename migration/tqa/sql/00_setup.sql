@@ -10,6 +10,15 @@
 
 create schema if not exists migration;
 
+-- gen_random_uuid() is built in from PostgreSQL 13. On 12 (the client's server)
+-- it comes from the pgcrypto extension, which ships with every Windows install.
+do $$
+begin
+  if not exists (select 1 from pg_proc where proname = 'gen_random_uuid') then
+    create extension if not exists pgcrypto;
+  end if;
+end $$;
+
 create or replace function migration.txt(v text) returns text
 language sql immutable as $$
   select case when v is null then null

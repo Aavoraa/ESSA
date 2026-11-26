@@ -280,7 +280,7 @@ button.ui-kpi:hover, a.ui-kpi:hover { border-color: var(--ui-green-200); box-sha
   color: var(--ui-text-2); font-size: var(--ui-fs-table); }
 .ui-spinner { width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--ui-green-200);
   border-top-color: var(--ui-secondary); animation: ui-spin .7s linear infinite; }
-.ui-skeleton { border-radius: 6px; background: linear-gradient(90deg, #EEF2F0 25%, #F6F8F7 50%, #EEF2F0 75%);
+.ui-skeleton { border-radius: 6px; background: linear-gradient(90deg, #EEF2F0 25%, #F6F8F8 50%, #EEF2F0 75%);
   background-size: 200% 100%; animation: ui-shimmer 1.2s linear infinite; }
 
 @keyframes ui-spin { to { transform: rotate(360deg); } }

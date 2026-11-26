@@ -21,7 +21,7 @@
   --ui-accent-50: #FBF4E6;
 
   /* ---- colour: surfaces and text ---- */
-  --ui-bg: #F6F8F7;               /* page */
+  --ui-bg: #F6F8F8;               /* page */
   --ui-surface: #FFFFFF;          /* cards */
   --ui-surface-2: #F9FBFA;        /* table heads, card footers */
   --ui-text: #182B25;
@@ -31,7 +31,7 @@
   --ui-border-strong: #CFD8D3;
 
   /* ---- colour: status ---- */
-  --ui-success: #249B68;  --ui-success-bg: #E7F5EE;
+  --ui-success: #2F8F68;  --ui-success-bg: #E7F5EE;
   --ui-warning: #D99A35;  --ui-warning-bg: #FBF2E2;  --ui-warning-text: #8A5A12;
   --ui-error:   #D9534F;  --ui-error-bg:   #FBEBEA;  --ui-error-text:   #A8322E;
   --ui-info:    #4385B8;  --ui-info-bg:    #E9F1F8;  --ui-info-text:    #2C6491;
@@ -65,7 +65,7 @@
 
   /* ---- controls ---- */
   --ui-h-sm: 30px; --ui-h: 36px; --ui-h-lg: 44px;
-  --ui-focus: 0 0 0 3px rgba(47,143,104,.22);
+  --ui-focus: 0 0 0 3px rgba(16,185,129,.22);
   --ui-ease: cubic-bezier(.2,.7,.2,1);
 
   /* ---- shell ---- */

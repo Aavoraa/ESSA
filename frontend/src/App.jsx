@@ -15023,8 +15023,9 @@ function TraceChain({ chain }) {
   )
 }
 
-function AskAnything({ go, big, placeholder, seed }) {
+function AskAnything({ go, big, wide, placeholder, seed }) {
   const [q, setQ] = useState('')
+  const chipRow = useRef(null)
   const [ans, setAns] = useState(null)
   const [busy, setBusy] = useState(false)
   const [meta, setMeta] = useState(null)
@@ -15102,12 +15103,14 @@ function AskAnything({ go, big, placeholder, seed }) {
 
   const read = ans?.interpretation
   return (
-    <div className={'cc-ask' + (big ? ' big' : '')}>
+    <div className={'cc-ask' + (big ? ' big' : '') + (wide ? ' wide' : '')}>
       <div className="askbar">
-        <span className="ico" aria-hidden="true">{big ? <Icon name="sparkle" size={18} /> : '✨'}</span>
+        <span className="ico" aria-hidden="true">{wide ? <Icon name="waveform" size={19} /> : big ? <Icon name="sparkle" size={18} /> : '✨'}</span>
         <span className="askfield">
           <input value={q} onChange={(e) => setQ(e.target.value)}
-            placeholder={placeholder || (big
+            placeholder={placeholder || (wide
+              ? 'Ask anything, or press Speak and say “today’s total sales”, “today’s billing” or “which floor has the highest sales?”'
+              : big
               ? 'Ask anything, or paste a GRN, bill or QR code…'
               : 'Ask anything — press 🎤 and say “today’s total invoices” — or paste a GRN, bill or QR code')}
             title="Speak it or type it, in English or Tamil. A code pasted here is tracked end to end."
@@ -15123,14 +15126,28 @@ function AskAnything({ go, big, placeholder, seed }) {
         )}
       </div>
 
-      {!ans && big && (
+      {!ans && big && !wide && (
         <div className="cc-voicehint">
           <span className="vh-badge"><Icon name="mic" size={13} /> Voice</span>
           <span>Press <b>Speak</b> and say <i>“today’s total sales”</i>, <i>“today’s billing”</i> or
             <i> “which floor has the highest sales”</i> — in English or Tamil. The answer is read back to you.</span>
         </div>
       )}
-      {!ans && meta?.examples && (
+      {!ans && meta?.examples && wide && (
+        <div className="cc2-chips">
+          <div className="cc2-chiprow" ref={chipRow}>
+            {meta.examples.slice(0, 10).map((e, i) => (
+              <button key={e.q} className={'cc2-chip' + (i === 0 ? ' first' : '')} title={e.note}
+                onClick={() => { setQ(e.q); run(e.q) }}>
+                {i === 0 && <Icon name="trending" size={15} />}{e.q}</button>
+            ))}
+          </div>
+          <button className="cc2-chipmore" title="More questions" aria-label="More questions"
+            onClick={() => chipRow.current?.scrollBy({ left: 320, behavior: 'smooth' })}>
+            <Icon name="chevron" size={16} /></button>
+        </div>
+      )}
+      {!ans && meta?.examples && !wide && (
         <div className="cc-examples">
           {meta.examples.slice(0, big ? 8 : 6).map((e) => (
             <button key={e.q} className="cc-chip" title={e.note}
@@ -15303,63 +15320,80 @@ function CommandCenter({ go, toast, user, role, onEnter, active = true }) {
     return w ? { id: w.warehouse_id, name: w.name, code: w.code } : null
   }
   const series = ov?.series
+  // Today against the day before, from the fortnight the server already sent.
+  const dayDelta = (vals) => {
+    if (!vals || vals.length < 2) return null
+    const now = +vals[vals.length - 1] || 0, prev = +vals[vals.length - 2] || 0
+    if (!prev) return { pct: now ? null : 0, up: true }
+    return { pct: Math.round(((now - prev) / prev) * 100), up: now >= prev }
+  }
+  // Units in minus out, running — the shape of the stock over the fortnight.
+  const netUnits = (s) => {
+    if (!s?.inward) return null
+    let run = 0
+    return s.inward.map((v, i) => (run += (+v || 0) - (+s.outward[i] || 0)))
+  }
+  const downloadSeries = () => {
+    if (!series) return
+    const cols = ['Day', 'Sales', 'Purchases', 'Payments', 'Returns', 'Units in', 'Units out']
+    const rows = series.labels.map((l, i) => [series.days?.[i] || l, series.sales[i], series.purchases[i],
+      series.payments[i], series.returns[i], series.inward[i], series.outward[i]])
+    const csv = [cols, ...rows].map((r) => r.map((v) => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\n')
+    const url = URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' }))
+    const a = document.createElement('a')
+    a.href = url; a.download = `command_center_${series.days?.[series.days.length - 1] || 'fortnight'}.csv`
+    a.click(); URL.revokeObjectURL(url)
+  }
   const chart = () => {
     if (!series) return null
     if (view === 'movement') {
       return (
-        <ChartCard title="Units in and out, per day" columns={['Day', 'In', 'Out']}
-          rows={series.labels.map((l, i) => [l, fmtQty(series.inward[i]), fmtQty(series.outward[i])])}
-          legend={<Legend items={[{ label: 'Inward', color: 'var(--viz-1)' },
-            { label: 'Outward', color: 'var(--viz-2)' }]} />}>
-          <GroupedBars labels={series.labels} unit="units"
-            series={[{ name: 'Inward', values: series.inward },
-              { name: 'Outward', values: series.outward }]} />
-        </ChartCard>
+        <CcTrend title="Stock movement — the last fortnight" note="Units into and out of the warehouses"
+          labels={series.labels} unit="units"
+          lines={[{ name: 'Units in', values: series.inward, color: '#1F7A55' },
+            { name: 'Units out', values: series.outward, color: '#F0A43A' }]} />
       )
     }
-    const values = series[view] || []
     const meta = CC_SERIES.find(([key]) => key === view)
+    const lines = [{ name: meta[1], values: series[view] || [], color: '#1F7A55' }]
+    // Sales are read against what came back, as the mockup's two lines do.
+    if (view === 'sales') lines.push({ name: 'Returns', values: series.returns || [], color: '#F0A43A' })
     return (
-      <ChartCard title={`${meta[1]} — the last fortnight`} note={meta[2]}
-        columns={['Day', meta[1]]}
-        rows={series.labels.map((l, i) => [l, short(values[i])])}>
-        <LineChart labels={series.labels} values={values} unit="₹" />
-      </ChartCard>
+      <CcTrend title={`${meta[1]} — the last fortnight`} note={meta[2]}
+        labels={series.labels} unit="₹" lines={lines} />
     )
   }
 
   return (
-    <div className="screen scrolls cd">
-      <div className="cd-head">
-        <div className="cd-title">
+    <div className="screen scrolls cd cc2">
+      <div className="cc2-head">
+        <div className="cc2-title">
           <h2>Command Center</h2>
-          <p>
-            {ov ? `${ov.label} · ${ov.counts?.warehouses ?? 0} warehouse(s), ${ov.counts?.stores ?? 0} store(s), ${ov.counts?.counters ?? 0} till(s)` : 'The whole business on one screen'}
+          <p>Get a complete overview of your business operations
             {ov?.scope?.warehouse ? ` · ${ov.scope.warehouse} only`
-              : ov?.scope?.restricted ? ' · your allotted warehouses only' : ''}
-          </p>
+              : ov?.scope?.restricted ? ' · your allotted warehouses only' : ''}</p>
         </div>
         {/* Scopes the WHOLE screen — tiles, charts, alerts and activity — to one
             building, the way the Central Dashboard's picker does. The warehouse
             table below is the other way in: click a row. */}
-        <div className="cd-tools">
+        <div className="cc2-tools">
           <UiSelect icon="building" label="Warehouse" minWidth={190}
             title="Show one warehouse — its stock, its stores' takings, its GRNs and its people"
             value={scope || ''} onChange={(v) => setScope(v ? +v : null)}
             options={[{ value: '', label: 'All Warehouses' },
               ...(ov?.places?.picker || []).map((w) => ({ value: w.warehouse_id, label: w.name }))]} />
-          <label className="cd-select cd-date" title="Look at another business day">
-            <Icon name="calendar" size={16} />
+          <label className="cc2-date" title="Look at another business day">
+            <Icon name="calendar" size={18} />
             <input type="date" value={day} max={ov?.day} onChange={(e) => setDay(e.target.value)} />
           </label>
-          {day && <button className="cd-btn" onClick={() => setDay('')}>Today</button>}
-          <button className="cd-refresh" onClick={() => readCache.refresh(load)} disabled={busy}>
-            <Icon name="refresh" size={15} /> {busy ? 'Reading…' : 'Refresh'}</button>
+          {day && <button className="cc2-btn" onClick={() => setDay('')}>Today</button>}
+          <button className="cc2-btn refresh" onClick={() => readCache.refresh(load)} disabled={busy}>
+            <Icon name="refresh" size={17} /> {busy ? 'Reading…' : 'Refresh'}</button>
         </div>
       </div>
 
       <div className="screenbody">
-        <AskAnything go={go} big seed={seed} />
+        <AskAnything go={go} big wide seed={seed} />
 
         {err && <div className="warnbox" style={{ marginBottom: 14 }}>
           <h4>Some of this could not be read</h4>
@@ -15375,55 +15409,83 @@ function CommandCenter({ go, toast, user, role, onEnter, active = true }) {
               </div>
             )}
 
-            <div className="cd-tiles four">
-              <CdTile icon="rupee" tone="t-green" label={`${ov.label}'s Sales`} value={short(k.sales?.value)}
-                sub={`${n0(k.sales?.bills || 0)} bill(s) · ${fmtQty(k.sales?.units || 0)} units`}
-                hint={`Billed ₹${money(k.sales?.gross || 0)} less ₹${money(k.sales?.returns || 0)} of customer returns`}
-                onClick={() => go('central')} />
-              <CdTile icon="cart" tone="t-blue" label="Purchases" value={short(k.purchases?.value)}
-                sub={`${n0(k.purchases?.grns || 0)} GRN(s) · ${fmtQty(k.purchases?.units || 0)} units`}
-                hint="GRNs posted today — goods that actually became stock"
-                onClick={() => go('purchases')} />
-              <CdTile icon="boxes" tone="t-amber" label="Stock Value" value={short(k.stock_value?.value)}
-                sub={`${fmtQty(k.stock_value?.qty || 0)} units · ${n0(k.stock_value?.items || 0)} items`}
-                hint="Quantity × each warehouse's own weighted-average cost"
-                onClick={() => go('inventory')} />
-              <CdTile icon="trending" tone="t-teal" label="Profit" value={short(k.profit?.value)}
-                live={k.profit?.value > 0}
-                sub={k.profit?.margin_pct != null ? `${k.profit.margin_pct}% margin` : 'no sales yet'}
-                hint="Store sales before tax, less what those goods cost at the till" />
+            <div className="cc2-top v2">
+              <button className="cc2-hero2" onClick={() => go('central')}
+                title={`Billed ₹${money(k.sales?.gross || 0)} less ₹${money(k.sales?.returns || 0)} of customer returns — open the Central Dashboard`}>
+                <span className="h2-left">
+                  <span className="h2-label"><span className="cc2-kic"><Icon name="cart" size={18} /></span>{ov.label}'s Sales</span>
+                  <span className="h2-val">{short(k.sales?.value)}</span>
+                  <CcDelta delta={dayDelta(series?.sales)} />
+                  <span className="h2-stats">
+                    <span><b>{n0(k.sales?.bills || 0)}</b>bills</span>
+                    <span><b>{fmtQty(k.sales?.units || 0)}</b>units</span>
+                    <span><b>{k.sales?.bills ? short((k.sales?.value || 0) / k.sales.bills) : '—'}</b>avg bill</span>
+                  </span>
+                </span>
+                <span className="h2-right">
+                  <CcBars values={series?.sales} labels={series?.labels} />
+                </span>
+              </button>
+              <div className="cc2-side2">
+                <CcTile2 icon="cart" tone="blue" label="Purchases" value={short(k.purchases?.value)}
+                  delta={dayDelta(series?.purchases)} bars={series?.purchases}
+                  hint={`${n0(k.purchases?.grns || 0)} GRN(s) · ${fmtQty(k.purchases?.units || 0)} units — goods that actually became stock`}
+                  onClick={() => go('purchases')} />
+                <CcTile2 icon="boxes" tone="amber" label="Stock Value" value={short(k.stock_value?.value)}
+                  sub={`${fmtQty(k.stock_value?.qty || 0)} units · ${n0(k.stock_value?.items || 0)} items`}
+                  hint="Quantity × each warehouse's own weighted-average cost"
+                  onClick={() => go('inventory')} />
+                <CcTile2 icon="trending" tone="teal" label="Profit" value={short(k.profit?.value)}
+                  sub={k.profit?.margin_pct != null ? `${k.profit.margin_pct}% margin` : 'no sales yet'}
+                  meter={k.profit?.margin_pct}
+                  hint="Store sales before tax, less what those goods cost at the till" />
+              </div>
             </div>
 
-            <div className="cd-tiles six">
-              <CdTile icon="building" tone="t-green" label="Warehouses" value={n0(ov.counts?.warehouses || 0)}
-                live sub="Open" onClick={() => go('locations')} />
-              <CdTile icon="store" tone="t-blue" label="Stores" value={n0(ov.counts?.stores || 0)}
-                live sub="Selling" onClick={() => go('locations')} />
-              <CdTile icon="calc" tone="t-violet" label="POS Counters" value={n0(ov.counts?.counters || 0)}
-                sub="tills" onClick={() => go('locations')} />
+            <div className="cc2-badges">
+              <CcBadge icon="building" tone="green" value={n0(ov.counts?.warehouses || 0)} label="Warehouses" live
+                onClick={() => go('locations')} />
+              <CcBadge icon="store" tone="blue" value={n0(ov.counts?.stores || 0)} label="Stores selling" live
+                onClick={() => go('locations')} />
+              <CcBadge icon="calc" tone="violet" value={n0(ov.counts?.counters || 0)} label="POS counters"
+                onClick={() => go('locations')} />
               {ov.counts?.users != null && (
-                <CdTile icon="users" tone="t-teal" label="Users" value={n0(ov.counts.users)}
-                  sub="can sign in" onClick={() => go('users')} />
+                <CcBadge icon="users" tone="teal" value={n0(ov.counts.users)} label="Users can sign in" onClick={() => go('users')} />
               )}
-              <CdTile icon="tag" tone={k.low_stock?.count ? 't-orange warn' : 't-orange'} label="Low Stock"
-                value={n0(k.low_stock?.count || 0)} sub="in the stores"
+              <CcBadge icon="alerttri" tone="amber" value={n0(k.low_stock?.count || 0)} label="Low in stores"
                 hint="Store products at or below their reorder level" />
-              <CdTile icon="undo" tone="t-rose" label="Returns" value={short(k.returns?.value)}
-                sub={`${n0(k.returns?.store_notes || 0)} customer · ${n0(k.returns?.debit_notes || 0)} supplier`} />
+              <CcBadge icon="undo" tone="rose" value={short(k.returns?.value)} label="Returns"
+                hint={`${n0(k.returns?.store_notes || 0)} customer · ${n0(k.returns?.debit_notes || 0)} supplier`} />
             </div>
 
-            <Section id="cc.flow" title="Business overview"
-              summary={CC_SERIES.find(([key]) => key === view)[1]}
-              actions={
-                <span className="segbar">
-                  {CC_SERIES.map(([key, label]) => (
-                    <button key={key} className={'seg' + (view === key ? ' on' : '')}
-                      aria-pressed={view === key}
-                      onClick={(e) => { e.stopPropagation(); setView(key) }}>{label}</button>
-                  ))}
-                </span>}>
-              {chart()}
-            </Section>
+            <div className="cc2-tabbar">
+              <div className="cc2-tabs" role="tablist">
+                {CC_SERIES.map(([key, label]) => (
+                  <button key={key} role="tab" aria-selected={view === key}
+                    className={'cc2-tab' + (view === key ? ' on' : '')} onClick={() => setView(key)}>
+                    {view === key && <Icon name="bars" size={16} />}{label === 'Stock movement' ? 'Stock Movement' : label}</button>
+                ))}
+              </div>
+              <span className="spacer" />
+              <span className="cc2-period" title="The charts and insights cover the 14 business days up to the day shown">
+                <Icon name="calendar" size={15} /> Last 14 days</span>
+              <button className="cc2-iconbtn" title="Download these figures as a spreadsheet"
+                aria-label="Download" onClick={downloadSeries}><Icon name="download" size={18} /></button>
+            </div>
+
+            <div className="cc2-row">
+              <div className="cc2-card cc2-chart">{chart()}</div>
+              <CcInsights series={series} lowStock={k.low_stock?.count || 0} short={short} />
+              <div className="cc2-cta">
+                <span className="cc2-cta-pill"><Icon name="bars" size={14} stroke={2.6} /> Reports</span>
+                <h3>Track your business with <em>real-time insights</em></h3>
+                <p>Sales, stock, purchases and GST, for any day or period.</p>
+                <button onClick={() => go('reports')}>View Reports <Icon name="arrowright" size={16} /></button>
+                <span className="cc2-cta-bars" aria-hidden="true">
+                  {[38, 58, 46, 74, 92].map((hgt, i) => <i key={i} style={{ height: hgt + '%' }} />)}
+                </span>
+              </div>
+            </div>
 
             {/* ---- one row per warehouse: what it holds AND what its shops took ---- */}
             <Section id="cc.warehouses" title="Warehouses"
@@ -17876,6 +17938,260 @@ function DashTile({ label, value, sub, tone, accent, hint, onClick }) {
 
 // The Central Dashboard's own tile: a round icon, the label, the figure, and a
 // line under it ("● Active" when `live`).
+// ---- Command Center pieces -------------------------------------------------
+// A smooth path through points (Catmull-Rom as cubic Béziers).
+function smoothPath(pts) {
+  if (!pts.length) return ''
+  let d = `M${pts[0][0]},${pts[0][1]}`
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[i - 1] || pts[i], p1 = pts[i], p2 = pts[i + 1], p3 = pts[i + 2] || p2
+    const c1 = [p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6]
+    const c2 = [p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6]
+    d += ` C${c1[0]},${c1[1]} ${c2[0]},${c2[1]} ${p2[0]},${p2[1]}`
+  }
+  return d
+}
+
+let _sparkId = 0
+function CcSpark({ values, color }) {
+  const id = useMemo(() => 'sp' + (++_sparkId), [])
+  if (!values || values.length < 2) return null
+  const w = 120, h = 56, lo = Math.min(...values), hi = Math.max(...values)
+  const span = hi - lo || 1
+  const pts = values.map((v, i) => [(i / (values.length - 1)) * w, h - 4 - ((v - lo) / span) * (h - 10)])
+  const line = smoothPath(pts)
+  return (
+    <svg className="cc2-spark" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" aria-hidden="true">
+      <defs><linearGradient id={id} x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stopColor={color} stopOpacity=".12" /><stop offset="1" stopColor={color} stopOpacity=".12" />
+      </linearGradient></defs>
+      <path d={`${line} L${w},${h} L0,${h} Z`} fill={`url(#${id})`} />
+      <path d={line} fill="none" stroke={color} strokeWidth="2" vectorEffect="non-scaling-stroke" />
+    </svg>
+  )
+}
+
+const CC_TONES = { green: '#1F7A55', blue: '#3B82C4', amber: '#E08A2B', teal: '#1F7A55' }
+
+function CcKpi({ icon, tone, label, value, delta, sub, spark, ring, hint, onClick }) {
+  const color = CC_TONES[tone] || CC_TONES.green
+  return (
+    <button className={'cc2-kpi k-' + tone} onClick={onClick} title={hint || label}
+      style={{ cursor: onClick ? 'pointer' : 'default' }}>
+      <span className="cc2-kic"><Icon name={icon} size={21} /></span>
+      <span className="cc2-ktx">
+        <span className="lbl">{label}</span>
+        <span className="val">{value}</span>
+        {delta ? (
+          <span className={'sub' + (delta.pct != null && !delta.up ? ' down' : '')}>
+            {delta.pct == null ? 'none the day before'
+              : <><Icon name="trending" size={13} /> {Math.abs(delta.pct)}% vs yesterday</>}
+          </span>
+        ) : <span className="sub plain">{sub}</span>}
+      </span>
+      {spark ? <CcSpark values={spark} color={color} />
+        : ring != null ? (
+          <svg className="cc2-ring" viewBox="0 0 44 44" aria-hidden="true">
+            <circle cx="22" cy="22" r="18" />
+            <circle cx="22" cy="22" r="18" className="on"
+              strokeDasharray={`${Math.max(0, Math.min(100, ring)) * 1.131} 113.1`} />
+          </svg>
+        ) : null}
+    </button>
+  )
+}
+
+function CcDelta({ delta }) {
+  if (!delta) return null
+  return (
+    <span className={'cc2-delta' + (delta.pct != null && !delta.up ? ' down' : '')}>
+      {delta.pct == null ? 'none the day before'
+        : <><Icon name="trending" size={13} /> {Math.abs(delta.pct)}% vs yesterday</>}
+    </span>
+  )
+}
+
+// Daily figures as rounded columns, the last (the day shown) in full colour.
+function CcBars({ values, labels }) {
+  if (!values || !values.length) return null
+  const max = Math.max(...values.map((v) => +v || 0), 0)
+  return (
+    <span className="cc2-bars">
+      <span className="cc2-bars-cols">
+        {values.map((v, i) => (
+          <i key={i} className={i === values.length - 1 ? 'now' : ''}
+            style={{ height: max ? Math.max(4, ((+v || 0) / max) * 100) + '%' : '4%' }}
+            title={`${labels?.[i] || ''}: ₹${money(+v || 0)}`} />
+        ))}
+      </span>
+      {labels && <span className="cc2-bars-axis"><span>{labels[0]}</span><span>{labels[labels.length - 1]}</span></span>}
+    </span>
+  )
+}
+
+function CcTile2({ icon, tone, label, value, delta, sub, bars, meter, hint, onClick }) {
+  const m = bars ? Math.max(...bars.map((x) => +x || 0), 0) : 0
+  return (
+    <button className={'cc2-t2 k-' + tone} onClick={onClick} title={hint || label}
+      style={{ cursor: onClick ? 'pointer' : 'default' }}>
+      <span className="t2-head"><span className="cc2-kic"><Icon name={icon} size={16} /></span>{label}</span>
+      <span className="t2-val">{value}</span>
+      {delta ? <CcDelta delta={delta} /> : <span className="t2-sub">{sub}</span>}
+      {bars ? <span className="t2-bars">{bars.map((v, i) => (
+        <i key={i} style={{ height: m ? Math.max(8, ((+v || 0) / m) * 100) + '%' : '8%' }} />))}</span>
+        : <span className="t2-meter"><i style={{ width: (meter != null ? Math.max(0, Math.min(100, meter)) : 100) + '%' }} /></span>}
+    </button>
+  )
+}
+
+function CcRow({ icon, tone, label, value, delta, sub, spark, ring, hint, onClick }) {
+  const color = CC_TONES[tone] || CC_TONES.green
+  return (
+    <button className={'cc2-srow k-' + tone} onClick={onClick} title={hint || label}
+      style={{ cursor: onClick ? 'pointer' : 'default' }}>
+      <span className="cc2-kic"><Icon name={icon} size={19} /></span>
+      <span className="cc2-stx">
+        <span className="lbl">{label}</span>
+        {delta ? <CcDelta delta={delta} /> : <span className="sub">{sub}</span>}
+      </span>
+      <span className="cc2-sval">{value}</span>
+      <span className="cc2-sgfx">
+        {spark ? <CcSpark values={spark} color={color} />
+          : ring != null ? (
+            <svg className="cc2-ring" viewBox="0 0 44 44" aria-hidden="true">
+              <circle cx="22" cy="22" r="18" />
+              <circle cx="22" cy="22" r="18" className="on"
+                strokeDasharray={`${Math.max(0, Math.min(100, ring)) * 1.131} 113.1`} />
+            </svg>
+          ) : null}
+      </span>
+    </button>
+  )
+}
+
+function CcBadge({ icon, tone, value, label, live, hint, onClick }) {
+  return (
+    <button className={'cc2-badge' + (tone ? ' m-' + tone : '')} onClick={onClick}
+      title={hint || (onClick ? `Open ${label}` : label)} style={{ cursor: onClick ? 'pointer' : 'default' }}>
+      <span className="cc2-bic"><Icon name={icon} size={16} /></span>
+      <b>{value}</b><span>{label}</span>{live && <i />}
+    </button>
+  )
+}
+
+function CcMini({ icon, tone, label, value, sub, live, hint, onClick }) {
+  return (
+    <button className={'cc2-mini' + (tone ? ' m-' + tone : '')} onClick={onClick}
+      title={hint || (onClick ? `Open ${label}` : label)} style={{ cursor: onClick ? 'pointer' : 'default' }}>
+      <span className="cc2-mic"><Icon name={icon} size={19} /></span>
+      <span className="cc2-mtx">
+        <span className="lbl">{label}</span>
+        <span className="val">{value}</span>
+        <span className="sub">{live && <i />}{sub}</span>
+      </span>
+    </button>
+  )
+}
+
+function CcInsights({ series, lowStock, short }) {
+  const sum = (a) => (a || []).reduce((t, v) => t + (+v || 0), 0)
+  const items = []
+  if (series?.sales) {
+    const half = Math.floor(series.sales.length / 2)
+    const prev = sum(series.sales.slice(0, half)), now = sum(series.sales.slice(half))
+    if (!prev && !now) items.push({ icon: 'info', tone: 'blue', title: 'No sales in the last 14 days', sub: 'nothing billed at the tills' })
+    else if (!prev) items.push({ icon: 'trending', tone: 'green', title: `Sales of ${short(now)} this week`, sub: 'none the week before' })
+    else {
+      const pct = Math.round(((now - prev) / prev) * 100)
+      items.push({ icon: 'trending', tone: pct >= 0 ? 'green' : 'red',
+        title: `Sales ${pct >= 0 ? 'increased' : 'decreased'} by ${Math.abs(pct)}%`, sub: 'compared to the week before' })
+    }
+  }
+  items.push(lowStock
+    ? { icon: 'alertcircle', tone: 'amber', title: `${n0(lowStock)} items are low in stock`, sub: 'across all stores' }
+    : { icon: 'checkcircle', tone: 'green', title: 'Nothing is low in stock', sub: 'across all stores' })
+  const ret = sum(series?.returns)
+  items.push(ret
+    ? { icon: 'undo', tone: 'blue', title: `${short(ret)} came back`, sub: 'returns and debit notes, last 14 days' }
+    : { icon: 'info', tone: 'blue', title: 'No returns recorded this period', sub: 'Great going!' })
+  return (
+    <div className="cc2-card cc2-insights">
+      <h3><span className="bulb"><Icon name="bulb" size={19} /></span>Quick Insights</h3>
+      {items.map((it) => (
+        <div key={it.title} className="cc2-ins">
+          <span className={'ii t-' + it.tone}><Icon name={it.icon} size={16} /></span>
+          <span><b>{it.title}</b><small>{it.sub}</small></span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// A fortnight as smooth lines, with an area under the first.
+function CcTrend({ title, note, labels, lines, unit }) {
+  const box = useRef(null)
+  const [w, setW] = useState(600)
+  useEffect(() => {
+    if (!box.current || typeof ResizeObserver === 'undefined') return undefined
+    const ro = new ResizeObserver(([e]) => setW(Math.max(280, Math.floor(e.contentRect.width))))
+    ro.observe(box.current)
+    return () => ro.disconnect()
+  }, [])
+  const h = 185, pad = { l: 40, r: 14, t: 10, b: 26 }
+  const all = lines.flatMap((l) => l.values.map((v) => +v || 0))
+  const rawMax = Math.max(1, ...all)
+  const step = rawMax <= 3 ? 1
+    : (() => { const s = rawMax / 3, m = 10 ** Math.floor(Math.log10(s)); return Math.ceil(s / m) * m })()
+  const max = step * 3
+  const x = (i) => pad.l + (labels.length < 2 ? 0 : (i / (labels.length - 1)) * (w - pad.l - pad.r))
+  const y = (v) => pad.t + (1 - (+v || 0) / max) * (h - pad.t - pad.b)
+  const fmt = (v) => (unit === '₹' ? compact(v) : compact(v))
+  const every = Math.max(1, Math.ceil(labels.length / 6))
+  return (
+    <>
+      <div className="cc2-charthead">
+        <div><h3>{title}</h3><p>{note}</p></div>
+        <span className="cc2-legend">{lines.map((l) => (
+          <span key={l.name}><i style={{ background: l.color }} />{l.name}</span>))}</span>
+      </div>
+      <div ref={box} className="cc2-plot">
+        <svg width={w} height={h} role="img" aria-label={title}>
+          <defs><linearGradient id="cc2area" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stopColor={lines[0].color} stopOpacity=".1" />
+            <stop offset="1" stopColor={lines[0].color} stopOpacity=".1" />
+          </linearGradient></defs>
+          {[0, 1, 2, 3].map((t) => (
+            <g key={t}>
+              <line x1={pad.l} x2={w - pad.r} y1={y(t * step)} y2={y(t * step)} className="grid" />
+              <text x={pad.l - 10} y={y(t * step) + 4} textAnchor="end">{fmt(t * step)}</text>
+            </g>
+          ))}
+          {labels.map((l, i) => (i === labels.length - 1
+            || (i % every === 0 && labels.length - 1 - i >= Math.ceil(every * 0.7))) && (
+            <text key={l} x={x(i)} y={h - 6}
+              textAnchor={i === 0 ? 'start' : i === labels.length - 1 ? 'end' : 'middle'}>{l}</text>
+          ))}
+          {lines.map((l, li) => {
+            const pts = l.values.map((v, i) => [x(i), y(v)])
+            const d = smoothPath(pts)
+            return (
+              <g key={l.name}>
+                {li === 0 && <path d={`${d} L${x(labels.length - 1)},${y(0)} L${x(0)},${y(0)} Z`} fill="url(#cc2area)" />}
+                <path d={d} fill="none" stroke={l.color} strokeWidth="2.4" />
+                {pts.map(([px, py], i) => (
+                  <circle key={i} cx={px} cy={py} r="4" fill="#fff" stroke={l.color} strokeWidth="2">
+                    <title>{`${labels[i]} · ${l.name}: ${unit === '₹' ? '₹' + money(l.values[i] || 0) : fmtQty(l.values[i] || 0)}`}</title>
+                  </circle>
+                ))}
+              </g>
+            )
+          })}
+        </svg>
+      </div>
+    </>
+  )
+}
+
 function CdTile({ icon, label, value, sub, live, tone, hint, onClick }) {
   return (
     <button className={'cd-tile' + (tone ? ' ' + tone : '')} onClick={onClick}
@@ -19139,7 +19455,7 @@ export default function App() {
           <button className="ctx-back" onClick={goBack} disabled={!backTarget}
             title={backTarget ? `Back to ${labelFor(backTarget)} (Alt+←)` : 'Nothing to go back to yet'}
             aria-label={backTarget ? `Back to ${labelFor(backTarget)}` : 'Back'}>
-            <span aria-hidden="true">←</span> Back</button>
+            <Icon name="chevleft" size={16} /> Back</button>
           <div className="wsseg" role="tablist" aria-label="Workspace">
             <button role="tab" aria-selected={wsShown === 'central'} className={wsShown === 'central' ? 'on' : ''}
               onClick={() => goWs('central')}
@@ -19187,14 +19503,17 @@ export default function App() {
           )}
         </div>
         <div className="ctx-right">
-          <span className="meta">
-            {ws === 'central' && <>Company: <b>{companyName}</b>
-              <span className="sep"> | </span>Signed in as <b>{ROLE_LABEL[role] || role}</b></>}
-            {ws === 'warehouse' && <>Code: <b className="mono">{here.code || '—'}</b>
-              <span className="sep"> | </span>Trades in: <b>{here.catalogue || '—'}</b>
-              <span className="sep"> | </span>Stores supplied: <b className="mono">{stores.length}</b></>}
-            {ws === 'store' && <>Warehouse: <b>{here.name}</b>
-              <span className="sep"> | </span>Stores: <b className="mono">{stores.length}</b></>}
+          <span className="meta ctx-metas">
+            {ws === 'central' && <>
+              <span className="ctx-meta"><Icon name="building" size={14} />Company <b>{companyName}</b></span>
+              <span className="ctx-meta"><Icon name="shield" size={14} />Signed in as <b>{ROLE_LABEL[role] || role}</b></span></>}
+            {ws === 'warehouse' && <>
+              <span className="ctx-meta"><Icon name="tag" size={14} />Code <b className="mono">{here.code || '—'}</b></span>
+              <span className="ctx-meta"><Icon name="layers" size={14} />Trades in <b>{here.catalogue || '—'}</b></span>
+              <span className="ctx-meta"><Icon name="store" size={14} />Stores supplied <b className="mono">{stores.length}</b></span></>}
+            {ws === 'store' && <>
+              <span className="ctx-meta"><Icon name="building" size={14} />Warehouse <b>{here.name}</b></span>
+              <span className="ctx-meta"><Icon name="store" size={14} />Stores <b className="mono">{stores.length}</b></span></>}
           </span>
           {/* Both of these CREATE AN INVOICE, and an invoice belongs to the
               warehouse whose desk keyed it — that is what stamps
